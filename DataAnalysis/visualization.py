@@ -1,30 +1,7 @@
 # %% [markdown]
 ## Visualization
 
-#%%
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
-from pathlib import Path
-import glob
-import os
-from scipy.spatial import cKDTree
-from itertools import zip_longest
-import matplotlib.ticker as ticker
-
-#%%
-import glob
-import matplotlib.font_manager as fm
-
-# Load all CMU fonts
-for p in glob.glob("/home1/binhaoli/.local/share/fonts/cmun*.ttf"):
-    fm.fontManager.addfont(p)
-
-plt.rcParams["font.family"] = "CMU Sans Serif"
-plt.rcParams["mathtext.fontset"] = "cm"
-plt.rcParams["axes.unicode_minus"] = False
-
-#%%
+# %%
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
@@ -34,6 +11,16 @@ import os
 from scipy.spatial import cKDTree
 from itertools import zip_longest
 from cmcrameri import cm
+from shapely import LineString, frechet_distance, hausdorff_distance
+import matplotlib.font_manager as fm
+
+# Load all CMU fonts
+for p in glob.glob("/home1/binhaoli/.local/share/fonts/cmun*.ttf"):
+    fm.fontManager.addfont(p)
+
+plt.rcParams["font.family"] = "CMU Sans Serif"
+plt.rcParams["mathtext.fontset"] = "cm"
+plt.rcParams["axes.unicode_minus"] = False
 
 def resample_by_arclength(P, ds=1.0):
     """P: Nx2 polyline. Returns roughly uniform-arc-length resampling."""
@@ -88,181 +75,202 @@ def average_histograms(list_of_D, bins):
     centers = 0.5 * (bins[:-1] + bins[1:])
     return centers, pdf_mean, pdf_std
 
-#%%
+# %%
 dh = 0.1
 K_G = 1 # geometric mean of hydraulic conductivity
-I_Y = 0.05 * 200
+field_size = 200
+length_scale = 0.05
+
+I_Y = length_scale * field_size
 q_ref = K_G * dh
 t_ref = I_Y / q_ref
 
 
-#%%
-run = f'3'
+# %%
+def _path_to_linestring(path_arr):
+    """Convert Nx2 path array to Shapely LineString (min 2 points)."""
+    if path_arr is None or len(path_arr) < 2:
+        return None
+    return LineString(path_arr.tolist())
+
+
+def _shapely_distances(fp, lrp, fp_dijkstra, fp_fmm):
+    """Compute Hausdorff and Fréchet distances (FP vs LRP, FP vs FP-Dijkstra, FP vs FP-FMM) using Shapely."""
+    out = {
+        'hausdorff': {'fp_lrp': np.nan, 'fp_fpDijkstra': np.nan, 'fp_fpFMM': np.nan},
+        'frechet': {'fp_lrp': np.nan, 'fp_fpDijkstra': np.nan, 'fp_fpFMM': np.nan},
+    }
+    ls_fp = _path_to_linestring(fp)
+    if ls_fp is None:
+        return out
+    for name, other in [('fp_lrp', lrp), ('fp_fpDijkstra', fp_dijkstra), ('fp_fpFMM', fp_fmm)]:
+        ls_other = _path_to_linestring(other)
+        if ls_other is not None:
+            out['hausdorff'][name] = hausdorff_distance(ls_fp, ls_other)
+            out['frechet'][name] = frechet_distance(ls_fp, ls_other)
+    return out
+
+
+# Config and storage
+run = 3
 var = [0.1, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]
 data = {}
 stats = {}
+
 for var_ in var:
     path_base = Path(f'/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run{run}/var_{var_}').expanduser().resolve()
-    length_scale = 0.05
     base_pattern = str(path_base / f"lengthScale{length_scale}_size*")
 
-    field_size = []
+    # Per-size lists (indexed by field size)
+    field_size_list = []
+    lengths = {'fp': [], 'fp_dijkstra': [], 'fp_fmm': [], 'lrp': []}
+    times = {'fpt': [], 'fpt_dijkstra': [], 'fpt_fmm': [], 'mhr': []}
+    distances = {
+        'hausdorff': {'fp_lrp': [], 'fp_fpDijkstra': [], 'fp_fpFMM': []},
+        'frechet': {'fp_lrp': [], 'fp_fpDijkstra': [], 'fp_fpFMM': []},
+        'end_point': {'fp_lrp': [], 'fp_fpDijkstra': [], 'fp_fpFMM': []},
+    }
 
-    len_fp_sm = []
-    len_fp_dijkstra_sm = []
-    len_fp_fmm_sm = []
-    len_lrp_sm = []
-
-    fpt_sm = []
-    fpt_dijkstra_sm = []
-    fpt_fmm_sm = []
-    mhr_sm = []
-
-    hausdorffDist_fp_lrp_sm = []
-    hausdorffDist_fp_fpDijkstra_sm = []
-    hausdorffDist_fp_fpFMM_sm = []
-
-    endPointDist_fp_lrp_sm = []
-    endPointDist_fp_fpDijkstra_sm = []
-    endPointDist_fp_fpFMM_sm = []
-
-    for path_size in sorted(glob.glob(base_pattern),
-                            key=lambda s: int(s.split("size")[-1])):
+    for path_size in sorted(glob.glob(base_pattern), key=lambda s: int(s.split("size")[-1])):
         size_str = path_size.split("size")[-1]
         size_val = float(size_str)
-        field_size.append(size_val)
+        field_size_list.append(size_val)
 
-        path_mainOutputs = sorted(glob.glob(os.path.join(path_size, f"main_output/mainOutput_size{size_str}_mc*.npz")))
-
-        # print(path_mainOutputs)
-        if not path_mainOutputs:
-            print(f"No files found.")
+        path_main_outputs = sorted(glob.glob(os.path.join(path_size, f"main_output/mainOutput_size{size_str}_mc*.npz")))
+        if not path_main_outputs:
+            print(f"No files found for size {size_str}.")
             continue
 
-        # Load all Monte Carlo files for this size
+        # Path file patterns for Shapely distance computation
+        path_dir = os.path.join(path_size, "path")
+        fp_paths = sorted(glob.glob(os.path.join(path_dir, f"fp_size{size_str}_mc*.npy")))
+        lrp_paths = sorted(glob.glob(os.path.join(path_dir, f"lrp_size{size_str}_mc*.npy")))
+        fp_dijkstra_paths = sorted(glob.glob(os.path.join(path_dir, f"fp_dijkstra_size{size_str}_mc*.npy")))
+        fp_fmm_paths = sorted(glob.glob(os.path.join(path_dir, f"fp_fmm_size{size_str}_mc*.npy")))
+
+        # Per-MC lists for this size
         len_fp_m = []
         len_lrp_m = []
         len_fp_dijkstra_m = []
         len_fp_fmm_m = []
-
         fpt_m = []
         fpt_dijkstra_m = []
         fpt_fmm_m = []
         mhr_m = []
+        hausdorff_fp_lrp_m = []
+        hausdorff_fp_fpDijkstra_m = []
+        hausdorff_fp_fpFMM_m = []
+        frechet_fp_lrp_m = []
+        frechet_fp_fpDijkstra_m = []
+        frechet_fp_fpFMM_m = []
+        end_point_fp_lrp_m = []
+        end_point_fp_fpDijkstra_m = []
+        end_point_fp_fpFMM_m = []
 
-        hausdorffDist_fp_lrp_m = []
-        hausdorffDist_fp_fpDijkstra_m = []
-        hausdorffDist_fp_fpFMM_m = []
+        for mc_idx, f in enumerate(path_main_outputs):
+            output_data = np.load(f)
+            len_fp_m.append(output_data['len_fp_m'])
+            len_fp_dijkstra_m.append(output_data['len_fp_dijkstra_m'])
+            len_fp_fmm_m.append(output_data['len_fp_fmm_m'])
+            len_lrp_m.append(output_data['len_lrp_m'])
+            fpt_m.append(output_data['fpt_m'])
+            fpt_dijkstra_m.append(output_data['fpt_dijkstra_m'])
+            fpt_fmm_m.append(output_data['fpt_fmm_m'])
+            mhr_m.append(output_data['mhr_m'])
+            end_point_fp_lrp_m.append(output_data['endPointDist_fp_lrp_m'])
+            end_point_fp_fpDijkstra_m.append(output_data['endPointDist_fp_fpDijkstra_m'])
+            end_point_fp_fpFMM_m.append(output_data['endPointDist_fp_fpFMM_m'])
 
-        endPointDist_fp_lrp_m = []
-        endPointDist_fp_fpDijkstra_m = []
-        endPointDist_fp_fpFMM_m = []
-        for f in path_mainOutputs:
-            outputData = np.load(f)
+            # Shapely Hausdorff and Fréchet from path files when available
+            def _load_path(paths, idx):
+                if paths and idx < len(paths):
+                    return np.load(paths[idx])
+                return None
+            fp_arr = _load_path(fp_paths, mc_idx)
+            lrp_arr = _load_path(lrp_paths, mc_idx)
+            fp_dijkstra_arr = _load_path(fp_dijkstra_paths, mc_idx)
+            fp_fmm_arr = _load_path(fp_fmm_paths, mc_idx)
+            dists = _shapely_distances(fp_arr, lrp_arr, fp_dijkstra_arr, fp_fmm_arr)
+            hausdorff_fp_lrp_m.append(dists['hausdorff']['fp_lrp'])
+            hausdorff_fp_fpDijkstra_m.append(dists['hausdorff']['fp_fpDijkstra'])
+            hausdorff_fp_fpFMM_m.append(dists['hausdorff']['fp_fpFMM'])
+            frechet_fp_lrp_m.append(dists['frechet']['fp_lrp'])
+            frechet_fp_fpDijkstra_m.append(dists['frechet']['fp_fpDijkstra'])
+            frechet_fp_fpFMM_m.append(dists['frechet']['fp_fpFMM'])
 
-            len_fp_m.append(outputData['len_fp_m'])
-            len_fp_dijkstra_m.append(outputData['len_fp_dijkstra_m'])
-            len_fp_fmm_m.append(outputData['len_fp_fmm_m'])
-            len_lrp_m.append(outputData['len_lrp_m'])
-
-            fpt_m.append(outputData['fpt_m'])
-            fpt_dijkstra_m.append(outputData['fpt_dijkstra_m'])
-            fpt_fmm_m.append(outputData['fpt_fmm_m'])
-            mhr_m.append(outputData['mhr_m'])
-
-            hausdorffDist_fp_lrp_m.append(outputData['hausdorffDist_fp_lrp_m'])
-            hausdorffDist_fp_fpDijkstra_m.append(outputData['hausdorffDist_fp_fpDijkstra_m'])
-            hausdorffDist_fp_fpFMM_m.append(outputData['hausdorffDist_fp_fpFMM_m'])
-
-            endPointDist_fp_lrp_m.append(outputData['endPointDist_fp_lrp_m'])
-            endPointDist_fp_fpDijkstra_m.append(outputData['endPointDist_fp_fpDijkstra_m'])
-            endPointDist_fp_fpFMM_m.append(outputData['endPointDist_fp_fpFMM_m'])
-
-        len_fp_sm.append(np.array(len_fp_m))
-        len_fp_dijkstra_sm.append(np.array(len_fp_dijkstra_m))
-        len_fp_fmm_sm.append(np.array(len_fp_fmm_m))
-        len_lrp_sm.append(np.array(len_lrp_m))
-
-        fpt_sm.append(np.array(fpt_m))
-        fpt_dijkstra_sm.append(np.array(fpt_dijkstra_m))
-        fpt_fmm_sm.append(np.array(fpt_fmm_m))
-        mhr_sm.append(np.array(mhr_m))
-
-        hausdorffDist_fp_lrp_sm.append(np.array(hausdorffDist_fp_lrp_m))
-        hausdorffDist_fp_fpDijkstra_sm.append(np.array(hausdorffDist_fp_fpDijkstra_m))
-        hausdorffDist_fp_fpFMM_sm.append(np.array(hausdorffDist_fp_fpFMM_m))
-
-        endPointDist_fp_lrp_sm.append(np.array(endPointDist_fp_lrp_m))
-        endPointDist_fp_fpDijkstra_sm.append(np.array(endPointDist_fp_fpDijkstra_m))
-        endPointDist_fp_fpFMM_sm.append(np.array(endPointDist_fp_fpFMM_m))
+        lengths['fp'].append(np.array(len_fp_m))
+        lengths['fp_dijkstra'].append(np.array(len_fp_dijkstra_m))
+        lengths['fp_fmm'].append(np.array(len_fp_fmm_m))
+        lengths['lrp'].append(np.array(len_lrp_m))
+        times['fpt'].append(np.array(fpt_m))
+        times['fpt_dijkstra'].append(np.array(fpt_dijkstra_m))
+        times['fpt_fmm'].append(np.array(fpt_fmm_m))
+        times['mhr'].append(np.array(mhr_m))
+        distances['hausdorff']['fp_lrp'].append(np.array(hausdorff_fp_lrp_m))
+        distances['hausdorff']['fp_fpDijkstra'].append(np.array(hausdorff_fp_fpDijkstra_m))
+        distances['hausdorff']['fp_fpFMM'].append(np.array(hausdorff_fp_fpFMM_m))
+        distances['frechet']['fp_lrp'].append(np.array(frechet_fp_lrp_m))
+        distances['frechet']['fp_fpDijkstra'].append(np.array(frechet_fp_fpDijkstra_m))
+        distances['frechet']['fp_fpFMM'].append(np.array(frechet_fp_fpFMM_m))
+        distances['end_point']['fp_lrp'].append(np.array(end_point_fp_lrp_m))
+        distances['end_point']['fp_fpDijkstra'].append(np.array(end_point_fp_fpDijkstra_m))
+        distances['end_point']['fp_fpFMM'].append(np.array(end_point_fp_fpFMM_m))
 
     data[f'var_{var_}'] = {
-        'field_size': np.array(field_size),
-
-        'len_fp_sm': len_fp_sm,
-        'len_fp_dijkstra_sm': len_fp_dijkstra_sm,
-        'len_fp_fmm_sm': len_fp_fmm_sm,
-        'len_lrp_sm': len_lrp_sm,
-
-        'fpt_sm': fpt_sm,
-        'fpt_dijkstra_sm': fpt_dijkstra_sm,
-        'fpt_fmm_sm': fpt_fmm_sm,
-        'mhr_sm': mhr_sm,
-
-        'hausdorffDist_fp_lrp_sm': hausdorffDist_fp_lrp_sm,
-        'hausdorffDist_fp_fpDijkstra_sm': hausdorffDist_fp_fpDijkstra_sm,
-        'hausdorffDist_fp_fpFMM_sm': hausdorffDist_fp_fpFMM_sm,
-
-        'endPointDist_fp_lrp_sm': endPointDist_fp_lrp_sm,
-        'endPointDist_fp_fpDijkstra_sm': endPointDist_fp_fpDijkstra_sm,
-        'endPointDist_fp_fpFMM_sm': endPointDist_fp_fpFMM_sm
+        'field_size': np.array(field_size_list),
+        'lengths': lengths,
+        'times': times,
+        'distances': distances,
     }
+
+    def _mean_std(arr_list, filter_positive=False):
+        out = []
+        for arr in arr_list:
+            a = np.asarray(arr)
+            if filter_positive:
+                a = a[a > 0]
+            out.append((np.nanmean(a), np.nanstd(a)) if len(a) else (np.nan, np.nan))
+        return np.array(out)
 
     stats[f'var_{var_}'] = {
-        'stats_fp': np.array([(arr.mean(), arr.std()) for arr in len_fp_sm]),
-        'stats_fp_dijkstra': np.array([(arr.mean(), arr.std()) for arr in len_fp_dijkstra_sm]),
-        'stats_fp_fmm': np.array([(arr.mean(), arr.std()) for arr in len_fp_fmm_sm]),
-        'stats_lrp': np.array([(arr.mean(), arr.std()) for arr in len_lrp_sm]),
-
-        'stats_fpt': np.array([(arr[arr>0].mean(), arr[arr>0].std()) for arr in fpt_sm]),
-        'stats_fpt_dijkstra': np.array([(arr[arr>0].mean(), arr[arr>0].std()) for arr in fpt_dijkstra_sm]),
-        'stats_fpt_fmm': np.array([(arr[arr>0].mean(), arr[arr>0].std()) for arr in fpt_fmm_sm]),
-        'stats_mhr': np.array([(arr[arr>0].mean(), arr[arr>0].std()) for arr in mhr_sm]),
-
-        'hausdorffDist_fp_lrp': np.array([(arr.mean(), arr.std()) for arr in hausdorffDist_fp_lrp_sm]),
-        'hausdorffDist_fp_fpDijkstra': np.array([(arr[arr>0].mean(), arr[arr>0].std()) for arr in hausdorffDist_fp_fpDijkstra_sm]),
-        'hausdorffDist_fp_fpFMM': np.array([(arr[arr>0].mean(), arr[arr>0].std()) for arr in hausdorffDist_fp_fpFMM_sm]),
-
-        'endPointDist_fp_lrp': np.array([(arr.mean(), arr.std()) for arr in endPointDist_fp_lrp_sm]),
-        'endPointDist_fp_fpDijkstra': np.array([(arr.mean(), arr.std()) for arr in endPointDist_fp_fpDijkstra_sm]),
-        'endPointDist_fp_fpFMM': np.array([(arr.mean(), arr.std()) for arr in endPointDist_fp_fpFMM_sm]),
-
-        # 'stats_fpt': np.array([(arr.mean(), arr.std()) for arr in fpt_sm]),
-        # 'stats_fpt_dijkstra': np.array([(arr.mean(), arr.std()) for arr in fpt_dijkstra_sm]),
-        # 'stats_fpt_fmm': np.array([(arr.mean(), arr.std()) for arr in fpt_fmm_sm]),
-        # 'stats_mhr': np.array([(arr.mean(), arr.std()) for arr in mhr_sm]),
-        # 'slope': [],
-        # 'std': [],
-        # 'R2': []
+        'lengths': {
+            'fp': _mean_std(lengths['fp']),
+            'fp_dijkstra': _mean_std(lengths['fp_dijkstra']),
+            'fp_fmm': _mean_std(lengths['fp_fmm']),
+            'lrp': _mean_std(lengths['lrp']),
+        },
+        'times': {
+            'fpt': _mean_std(times['fpt'], filter_positive=True),
+            'fpt_dijkstra': _mean_std(times['fpt_dijkstra'], filter_positive=True),
+            'fpt_fmm': _mean_std(times['fpt_fmm'], filter_positive=True),
+            'mhr': _mean_std(times['mhr'], filter_positive=True),
+        },
+        'distances': {
+            'hausdorff': {
+                'fp_lrp': _mean_std(distances['hausdorff']['fp_lrp']),
+                'fp_fpDijkstra': _mean_std(distances['hausdorff']['fp_fpDijkstra'], filter_positive=True),
+                'fp_fpFMM': _mean_std(distances['hausdorff']['fp_fpFMM'], filter_positive=True),
+            },
+            'frechet': {
+                'fp_lrp': _mean_std(distances['frechet']['fp_lrp']),
+                'fp_fpDijkstra': _mean_std(distances['frechet']['fp_fpDijkstra'], filter_positive=True),
+                'fp_fpFMM': _mean_std(distances['frechet']['fp_fpFMM'], filter_positive=True),
+            },
+            'end_point': {
+                'fp_lrp': _mean_std(distances['end_point']['fp_lrp']),
+                'fp_fpDijkstra': _mean_std(distances['end_point']['fp_fpDijkstra']),
+                'fp_fpFMM': _mean_std(distances['end_point']['fp_fpFMM']),
+            },
+        },
     }
 
-    # for i in range(len(mhr_sm)):
-    #     x = mhr_sm[i]
-    #     y = fpt_sm[i]
-    #     m = np.sum(x * y) / np.sum(x * x)
-    #     y_pred = m * x
-    #     residuals = y - y_pred
-    #     sigma2 = np.sum(residuals**2) / (len(x) - 1)
-    #     SE_m = np.sqrt(sigma2 / np.sum(x**2))
-    #     R2 = 1 - np.sum(residuals**2) / np.sum(y**2)
-    #     stats[f'std_{std_}']['slope'].append(m)
-    #     stats[f'std_{std_}']['std'].append(SE_m)
-    #     stats[f'std_{std_}']['R2'].append(R2)
+# Backward compatibility: first variance's field_size for later plotting
+field_size = data[f'var_{var[0]}']['field_size'] if data else np.array([])
 
-#%%
+# %%
 var
 
-#%%
+# %%
 # Load logk_field and compute line integrals along paths
 # Computes: ∫_γ logk_field(x) dx and ∫_γ logk_field^2(x) dx
 # for γ ∈ {FP, LRP, FP(Dijkstra), FP(FMM)} and ensemble averages
@@ -376,7 +384,7 @@ for var_ in var:
     print(f"  FP(FMM): ∫ logK = {li['int_logk_fp_fmm']['mean']:.4f} ± {li['int_logk_fp_fmm']['std']:.4f}")
     print(f"          ∫ logK² = {li['int_logk2_fp_fmm']['mean']:.4f} ± {li['int_logk2_fp_fmm']['std']:.4f}")
 
-#%%
+# %%
 # Stats arrays for path integrals of logK and logK²
 stats_int_logk_fp = []
 stats_int_logk2_fp = []
@@ -407,26 +415,26 @@ stats_int_logk2_fp_dijkstra = np.array(stats_int_logk2_fp_dijkstra)
 stats_int_logk_fp_fmm = np.array(stats_int_logk_fp_fmm)
 stats_int_logk2_fp_fmm = np.array(stats_int_logk2_fp_fmm)
 
-#%%
+# %%
 var_ = 5
-mean = stats[f'var_{var_}']['hausdorffDist_fp_fpFMM'][0,0]
+mean = stats[f'var_{var_}']['distances']['hausdorff']['fp_fpFMM'][0, 0]
 print(mean)
 
-#%%
-arr = np.array(data[f'var_{var_}']['hausdorffDist_fp_fpFMM_sm'][0])
+# %%
+arr = np.array(data[f'var_{var_}']['distances']['hausdorff']['fp_fpFMM'][0])
 idx = np.where((mean-0.2 < arr) & (arr < mean+0.2))
 print(idx)
 
-#%%
+# %%
 length_scale = 0.05
 run = f'3'
 path_size = Path(f'/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run{run}/var_{var}/lengthScale{length_scale}_size200').expanduser().resolve()
 sorted(glob.glob(os.path.join(path_size, f"main_output/mainOutput_size{size_str}_mc*.npz")))[idx[0][0]]
 
-#%%
+# %%
 run
 
-#%%
+# %%
 # cmap = cm.batlow_r.resampled(7)
 # Path length stats
 stats_lrp = []
@@ -450,22 +458,22 @@ stats_endPointDist_fp_fpFMM = []
 
 # stats_slope = []
 for i, var_ in enumerate(stats):
-    stats_lrp.append(stats[var_]['stats_lrp'][0,:])
-    stats_fp.append(stats[var_]['stats_fp'][0,:])
-    stats_fp_dijkstra.append(stats[var_]['stats_fp_dijkstra'][0,:])
-    stats_fp_fmm.append(stats[var_]['stats_fp_fmm'][0,:])
+    stats_lrp.append(stats[var_]['lengths']['lrp'][0, :])
+    stats_fp.append(stats[var_]['lengths']['fp'][0, :])
+    stats_fp_dijkstra.append(stats[var_]['lengths']['fp_dijkstra'][0, :])
+    stats_fp_fmm.append(stats[var_]['lengths']['fp_fmm'][0, :])
 
-    stats_mhr.append(stats[var_]['stats_mhr'][0,:])
-    stats_fpt.append(stats[var_]['stats_fpt'][0,:])
-    stats_fpt_dijkstra.append(stats[var_]['stats_fpt_dijkstra'][0,:])
-    stats_fpt_fmm.append(stats[var_]['stats_fpt_fmm'][0,:])
+    stats_mhr.append(stats[var_]['times']['mhr'][0, :])
+    stats_fpt.append(stats[var_]['times']['fpt'][0, :])
+    stats_fpt_dijkstra.append(stats[var_]['times']['fpt_dijkstra'][0, :])
+    stats_fpt_fmm.append(stats[var_]['times']['fpt_fmm'][0, :])
 
-    stats_hausdorffDist_fp_lrp.append(stats[var_]['hausdorffDist_fp_lrp'][0,:])
-    stats_hausdorffDist_fp_fpDijkstra.append(stats[var_]['hausdorffDist_fp_fpDijkstra'][0,:])
-    stats_hausdorffDist_fp_fpFMM.append(stats[var_]['hausdorffDist_fp_fpFMM'][0,:])
-    stats_endPointDist_fp_lrp.append(stats[var_]['endPointDist_fp_lrp'][0,:])
-    stats_endPointDist_fp_fpDijkstra.append(stats[var_]['endPointDist_fp_fpDijkstra'][0,:])
-    stats_endPointDist_fp_fpFMM.append(stats[var_]['endPointDist_fp_fpFMM'][0,:])
+    stats_hausdorffDist_fp_lrp.append(stats[var_]['distances']['hausdorff']['fp_lrp'][0, :])
+    stats_hausdorffDist_fp_fpDijkstra.append(stats[var_]['distances']['hausdorff']['fp_fpDijkstra'][0, :])
+    stats_hausdorffDist_fp_fpFMM.append(stats[var_]['distances']['hausdorff']['fp_fpFMM'][0, :])
+    stats_endPointDist_fp_lrp.append(stats[var_]['distances']['end_point']['fp_lrp'][0, :])
+    stats_endPointDist_fp_fpDijkstra.append(stats[var_]['distances']['end_point']['fp_fpDijkstra'][0, :])
+    stats_endPointDist_fp_fpFMM.append(stats[var_]['distances']['end_point']['fp_fpFMM'][0, :])
     # stats_slope.append(stats[var_]['slope'][0])
 
 stats_lrp = np.array(stats_lrp)
@@ -488,7 +496,7 @@ stats_endPointDist_fp_fpFMM = np.array(stats_endPointDist_fp_fpFMM)
 
 var = np.array(var)
 
-#%%
+# %%
 # Taylor expansion: E[t] - E[∫logK] + E[∫logK²]/2
 # This is the ensemble mean of Taylor expansion approximation
 taylor_lrp = stats_lrp[:,0] - stats_int_logk_lrp[:,0] + stats_int_logk2_lrp[:,0] / 2
@@ -496,7 +504,7 @@ taylor_fp = (stats_fp[:,0] - stats_int_logk_fp[:,0] + stats_int_logk2_fp[:,0] / 
 taylor_fp_dijkstra = (stats_fp_dijkstra[:,0] - stats_int_logk_fp_dijkstra[:,0] + stats_int_logk2_fp_dijkstra[:,0] / 2) / dh
 taylor_fp_fmm = (stats_fp_fmm[:,0] - stats_int_logk_fp_fmm[:,0] + stats_int_logk2_fp_fmm[:,0] / 2) / dh
 
-#%%
+# %%
 # Taylor expansion visualization: compare actual t_min with Taylor approximation
 fig, ax = plt.subplots(figsize=[5, 4])
 
@@ -527,7 +535,7 @@ fig.tight_layout()
 fig.savefig(f"charTime_dh{dh}.png", dpi=400, bbox_inches="tight")
 plt.show()
 
-#%%
+# %%
 colors = {
     'fp': 'black',
     'lrp': '#5278C4',
@@ -551,7 +559,7 @@ fig.tight_layout()
 # fig.savefig(f"charTime_dh{dh}.png", dpi=400, bbox_inches="tight")
 plt.show()
 
-#%%
+# %%
 fig, ax = plt.subplots(figsize=(10,6))
 ax.scatter(stats_fpt[:,0]/t_ref, stats_fpt_fmm[:,0]/t_ref, color='orange', label='$t_{\\text{min}}\\text{(FMM)}$', alpha=1)
 ax.scatter(stats_fpt[:,0]/t_ref, stats_fpt_dijkstra[:,0]/t_ref, color='blue', label='$t_{\\text{min}}\\text{(Dijkstra)}$', alpha=0.6)
@@ -565,7 +573,7 @@ ax.set_aspect('equal', adjustable='box')
 ax.set_title("Characteristic Time Scale")
 ax.legend()
 
-#%%
+# %%
 fig, ax = plt.subplots(figsize=[5, 4])
 x = var
 
@@ -594,7 +602,7 @@ plt.grid(True, which='both')
 fig.savefig(f"hausdorffDist_dh{dh}.png", dpi=400, bbox_inches="tight")
 plt.show()
 
-#%%
+# %%
 fig, ax = plt.subplots(figsize=[5, 4])
 x = var
 
@@ -623,7 +631,7 @@ plt.grid(True, which='both')
 fig.savefig(f"endPointDist_dh{dh}.png", dpi=400, bbox_inches="tight")
 plt.show()
 
-#%%
+# %%
 import numpy as np
 
 # --- 1. DATA PREPARATION ---
@@ -660,7 +668,7 @@ slope2, intercept2 = estimate_log_slope(x2, y2)
 print(f"Estimated Slope (Shallow Part): {slope1:.3f}")
 print(f"Estimated Slope (Steep Part):   {slope2:.3f}")
 
-#%%
+# %%
 fig, ax = plt.subplots(figsize=[5,4])
 cmap = cm.batlow_r.resampled(7)
 # ax.plot(var, stats_slope, color='black', marker='o', markerfacecolor='None')
@@ -681,7 +689,7 @@ fig.tight_layout()
 fig.savefig(f"charTimeRatio_variation.png", dpi=400, bbox_inches="tight")
 plt.show()
 
-#%%
+# %%
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import curve_fit
@@ -721,10 +729,10 @@ plt.legend()
 plt.grid(True, which="both", ls="-", alpha=0.5)
 plt.show()
 
-#%%
+# %%
 np.sign(intercept1)
 
-#%%
+# %%
 from mpl_toolkits.axes_grid1.inset_locator import inset_axes, mark_inset
 import cmcrameri.cm as cm
 import matplotlib.ticker as ticker
@@ -732,8 +740,8 @@ import matplotlib.ticker as ticker
 fig, ax = plt.subplots(figsize=(5,5))
 cmap = cm.batlow_r.resampled(len(var)+1)
 for i, var_ in enumerate(data):
-    y = np.array(data[var_]['fpt_sm'][0])
-    x = np.array(data[var_]['mhr_sm'][0])
+    y = np.array(data[var_]['times']['fpt'][0])
+    x = np.array(data[var_]['times']['mhr'][0])
     k = np.sum(x * y) / np.sum(x**2)
     ax.plot(x, k * x, linestyle='-', color=cmap(i), linewidth=0.5, alpha=0.8, zorder=2)
     ax.scatter(x, y, label=f"$\\sigma_{{Y}}^2$ = {var[i]}, "+"$t_{\\text{min}}/R_{\\text{min}}$ = "+f"{k:.2f}", color=cmap(i), alpha=0.8, s=4, edgecolors='white', linewidths=0.3, zorder=1)
@@ -775,10 +783,10 @@ ax.set_aspect('equal', adjustable='box')
 # fig.savefig(f"charTimeRatio_scatter.png", dpi=400, bbox_inches="tight")
 plt.show()
 
-#%%
+# %%
 ## Load all paths
 
-#%%
+# %%
 length_scale = 0.05
 std = [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10]
 
@@ -887,14 +895,14 @@ for std_ in std:
         'endPointDist_fp_fpFMM_sm': endPointDist_fp_fpFMM_sm
     }
 
-#%%
+# %%
 plt.plot(fp[:,0], fp[:,1], label='fp')
 plt.plot(lrp[:,0], lrp[:,1], label='lrp')
 plt.plot(fpFMM[:,0], fpFMM[:,1], label='fpFMM', color='black')
 plt.plot(fpDijkstra[:,0], fpDijkstra[:,1], label='fpDijkstra')
 plt.legend()
 
-#%%
+# %%
 stats_path = {}
 
 for key_c in data_path:
@@ -906,7 +914,7 @@ for key_c in data_path:
             stds = [np.std(lst) for lst in data_path[key_c][key_]]
             stats_path[key_c][key_] = [means, stds]
 
-#%%
+# %%
 statsPath_std = {
     'hausdorffDist': {
         'fp_lrp': [],
@@ -932,7 +940,7 @@ for key1 in statsPath_std:
     for key2 in statsPath_std[key1]:
         statsPath_std[key1][key2] = np.array(statsPath_std[key1][key2])
 
-#%%
+# %%
 fig, ax = plt.subplots(figsize=[5, 4])
 # args_plot = {
 #     'label': ['$c$ = 0.1', '$c$ = 1', '$c$ = 3'],
@@ -966,7 +974,7 @@ plt.grid(True, which='both')
 # fig.savefig(f"hausdorffDist_variation.png", dpi=400, bbox_inches="tight")
 plt.show()
 
-#%%
+# %%
 fig, ax = plt.subplots(figsize=[5, 4])
 # args_plot = {
 #     'label': ['$c$ = 0.1', '$c$ = 1', '$c$ = 3'],
@@ -1000,4 +1008,4 @@ plt.grid(True, which='both')
 # fig.savefig(f"hausdorffDist_variation.png", dpi=400, bbox_inches="tight")
 plt.show()
 
-#%%
+# %%
