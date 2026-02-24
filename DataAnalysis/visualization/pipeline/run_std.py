@@ -11,8 +11,7 @@ from visualization.stats.aggregate import mean_std
 from visualization.types import StdResults
 
 
-def run_std_analysis(cfg: VisualizationConfig) -> tuple[StdResults, list[str]]:
-    discovered = discover_std_runs(cfg)
+def run_std_analysis_from_discovered(cfg: VisualizationConfig, discovered) -> tuple[StdResults, list[str]]:
     data_path: dict[str, dict] = {}
     stats_path: dict[str, dict] = {}
     warnings: list[str] = []
@@ -141,3 +140,8 @@ def run_std_analysis(cfg: VisualizationConfig) -> tuple[StdResults, list[str]]:
             stats_std[key1][key2] = np.asarray(stats_std[key1][key2], dtype=float)
 
     return StdResults(data_path=data_path, stats_path=stats_path, stats_std=stats_std), warnings
+
+
+def run_std_analysis(cfg: VisualizationConfig) -> tuple[StdResults, list[str]]:
+    discovered = discover_std_runs(cfg)
+    return run_std_analysis_from_discovered(cfg, discovered)

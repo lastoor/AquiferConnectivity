@@ -111,8 +111,7 @@ def _compute_line_integrals_for_var(cfg: VisualizationConfig, var_: float, run_p
     }
 
 
-def run_variance_analysis(cfg: VisualizationConfig) -> tuple[VarianceResults, list[str]]:
-    discovered = discover_variance_runs(cfg)
+def run_variance_analysis_from_discovered(cfg: VisualizationConfig, discovered) -> tuple[VarianceResults, list[str]]:
     data: dict[str, dict] = {}
     stats: dict[str, dict] = {}
     line_integrals: dict[str, dict] = {}
@@ -206,3 +205,8 @@ def run_variance_analysis(cfg: VisualizationConfig) -> tuple[VarianceResults, li
     field_size = data.get(first_key, {}).get("field_size", np.asarray([], dtype=float))
 
     return VarianceResults(field_size=field_size, data=data, stats=stats, line_integrals=line_integrals), warnings
+
+
+def run_variance_analysis(cfg: VisualizationConfig) -> tuple[VarianceResults, list[str]]:
+    discovered = discover_variance_runs(cfg)
+    return run_variance_analysis_from_discovered(cfg, discovered)
