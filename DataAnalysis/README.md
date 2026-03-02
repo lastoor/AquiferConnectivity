@@ -44,6 +44,23 @@ PYTHONPATH=. python scripts/step3_stats.py   --config configs/visualization.defa
 PYTHONPATH=. python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 ```
 
+Small test (faster Stage 2):
+
+```bash
+PYTHONPATH=. python scripts/step2_metrics.py \
+  --config configs/visualization.default.yaml \
+  --cache-dir "$CACHE_DIR" \
+  --max-var-values 2 \
+  --max-std-values 2 \
+  --max-sizes-per-value 2 \
+  --max-mc-per-size 10
+```
+
+Small-test flags:
+- `scripts/step2_metrics.py`: `--max-var-values`, `--max-std-values`, `--max-sizes-per-value`, `--max-mc-per-size`
+- `scripts/visualize.py`: same four flags for one-shot runs
+- `scripts/step4_plot.py`: `--unique-filenames` / `--no-unique-filenames`
+
 Stage artifacts:
 - `stage1_index.pkl` + `stage1_index.meta.json`
 - `stage2_metrics.pkl` + `stage2_metrics.meta.json`
@@ -61,16 +78,55 @@ Adjust these glob patterns in:
 - `discover_variance_runs(...)`
 - `discover_std_runs(...)`
 
+Notes:
+- Discovery now handles both integer-style and float-style value folders, e.g. `var_1` and `var_1.0` (same for `std_*`).
+- For small-test runs (`--max-var-values` / `--max-std-values`), run Stage 2 before Stage 3 so cache contents match computed subsets.
+
 ## Config
 Main fields in `configs/visualization.default.yaml`:
 - `data_root`, `run_id`, `length_scale`, `dh`, `field_size_ref`, `k_g`
 - `variance_values`, `std_values`
 - `output_dir`, `figure_dpi`, `workers`, `save_formats`, `sections`
+- `distance_mode.*`: per-type source (`load_from_main_output` or `compute_from_paths`)
+- `distance_enabled.*`: per-type enable switch (`end_point`, `hausdorff`, `frechet`)
+- `distance_fallback_on_missing`: fallback when load key is missing (`compute_from_paths` or `nan`)
+- `distance_main_output_keys.*`: key mapping for loading distances from `mainOutput` npz
 - `font.*`
+
+Distance examples:
+
+```yaml
+# Fast mode: load only endpoint; skip expensive geometry metrics
+distance_mode:
+  end_point: load_from_main_output
+  hausdorff: load_from_main_output
+  frechet: load_from_main_output
+distance_enabled:
+  end_point: true
+  hausdorff: false
+  frechet: false
+distance_fallback_on_missing: nan
+```
+
+```yaml
+# Mixed mode: load endpoint, compute Hausdorff/Frechet from raw paths
+distance_mode:
+  end_point: load_from_main_output
+  hausdorff: compute_from_paths
+  frechet: compute_from_paths
+distance_enabled:
+  end_point: true
+  hausdorff: true
+  frechet: true
+distance_fallback_on_missing: compute_from_paths
+```
 
 ## Outputs
 Generated figures are saved to `output_dir` with versioned names:
 - `run<id>_<section>_<timestamp>_<hash>.<ext>`
+
+If you pass `--no-unique-filenames` to `scripts/step4_plot.py`, filenames become stable and overwrite previous outputs:
+- `run<id>_<section>.<ext>`
 
 Manifest:
 - `<output_dir>/manifest.json`

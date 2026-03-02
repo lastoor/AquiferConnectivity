@@ -13,6 +13,28 @@ figure_dpi: 400
 workers: -1
 save_formats: [png]
 sections: [times, taylor, scatter, hausdorff, endpoint, std_hausdorff, std_endpoint]
+distance_mode:
+  end_point: load_from_main_output
+  hausdorff: compute_from_paths
+  frechet: compute_from_paths
+distance_enabled:
+  end_point: true
+  hausdorff: true
+  frechet: false
+distance_fallback_on_missing: compute_from_paths
+distance_main_output_keys:
+  end_point:
+    fp_lrp: endPointDist_fp_lrp_m
+    fp_fpDijkstra: endPointDist_fp_fpDijkstra_m
+    fp_fpFMM: endPointDist_fp_fpFMM_m
+  hausdorff:
+    fp_lrp: hausdorffDist_fp_lrp_m
+    fp_fpDijkstra: hausdorffDist_fp_fpDijkstra_m
+    fp_fpFMM: hausdorffDist_fp_fpFMM_m
+  frechet:
+    fp_lrp: frechetDist_fp_lrp_m
+    fp_fpDijkstra: frechetDist_fp_fpDijkstra_m
+    fp_fpFMM: frechetDist_fp_fpFMM_m
 
 font:
   family: CMU Sans Serif

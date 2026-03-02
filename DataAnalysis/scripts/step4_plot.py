@@ -28,6 +28,12 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Stage 4: render figures from cached plotting inputs")
     p.add_argument("--config", required=True, type=Path)
     p.add_argument("--cache-dir", type=Path, default=None)
+    p.add_argument(
+        "--unique-filenames",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to include timestamp/hash in output figure filenames",
+    )
     return p.parse_args()
 
 
@@ -53,37 +59,37 @@ def main() -> int:
 
     if "times" in cfg.sections:
         fig, meta = plot_characteristic_time(var, s["stats_fpt"], s["stats_mhr"], s["stats_fpt_fmm"], s["stats_fpt_dijkstra"], t_ref)
-        artifacts.extend(save_figure(fig, section="times", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta))
+        artifacts.extend(save_figure(fig, section="times", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=args.unique_filenames))
         plt.close(fig)
 
     if "taylor" in cfg.sections:
         fig, meta = plot_taylor_comparison(var, s["stats_mhr"], s["stats_fpt"], s["stats_fpt_fmm"], s["stats_fpt_dijkstra"], taylor, t_ref)
-        artifacts.extend(save_figure(fig, section="taylor", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta))
+        artifacts.extend(save_figure(fig, section="taylor", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=args.unique_filenames))
         plt.close(fig)
 
     if "scatter" in cfg.sections:
         fig, meta = plot_scatter_tmin_vs_rmin(s["stats_fpt"], s["stats_fpt_fmm"], s["stats_fpt_dijkstra"], s["stats_mhr"], t_ref)
-        artifacts.extend(save_figure(fig, section="scatter", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta))
+        artifacts.extend(save_figure(fig, section="scatter", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=args.unique_filenames))
         plt.close(fig)
 
     if "hausdorff" in cfg.sections:
         fig, meta = plot_hausdorff_vs_variance(var, s["stats_hausdorff_lrp"], s["stats_hausdorff_fmm"], s["stats_hausdorff_dijkstra"], i_y)
-        artifacts.extend(save_figure(fig, section="hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta))
+        artifacts.extend(save_figure(fig, section="hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=args.unique_filenames))
         plt.close(fig)
 
     if "endpoint" in cfg.sections:
         fig, meta = plot_endpoint_vs_variance(var, s["stats_endpoint_lrp"], s["stats_endpoint_fmm"], s["stats_endpoint_dijkstra"], i_y)
-        artifacts.extend(save_figure(fig, section="endpoint", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta))
+        artifacts.extend(save_figure(fig, section="endpoint", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=args.unique_filenames))
         plt.close(fig)
 
     if "std_hausdorff" in cfg.sections and prepared["stats_std"] is not None:
         fig, meta = plot_std_hausdorff(x_var, prepared["stats_std"], i_y)
-        artifacts.extend(save_figure(fig, section="std_hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta))
+        artifacts.extend(save_figure(fig, section="std_hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=args.unique_filenames))
         plt.close(fig)
 
     if "std_endpoint" in cfg.sections and prepared["stats_std"] is not None:
         fig, meta = plot_std_endpoint(x_var, prepared["stats_std"], i_y)
-        artifacts.extend(save_figure(fig, section="std_endpoint", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta))
+        artifacts.extend(save_figure(fig, section="std_endpoint", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=args.unique_filenames))
         plt.close(fig)
 
     write_manifest(cfg.output_dir, config=asdict(cfg), artifacts=artifacts, warnings=all_warnings)

@@ -24,17 +24,34 @@ from visualization.plots.times import (
 from visualization.types import FigureArtifact
 
 
-def run(cfg: VisualizationConfig) -> list[FigureArtifact]:
+def run(
+    cfg: VisualizationConfig,
+    *,
+    max_var_values: int | None = None,
+    max_std_values: int | None = None,
+    max_sizes_per_value: int | None = None,
+    max_mc_per_size: int | None = None,
+) -> list[FigureArtifact]:
     configure_style(cfg)
     artifacts: list[FigureArtifact] = []
     all_warnings: list[str] = []
 
-    var_results, warnings = run_variance_analysis(cfg)
+    var_results, warnings = run_variance_analysis(
+        cfg,
+        max_var_values=max_var_values,
+        max_sizes_per_var=max_sizes_per_value,
+        max_mc_per_size=max_mc_per_size,
+    )
     all_warnings.extend(warnings)
 
     std_results = None
     if "std_hausdorff" in cfg.sections or "std_endpoint" in cfg.sections:
-        std_results, std_warnings = run_std_analysis(cfg)
+        std_results, std_warnings = run_std_analysis(
+            cfg,
+            max_std_values=max_std_values,
+            max_sizes_per_std=max_sizes_per_value,
+            max_mc_per_size=max_mc_per_size,
+        )
         all_warnings.extend(std_warnings)
 
     prepared = prepare_plot_inputs(cfg, var_results, std_results)

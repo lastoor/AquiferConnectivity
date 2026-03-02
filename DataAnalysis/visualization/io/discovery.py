@@ -10,6 +10,26 @@ def _size_sort_key(size_dir: Path) -> int:
     return int(size_dir.name.split("size")[-1])
 
 
+def _value_dir_candidates(value: float) -> list[str]:
+    candidates = [f"{value}", f"{value:g}"]
+    rounded = round(value)
+    if abs(value - rounded) < 1e-12:
+        candidates.extend([str(int(rounded)), f"{int(rounded)}.0"])
+    out: list[str] = []
+    for c in candidates:
+        if c not in out:
+            out.append(c)
+    return out
+
+
+def _resolve_value_dir(run_dir: Path, prefix: str, value: float) -> Path:
+    for raw in _value_dir_candidates(value):
+        candidate = run_dir / f"{prefix}_{raw}"
+        if candidate.exists():
+            return candidate
+    return run_dir / f"{prefix}_{value:g}"
+
+
 def _collect_run_paths(size_dir: Path, size_str: str) -> RunPaths:
     main_output_files = sorted((size_dir / "main_output").glob(f"mainOutput_size{size_str}_mc*.npz"))
     path_dir = size_dir / "path"
@@ -28,8 +48,9 @@ def _collect_run_paths(size_dir: Path, size_str: str) -> RunPaths:
 
 def discover_variance_runs(cfg: VisualizationConfig) -> dict[float, list[RunPaths]]:
     output: dict[float, list[RunPaths]] = {}
+    run_dir = cfg.data_root / f"run{cfg.run_id}"
     for var_ in cfg.variance_values:
-        base = cfg.data_root / f"run{cfg.run_id}" / f"var_{var_}"
+        base = _resolve_value_dir(run_dir, "var", var_)
         pattern = f"lengthScale{cfg.length_scale}_size*"
         size_dirs = sorted(base.glob(pattern), key=_size_sort_key)
         runs: list[RunPaths] = []
@@ -42,8 +63,9 @@ def discover_variance_runs(cfg: VisualizationConfig) -> dict[float, list[RunPath
 
 def discover_std_runs(cfg: VisualizationConfig) -> dict[float, list[RunPaths]]:
     output: dict[float, list[RunPaths]] = {}
+    run_dir = cfg.data_root / f"run{cfg.run_id}"
     for std_ in cfg.std_values:
-        base = cfg.data_root / f"run{cfg.run_id}" / f"std_{std_}"
+        base = _resolve_value_dir(run_dir, "std", std_)
         pattern = f"lengthScale{cfg.length_scale}_size*"
         size_dirs = sorted(base.glob(pattern), key=_size_sort_key)
         runs: list[RunPaths] = []
