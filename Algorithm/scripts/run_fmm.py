@@ -305,6 +305,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 "seeds_x": seeds_x,
                 "seeds_y": seeds_y,
                 "right_x": x1,
+                "velocity_location": "face",
                 "eps_speed": config_mc["particleTracking_arg"]["eps_speed"],
                 "ds_min": config_mc["particleTracking_arg"]["ds_min"],
                 "ds_max": config_mc["particleTracking_arg"]["ds_max"],

@@ -1,19 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 
-VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5") #("0.1" "5")
+VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5") 
+# VAR=("0.1" "5")
 length_scale="0.05"
 run="4"
 dh="0.1"
 
 # Keep original workload profile
-num_mc="1000" #"10"
+num_mc="1000"
+# num_mc="10"
 field_size="200"
 
 # Keep original Slurm CPU profile
-time="1:00:00" #"00:00:10"
+time="1:00:00"
+# time="00:10:00"
 mem_per_cpu="8GB"
 cpus_per_task="10"
+# cpus_per_task="2"
 
 account="fbarros_324"
 partition="main"
@@ -47,6 +51,9 @@ export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
+
+source ~/.bashrc
+mamba activate taichi_env
 
 ./scripts/run_in_fmm_env.sh python ./scripts/run_fmm.py \\
   --path_workdir ${run_root}/var_${var} \\
