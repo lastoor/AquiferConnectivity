@@ -6,12 +6,23 @@ import numpy as np
 from visualization.plots.style import COLORS
 
 
-def plot_characteristic_time(var: np.ndarray, stats_fpt: np.ndarray, stats_mhr: np.ndarray, stats_fpt_fmm: np.ndarray, stats_fpt_dijkstra: np.ndarray, t_ref: float):
+def plot_characteristic_time(
+    var: np.ndarray,
+    stats_fpt: np.ndarray,
+    stats_mhr: np.ndarray,
+    stats_fpt_fmm: np.ndarray,
+    stats_fpt_dijkstra: np.ndarray,
+    t_ref: float,
+    analytical_tmin: np.ndarray | None = None,
+    analytical_label: str = "Analytical $t_{\\mathrm{min}}$",
+):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="FP")
     ax.errorbar(var, stats_mhr[:, 0] / t_ref, stats_mhr[:, 1] / t_ref, color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="LRP")
     ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, stats_fpt_fmm[:, 1] / t_ref, color=COLORS["fpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FMM)")
     ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, stats_fpt_dijkstra[:, 1] / t_ref, color=COLORS["fpDijkstra"], linestyle="-", marker="o", markerfacecolor="None", label="FP (Dijkstra)")
+    if analytical_tmin is not None:
+        ax.plot(var, analytical_tmin, color="black", linestyle="--", linewidth=1.8, label=analytical_label)
     ax.set_yscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ tU / I_Y \right]$")

@@ -145,6 +145,7 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: VarianceResults, 
 
     return {
         "var": var,
+        "field_size": field_size,
         "std_x": np.asarray(std_values, dtype=float) ** 2,
         "stats": s,
         "integrals": ints,

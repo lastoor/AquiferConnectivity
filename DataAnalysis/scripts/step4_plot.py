@@ -22,6 +22,7 @@ from visualization.plots.times import (
     plot_scatter_tmin_vs_rmin,
     plot_taylor_comparison,
 )
+from visualization.stats.analytical_tmin import compute_analytical_tmin_curve, compute_effective_length
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,9 +57,29 @@ def main() -> int:
     i_y = prepared["i_y"]
     t_ref = prepared["t_ref"]
     x_var = prepared["std_x"]
+    field_size = float(prepared.get("field_size", cfg.field_size_ref))
 
     if "times" in cfg.sections:
-        fig, meta = plot_characteristic_time(var, s["stats_fpt"], s["stats_mhr"], s["stats_fpt_fmm"], s["stats_fpt_dijkstra"], t_ref)
+        u1 = cfg.k_g * cfg.dh
+        length = compute_effective_length(field_size)
+        analytical_tmin, analytical_warnings = compute_analytical_tmin_curve(
+            var,
+            length=length,
+            velocity=u1,
+            i_y=i_y,
+            percentile=cfg.analytical_percentile,
+        )
+        all_warnings.extend(analytical_warnings)
+        fig, meta = plot_characteristic_time(
+            var,
+            s["stats_fpt"],
+            s["stats_mhr"],
+            s["stats_fpt_fmm"],
+            s["stats_fpt_dijkstra"],
+            t_ref,
+            analytical_tmin=analytical_tmin,
+            analytical_label=f"Analytical $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
+        )
         artifacts.extend(save_figure(fig, section="times", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=args.unique_filenames))
         plt.close(fig)
 

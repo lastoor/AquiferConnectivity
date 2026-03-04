@@ -41,7 +41,7 @@ CACHE_DIR=outputs/cache/run3
 PYTHONPATH=. python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=. python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=. python scripts/step3_stats.py   --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
-PYTHONPATH=. python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
+PYTHONPATH=. python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --no-unique-filenames
 ```
 
 Small test (faster Stage 2):
@@ -84,7 +84,7 @@ Notes:
 
 ## Config
 Main fields in `configs/visualization.default.yaml`:
-- `data_root`, `run_id`, `length_scale`, `dh`, `field_size_ref`, `k_g`
+- `data_root`, `run_id`, `length_scale`, `dh`, `field_size_ref`, `k_g`, `analytical_percentile`
 - `variance_values`, `std_values`
 - `output_dir`, `figure_dpi`, `workers`, `save_formats`, `sections`
 - `distance_mode.*`: per-type source (`load_from_main_output` or `compute_from_paths`)
@@ -124,6 +124,12 @@ distance_fallback_on_missing: compute_from_paths
 ## Outputs
 Generated figures are saved to `output_dir` with versioned names:
 - `run<id>_<section>_<timestamp>_<hash>.<ext>`
+
+`times` now includes an analytical overlay for `t_min` over variance, using:
+- `U1 = k_g * dh`
+- `L = field_size - 2 * (field_size // 20)` (with integer floor semantics)
+- Euler constant from SciPy (`scipy.constants.euler_gamma` when available, fallback to NumPy constant for compatibility)
+- Percentile level from config key `analytical_percentile` (default `0.01`)
 
 If you pass `--no-unique-filenames` to `scripts/step4_plot.py`, filenames become stable and overwrite previous outputs:
 - `run<id>_<section>.<ext>`

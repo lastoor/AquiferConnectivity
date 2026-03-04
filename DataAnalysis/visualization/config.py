@@ -77,6 +77,7 @@ class VisualizationConfig:
         }
     )
     k_g: float = 1.0
+    analytical_percentile: float = 0.01
     font: FontConfig = field(default_factory=FontConfig)
 
 
@@ -102,6 +103,8 @@ def validate_config(cfg: VisualizationConfig) -> None:
         raise ConfigError("field_size_ref must be > 0")
     if cfg.figure_dpi <= 0:
         raise ConfigError("figure_dpi must be > 0")
+    if not (0.0 < cfg.analytical_percentile < 1.0):
+        raise ConfigError("analytical_percentile must be in (0, 1)")
     _validate_non_empty("variance_values", cfg.variance_values)
     _validate_non_empty("std_values", cfg.std_values)
     _validate_non_empty("save_formats", cfg.save_formats)
@@ -194,6 +197,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
             },
         },
         k_g=float(raw.get("k_g", 1.0)),
+        analytical_percentile=float(raw.get("analytical_percentile", 0.01)),
         font=font,
     )
 
