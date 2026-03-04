@@ -13,7 +13,28 @@ from step1_index import VisualizationConfig, default_cache_dir, load_config, sav
 
 def load_pickle(path: Path) -> Any:
     with path.open("rb") as f:
-        return pickle.load(f)
+        try:
+            return pickle.load(f)
+        except AttributeError as exc:
+            # Legacy compatibility: stage2 may have been produced by running
+            # `python scripts/step2_metrics.py`, which stores dataclass types
+            # under __main__.* in the pickle stream.
+            if "__main__" not in str(exc):
+                raise
+            import __main__
+            import step2_metrics as step2
+
+            setattr(__main__, "VarianceResults", step2.VarianceResults)
+            setattr(__main__, "StdResults", step2.StdResults)
+            setattr(__main__, "SummaryStats", step2.SummaryStats)
+            f.seek(0)
+            return pickle.load(f)
+
+
+def _pick(obj: Any, key: str) -> Any:
+    if isinstance(obj, dict):
+        return obj[key]
+    return getattr(obj, key)
 
 
 def _mean_std_pair(arr: np.ndarray) -> np.ndarray:
@@ -163,12 +184,17 @@ def compute_taylor_times(
 
 
 def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results: Any | None) -> dict[str, Any]:
-    var_values = _available_var_values(var_results.stats, cfg.variance_values)
-    var = np.asarray(var_values, dtype=float)
-    s = collect_primary_stats(var_results.stats, var_values)
-    ints = collect_integral_stats(var_results.line_integrals, var_values)
+    var_stats = _pick(var_results, "stats")
+    var_line_integrals = _pick(var_results, "line_integrals")
+    var_field_size = _pick(var_results, "field_size")
 
-    field_size = cfg.field_size_ref if var_results.field_size.size == 0 else float(var_results.field_size[0])
+    var_values = _available_var_values(var_stats, cfg.variance_values)
+    var = np.asarray(var_values, dtype=float)
+    s = collect_primary_stats(var_stats, var_values)
+    ints = collect_integral_stats(var_line_integrals, var_values)
+
+    field_size_arr = np.asarray(var_field_size, dtype=float)
+    field_size = cfg.field_size_ref if field_size_arr.size == 0 else float(field_size_arr[0])
     i_y = compute_i_y(field_size, cfg.length_scale)
     t_ref = compute_t_ref(cfg.k_g, cfg.dh, field_size, cfg.length_scale)
     taylor = compute_taylor_times(
@@ -187,7 +213,7 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
         cfg.dh,
     )
 
-    stats_std = None if std_results is None else std_results.stats_std
+    stats_std = None if std_results is None else _pick(std_results, "stats_std")
     std_count = _infer_std_count(stats_std)
     std_values = cfg.std_values if std_count is None else cfg.std_values[:std_count]
 

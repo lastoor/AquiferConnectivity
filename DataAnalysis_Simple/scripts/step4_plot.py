@@ -39,7 +39,19 @@ class FigureArtifact:
 
 def load_pickle(path: Path) -> Any:
     with path.open("rb") as f:
-        return pickle.load(f)
+        try:
+            return pickle.load(f)
+        except AttributeError as exc:
+            if "__main__" not in str(exc):
+                raise
+            import __main__
+            import step2_metrics as step2
+
+            setattr(__main__, "VarianceResults", step2.VarianceResults)
+            setattr(__main__, "StdResults", step2.StdResults)
+            setattr(__main__, "SummaryStats", step2.SummaryStats)
+            f.seek(0)
+            return pickle.load(f)
 
 
 def configure_style(cfg: VisualizationConfig) -> None:

@@ -62,6 +62,25 @@ class StdResults:
     stats_std: dict[str, np.ndarray]
 
 
+def _serialize_variance_results(results: VarianceResults) -> dict[str, Any]:
+    return {
+        "field_size": results.field_size,
+        "data": results.data,
+        "stats": results.stats,
+        "line_integrals": results.line_integrals,
+    }
+
+
+def _serialize_std_results(results: StdResults | None) -> dict[str, Any] | None:
+    if results is None:
+        return None
+    return {
+        "data_path": results.data_path,
+        "stats_path": results.stats_path,
+        "stats_std": results.stats_std,
+    }
+
+
 def load_pickle(path: Path) -> Any:
     with path.open("rb") as f:
         return pickle.load(f)
@@ -749,8 +768,8 @@ def run_stage2(
         )
 
     payload = {
-        "var_results": var_results,
-        "std_results": std_results,
+        "var_results": _serialize_variance_results(var_results),
+        "std_results": _serialize_std_results(std_results),
         "warnings": {"variance": warnings_var, "std": warnings_std},
     }
     cache_file = cache_dir / "stage2_metrics.pkl"

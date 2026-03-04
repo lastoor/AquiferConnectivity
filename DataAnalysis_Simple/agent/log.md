@@ -56,3 +56,18 @@
   - `PYTHONPATH=./scripts python scripts/run_all.py --config configs/visualization.default.yaml --dry-run`
 - Limitations/follow-up:
   - `pytest` is not installed in the current shell environment, so tests were added but not executed here.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Fixed Stage 3 unpickle failure (`__main__.VarianceResults`) by adding legacy-compat unpickling and by serializing Stage 2 caches as plain dictionaries to prevent recurrence.
+- Files changed:
+  - `scripts/step2_metrics.py`
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m compileall scripts tests`
+  - Reproduced workflow using script-mode Stage 2 and confirmed Stage 3 no longer raises `AttributeError: module '__main__' has no attribute 'VarianceResults'`
+- Limitations/follow-up:
+  - `pytest` is not installed in the current shell environment.

@@ -91,6 +91,9 @@ Artifacts written under `outputs/cache/run<id>/`:
 
 Each stage metadata file includes timestamp, config snapshot, and summary notes.
 
+Compatibility note:
+- Stage 3 can read legacy Stage 2 caches produced by script-mode runs (`python scripts/step2_metrics.py`) and current plain-dict Stage 2 caches.
+
 ## Tests
 
 ```bash
