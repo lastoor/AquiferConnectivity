@@ -14,6 +14,7 @@ def test_step2_metrics_respects_limits_and_writes_cache(pipeline_fixture) -> Non
     cache_file = step2.run_stage2(
         cfg,
         cache_dir=pipeline_fixture["cache_dir"],
+        hausdorff_compute_method="nn_max",
         max_var_values=1,
         max_std_values=1,
         max_sizes_per_value=1,
@@ -33,3 +34,4 @@ def test_step2_metrics_respects_limits_and_writes_cache(pipeline_fixture) -> Non
     assert meta["notes"]["max_std_values"] == 1
     assert meta["notes"]["max_sizes_per_value"] == 1
     assert meta["notes"]["max_mc_per_size"] == 1
+    assert meta["notes"]["hausdorff_compute_method"] == "nn_max"

@@ -71,3 +71,99 @@
   - Reproduced workflow using script-mode Stage 2 and confirmed Stage 3 no longer raises `AttributeError: module '__main__' has no attribute 'VarianceResults'`
 - Limitations/follow-up:
   - `pytest` is not installed in the current shell environment.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Added three new variance-sweep figures (`ratio_mean`, `ratio_var`, `wasserstein_len`), including Stage 3 Wasserstein length-distance preparation and Stage 4 rendering/warning integration.
+- Files changed:
+  - `scripts/step1_index.py`
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `configs/visualization.default.yaml`
+  - `tests/conftest.py`
+  - `tests/test_step3_stats.py`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m compileall scripts tests`
+  - Synthetic end-to-end run (temporary dataset) calling `step1`/`step2`/`step3`/`step4` verified artifacts include `run3_ratio_mean.png`, `run3_ratio_var.png`, `run3_wasserstein_len.png`
+  - `PYTHONPATH=./scripts python scripts/run_all.py --config configs/visualization.default.yaml --dry-run`
+- Limitations/follow-up:
+  - `pytest` is not installed in the current shell environment, so automated test cases were updated but not executed with `pytest`.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Added standalone `step5_single_field_paths.py` to select one logK realization from output, solve FP/LRP/FP(FMM)/FP(Dijkstra) with run_fmm-style workflow, and save two overlay figures (logK and minimal-arrival-time backgrounds).
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m compileall DataAnalysis_Simple/scripts/step5_single_field_paths.py DataAnalysis_Simple/tests/test_step5_single_field_paths.py`
+  - `PYTHONPATH=./DataAnalysis_Simple/scripts python DataAnalysis_Simple/scripts/step5_single_field_paths.py --help`
+  - Synthetic smoke run via Python snippet with mocked `solve_single_field`, confirming two files saved:
+    - `run3_var0p1_size200_mc0_logk_paths.png`
+    - `run3_var0p1_size200_mc0_arrival_paths.png`
+  - Attempted `pytest -q DataAnalysis_Simple/tests/test_step5_single_field_paths.py` (not available: `pytest: command not found`)
+- Limitations/follow-up:
+  - Full solver execution still depends on external runtime stack (`FlowSimulation`, PETSc, Numba, and Algorithm/src import path).
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Moved visualization output path out of `configs/visualization.default.yaml` and added CLI override support via `--output-dir` in `scripts/step4_plot.py` and `scripts/run_all.py` (with smoke tests covering override behavior).
+- Files changed:
+  - `configs/visualization.default.yaml`
+  - `scripts/step4_plot.py`
+  - `scripts/run_all.py`
+  - `tests/test_step4_plot.py`
+  - `tests/test_pipeline_smoke.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m compileall scripts tests`
+  - `PYTHONPATH=./scripts python scripts/run_all.py --config configs/visualization.default.yaml --dry-run --output-dir ./outputs/cli_override_demo`
+  - `PYTHONPATH=./scripts python scripts/step4_plot.py --help`
+  - Attempted `pytest -q tests/test_pipeline_smoke.py tests/test_step4_plot.py` (not available: `pytest: command not found`)
+- Limitations/follow-up:
+  - Full test execution requires installing `pytest` in the active environment.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Clarified README documentation for the output-path migration by adding an explicit Stage 4 output directory resolution order (`--output-dir` override, optional config field, fallback default).
+- Files changed:
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - Manual README review
+- Limitations/follow-up:
+  - No code-path changes; documentation-only update.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Replaced `tests/compare_hausdorff.py` with a standalone CLI utility that compares Hausdorff distances from Shapely and Stage-2 `nn_max` for one selected variance/field-size/MC sample, and documented usage in README.
+- Files changed:
+  - `tests/compare_hausdorff.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile tests/compare_hausdorff.py`
+  - `PYTHONPATH=./scripts python tests/compare_hausdorff.py --help`
+  - `PYTHONPATH=./scripts python tests/compare_hausdorff.py --config configs/visualization.default.yaml --variance 0.1 --field-size 200 --mc 1` (expected nonzero in current env: shapely missing)
+- Limitations/follow-up:
+  - Full comparison run requires `shapely` to be installed in the active environment.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Fixed wiring for `--hausdorff-compute-method` in `step2_metrics.py` by forwarding the selected method into both variance/std analysis paths, adding CLI value validation (`shapely` or `nn_max`), and recording the selected method in Stage 2 metadata notes.
+- Files changed:
+  - `scripts/step2_metrics.py`
+  - `tests/test_step2_metrics.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step2_metrics.py tests/test_step2_metrics.py`
+  - Source verification via `grep -n` confirmed forwarding and argparse choices are present
+- Limitations/follow-up:
+  - `pytest` is not installed in the current shell environment, so updated tests were not executed.

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import pickle
 
+import numpy as np
+
 import step1_index as step1
 import step2_metrics as step2
 import step3_stats as step3
@@ -24,3 +26,10 @@ def test_step3_prepares_plot_inputs(pipeline_fixture) -> None:
     assert "taylor" in prepared
     assert "i_y" in prepared
     assert "t_ref" in prepared
+    assert "wasserstein_len" in prepared
+    assert "derived_warnings" in prepared
+    assert isinstance(prepared["derived_warnings"], list)
+    for key in ["fp_lrp", "fp_fpFMM", "fp_fpDijkstra"]:
+        assert key in prepared["wasserstein_len"]
+        series = np.asarray(prepared["wasserstein_len"][key], dtype=float)
+        assert series.shape == prepared["var"].shape

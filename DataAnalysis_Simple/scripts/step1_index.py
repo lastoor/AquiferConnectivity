@@ -5,7 +5,7 @@ import argparse
 import json
 import pickle
 from dataclasses import asdict, dataclass, field
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,9 @@ class VisualizationConfig:
             "endpoint",
             "std_hausdorff",
             "std_endpoint",
+            "ratio_mean",
+            "ratio_var",
+            "wasserstein_len",
         ]
     )
     distance_mode: dict[str, str] = field(
@@ -186,6 +189,9 @@ def load_config(path: str | Path) -> VisualizationConfig:
             "endpoint",
             "std_hausdorff",
             "std_endpoint",
+            "ratio_mean",
+            "ratio_var",
+            "wasserstein_len",
         ],
         distance_mode={
             "end_point": str(raw_mode.get("end_point", "load_from_main_output")),
@@ -237,7 +243,7 @@ def save_pickle(path: Path, payload: Any) -> None:
 def write_stage_metadata(path: Path, *, stage: str, config: VisualizationConfig, notes: dict[str, Any]) -> None:
     payload = {
         "stage": stage,
-        "created_at_utc": datetime.now(UTC).isoformat(),
+        "created_at_utc": datetime.now(timezone.utc).isoformat(),
         "config": asdict(config),
         "notes": notes,
     }

@@ -457,6 +457,7 @@ def run_variance_analysis_from_discovered(
     discovered: dict[float, list[RunPaths]],
     *,
     show_progress: bool = False,
+    hausdorff_compute_method: str = "shapely",
     max_var_values: int | None = None,
     max_sizes_per_var: int | None = None,
     max_mc_per_size: int | None = None,
@@ -526,7 +527,7 @@ def run_variance_analysis_from_discovered(
                     output_data,
                     None,
                     workers=cfg.workers,
-                    hausdorff_compute_method="shapely",
+                    hausdorff_compute_method=hausdorff_compute_method,
                     pathset_loader=lambda rp=rp, mc_idx=mc_idx: load_paths(rp, mc_idx),
                 )
                 for warning in distance_warnings:
@@ -582,6 +583,7 @@ def run_std_analysis_from_discovered(
     discovered: dict[float, list[RunPaths]],
     *,
     show_progress: bool = False,
+    hausdorff_compute_method: str = "shapely",
     max_std_values: int | None = None,
     max_sizes_per_std: int | None = None,
     max_mc_per_size: int | None = None,
@@ -654,7 +656,7 @@ def run_std_analysis_from_discovered(
                     output_data,
                     None,
                     workers=cfg.workers,
-                    hausdorff_compute_method="nn_max",
+                    hausdorff_compute_method=hausdorff_compute_method,
                     pathset_loader=_load_pathset,
                 )
                 for warning in distance_warnings:
@@ -735,6 +737,7 @@ def run_stage2(
     *,
     cache_dir: Path | None = None,
     skip_std: bool = False,
+    hausdorff_compute_method: str = "shapely",
     max_var_values: int | None = None,
     max_std_values: int | None = None,
     max_sizes_per_value: int | None = None,
@@ -750,6 +753,7 @@ def run_stage2(
         cfg,
         discovered_var,
         show_progress=True,
+        hausdorff_compute_method=hausdorff_compute_method,
         max_var_values=max_var_values,
         max_sizes_per_var=max_sizes_per_value,
         max_mc_per_size=max_mc_per_size,
@@ -762,6 +766,7 @@ def run_stage2(
             cfg,
             discovered_std,
             show_progress=True,
+            hausdorff_compute_method=hausdorff_compute_method,
             max_std_values=max_std_values,
             max_sizes_per_std=max_sizes_per_value,
             max_mc_per_size=max_mc_per_size,
@@ -780,6 +785,7 @@ def run_stage2(
         "warnings_variance": len(warnings_var),
         "warnings_std": len(warnings_std),
         "std_computed": std_results is not None,
+        "hausdorff_compute_method": hausdorff_compute_method,
         "max_var_values": max_var_values,
         "max_std_values": max_std_values,
         "max_sizes_per_value": max_sizes_per_value,
@@ -794,6 +800,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--skip-std", action="store_true")
+    parser.add_argument(
+        "--hausdorff-compute-method",
+        type=str,
+        choices=["shapely", "nn_max"],
+        default="shapely",
+        help="Method for Hausdorff distance computation",
+    )
     parser.add_argument("--max-var-values", type=int, default=None, help="Limit number of variance values processed")
     parser.add_argument("--max-std-values", type=int, default=None, help="Limit number of std values processed")
     parser.add_argument("--max-sizes-per-value", type=int, default=None, help="Limit number of size runs per var/std value")
@@ -808,6 +821,7 @@ def main() -> int:
         cfg,
         cache_dir=args.cache_dir,
         skip_std=args.skip_std,
+        hausdorff_compute_method=args.hausdorff_compute_method,
         max_var_values=args.max_var_values,
         max_std_values=args.max_std_values,
         max_sizes_per_value=args.max_sizes_per_value,

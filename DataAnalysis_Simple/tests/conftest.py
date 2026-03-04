@@ -80,7 +80,7 @@ def pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
         "figure_dpi": 120,
         "workers": -1,
         "save_formats": ["png"],
-        "sections": ["times", "endpoint", "hausdorff", "std_endpoint", "std_hausdorff"],
+        "sections": ["times", "endpoint", "hausdorff", "std_endpoint", "std_hausdorff", "ratio_mean", "ratio_var", "wasserstein_len"],
         "distance_mode": {
             "end_point": "load_from_main_output",
             "hausdorff": "compute_from_paths",
@@ -131,7 +131,7 @@ def pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
         "figure_dpi: 120",
         "workers: -1",
         "save_formats: [png]",
-        "sections: [times, endpoint, hausdorff, std_endpoint, std_hausdorff]",
+        "sections: [times, endpoint, hausdorff, std_endpoint, std_hausdorff, ratio_mean, ratio_var, wasserstein_len]",
         "distance_mode:",
         "  end_point: load_from_main_output",
         "  hausdorff: compute_from_paths",

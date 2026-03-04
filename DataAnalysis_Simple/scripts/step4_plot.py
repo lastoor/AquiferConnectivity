@@ -7,7 +7,7 @@ import hashlib
 import json
 import pickle
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import timezone, datetime
 from pathlib import Path
 from typing import Any
 
@@ -237,6 +237,33 @@ def _extract_std_series(stats_std: dict[str, np.ndarray], metric: str, pair: str
     return y, yerr
 
 
+def _coerce_series(values: np.ndarray | list[float], expected_len: int, *, label: str, warnings: list[str]) -> np.ndarray:
+    arr = np.asarray(values, dtype=float).ravel()
+    if arr.size == expected_len:
+        return arr
+    out = np.full(expected_len, np.nan, dtype=float)
+    n = min(expected_len, arr.size)
+    if n > 0:
+        out[:n] = arr[:n]
+    warnings.append(
+        f"{label} has length {arr.size}, expected {expected_len}; "
+        f"used first {n} values and filled the rest with NaN."
+    )
+    return out
+
+
+def _safe_ratio(num: np.ndarray, den: np.ndarray, *, label: str, warnings: list[str]) -> np.ndarray:
+    n = np.asarray(num, dtype=float)
+    d = np.asarray(den, dtype=float)
+    out = np.full_like(n, np.nan, dtype=float)
+    valid = np.isfinite(n) & np.isfinite(d) & (d != 0.0)
+    out[valid] = n[valid] / d[valid]
+    invalid_count = int(np.size(valid) - np.count_nonzero(valid))
+    if invalid_count > 0:
+        warnings.append(f"{label}: set {invalid_count} ratio point(s) to NaN due to non-finite values or zero denominator.")
+    return out
+
+
 def plot_hausdorff_vs_variance(var: np.ndarray, stats_hausdorff_lrp: np.ndarray, stats_hausdorff_fmm: np.ndarray, stats_hausdorff_dijkstra: np.ndarray, i_y: float):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, yerr=stats_hausdorff_lrp[:, 1] / i_y, label="$d_H$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
@@ -263,6 +290,57 @@ def plot_endpoint_vs_variance(var: np.ndarray, stats_end_lrp: np.ndarray, stats_
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "endpoint_variance"}
+
+
+def plot_ratio_mean_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm: np.ndarray, ratio_dijkstra: np.ndarray):
+    fig, ax = plt.subplots(figsize=[5, 4])
+    ax.plot(var, ratio_fp, linestyle="-", color=COLORS["fp"], marker="o", markerfacecolor="None", label="FP")
+    ax.plot(var, ratio_fmm, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="FP (FMM)")
+    ax.plot(var, ratio_dijkstra, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="FP (Dijkstra)")
+    ax.set_xscale("log")
+    ax.set_xlabel("$\\sigma_{Y}^2$")
+    ax.set_ylabel(r"$\mathbb{E}[t_{\mathrm{min}}]/\mathbb{E}[R_{\mathrm{min}}]$")
+    ax.set_title("Variation of Mean Ratio with Variance")
+    ax.legend(fontsize="9", loc="best")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": "ratio_mean_variance"}
+
+
+def plot_ratio_var_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm: np.ndarray, ratio_dijkstra: np.ndarray):
+    fig, ax = plt.subplots(figsize=[5, 4])
+    ax.plot(var, ratio_fp, linestyle="-", color=COLORS["fp"], marker="o", markerfacecolor="None", label="FP")
+    ax.plot(var, ratio_fmm, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="FP (FMM)")
+    ax.plot(var, ratio_dijkstra, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="FP (Dijkstra)")
+    ax.set_xscale("log")
+    ax.set_xlabel("$\\sigma_{Y}^2$")
+    ax.set_ylabel(r"$\mathrm{Var}(t_{\mathrm{min}})/\mathrm{Var}(R_{\mathrm{min}})$")
+    ax.set_title("Variation of Variance Ratio with Variance")
+    ax.legend(fontsize="9", loc="best")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": "ratio_var_variance"}
+
+
+def plot_wasserstein_len_vs_variance(
+    var: np.ndarray,
+    w_fp_lrp: np.ndarray,
+    w_fp_fmm: np.ndarray,
+    w_fp_dijkstra: np.ndarray,
+    i_y: float,
+):
+    fig, ax = plt.subplots(figsize=[5, 4])
+    ax.plot(var, w_fp_lrp / i_y, linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None", label="$W_1$[FP, LRP]")
+    ax.plot(var, w_fp_fmm / i_y, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="$W_1$[FP, FP(FMM)]")
+    ax.plot(var, w_fp_dijkstra / i_y, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="$W_1$[FP, FP(Dijkstra)]")
+    ax.set_xscale("log")
+    ax.set_xlabel("$\\sigma_{Y}^2$")
+    ax.set_ylabel(r"$W_1(\mathrm{len})/I_Y$")
+    ax.set_title("Wasserstein Distance of Path-Length CDFs")
+    ax.legend(fontsize="9", loc="best")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": "wasserstein_len_variance"}
 
 
 def plot_std_hausdorff(x_var: np.ndarray, stats_std: dict[str, np.ndarray], i_y: float):
@@ -302,7 +380,7 @@ def plot_std_endpoint(x_var: np.ndarray, stats_std: dict[str, np.ndarray], i_y: 
 
 
 def _stamp() -> str:
-    return datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
 
 
 def _short_hash(obj: dict[str, Any]) -> str:
@@ -341,7 +419,7 @@ def save_figure(
 def write_manifest(output_dir: Path, *, config: dict[str, Any], artifacts: list[FigureArtifact], warnings: list[str]) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
-        "generated_at_utc": datetime.now(UTC).isoformat(),
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "config": config,
         "warnings": warnings,
         "figures": [
@@ -365,7 +443,7 @@ def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, uniqu
     payload = load_pickle(cache_dir / "stage3_plot_inputs.pkl")
     prepared = payload["plot_inputs"]
     warning_dict = payload.get("warnings", {})
-    all_warnings = warning_dict.get("variance", []) + warning_dict.get("std", [])
+    all_warnings = warning_dict.get("variance", []) + warning_dict.get("std", []) + list(prepared.get("derived_warnings", []))
 
     configure_style(cfg)
     artifacts: list[FigureArtifact] = []
@@ -422,6 +500,35 @@ def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, uniqu
         artifacts.extend(save_figure(fig, section="endpoint", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
 
+    if "ratio_mean" in cfg.sections:
+        ratio_fp = _safe_ratio(s["stats_fpt"][:, 0], s["stats_mhr"][:, 0], label="mean(t_min)/mean(R_min) for FP", warnings=all_warnings)
+        ratio_fmm = _safe_ratio(s["stats_fpt_fmm"][:, 0], s["stats_mhr"][:, 0], label="mean(t_min)/mean(R_min) for FP(FMM)", warnings=all_warnings)
+        ratio_dijkstra = _safe_ratio(s["stats_fpt_dijkstra"][:, 0], s["stats_mhr"][:, 0], label="mean(t_min)/mean(R_min) for FP(Dijkstra)", warnings=all_warnings)
+        fig, meta = plot_ratio_mean_vs_variance(var, ratio_fp, ratio_fmm, ratio_dijkstra)
+        artifacts.extend(save_figure(fig, section="ratio_mean", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+        plt.close(fig)
+
+    if "ratio_var" in cfg.sections:
+        var_rmin = np.square(s["stats_mhr"][:, 1])
+        ratio_var_fp = _safe_ratio(np.square(s["stats_fpt"][:, 1]), var_rmin, label="var(t_min)/var(R_min) for FP", warnings=all_warnings)
+        ratio_var_fmm = _safe_ratio(np.square(s["stats_fpt_fmm"][:, 1]), var_rmin, label="var(t_min)/var(R_min) for FP(FMM)", warnings=all_warnings)
+        ratio_var_dijkstra = _safe_ratio(np.square(s["stats_fpt_dijkstra"][:, 1]), var_rmin, label="var(t_min)/var(R_min) for FP(Dijkstra)", warnings=all_warnings)
+        fig, meta = plot_ratio_var_vs_variance(var, ratio_var_fp, ratio_var_fmm, ratio_var_dijkstra)
+        artifacts.extend(save_figure(fig, section="ratio_var", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+        plt.close(fig)
+
+    if "wasserstein_len" in cfg.sections:
+        if "wasserstein_len" not in prepared:
+            all_warnings.append("Requested 'wasserstein_len' section but Stage 3 cache is missing wasserstein_len data.")
+        else:
+            wl = prepared["wasserstein_len"]
+            w_fp_lrp = _coerce_series(wl.get("fp_lrp", []), len(var), label="wasserstein_len.fp_lrp", warnings=all_warnings)
+            w_fp_fmm = _coerce_series(wl.get("fp_fpFMM", []), len(var), label="wasserstein_len.fp_fpFMM", warnings=all_warnings)
+            w_fp_dijkstra = _coerce_series(wl.get("fp_fpDijkstra", []), len(var), label="wasserstein_len.fp_fpDijkstra", warnings=all_warnings)
+            fig, meta = plot_wasserstein_len_vs_variance(var, w_fp_lrp, w_fp_fmm, w_fp_dijkstra, i_y)
+            artifacts.extend(save_figure(fig, section="wasserstein_len", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+            plt.close(fig)
+
     if "std_hausdorff" in cfg.sections and prepared["stats_std"] is not None:
         fig, meta = plot_std_hausdorff(x_var, prepared["stats_std"], i_y)
         artifacts.extend(save_figure(fig, section="std_hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
@@ -440,6 +547,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stage 4: render figures from cached plotting inputs")
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=None, help="Optional output directory override for figures/manifest")
     parser.add_argument(
         "--unique-filenames",
         action=argparse.BooleanOptionalAction,
@@ -452,6 +560,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     cfg = load_config(args.config)
+    if args.output_dir is not None:
+        cfg.output_dir = args.output_dir.expanduser().resolve()
     artifacts = run_stage4(cfg, cache_dir=args.cache_dir, unique_filenames=args.unique_filenames)
     print(f"Generated {len(artifacts)} figure artifact(s) in {cfg.output_dir}")
     return 0

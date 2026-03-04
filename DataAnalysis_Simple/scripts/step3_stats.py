@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+from scipy.stats import wasserstein_distance
 
 from step1_index import VisualizationConfig, default_cache_dir, load_config, save_pickle, write_stage_metadata
 
@@ -146,6 +147,57 @@ def collect_integral_stats(line_integrals: dict[str, dict[str, Any]], var_values
     return {k: np.asarray(v, dtype=float) for k, v in out.items()}
 
 
+def _safe_first_size_samples(lengths: dict[str, list[np.ndarray]], key: str) -> np.ndarray | None:
+    values = lengths.get(key, [])
+    if not values:
+        return None
+    arr = np.asarray(values[0], dtype=float).ravel()
+    if arr.size == 0:
+        return None
+    finite = arr[np.isfinite(arr)]
+    if finite.size == 0:
+        return None
+    return finite
+
+
+def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var_values: list[float]) -> tuple[dict[str, np.ndarray], list[str]]:
+    out = {
+        "fp_lrp": [],
+        "fp_fpDijkstra": [],
+        "fp_fpFMM": [],
+    }
+    warnings: list[str] = []
+
+    for var_ in var_values:
+        entry = var_data.get(f"var_{var_}")
+        if entry is None:
+            out["fp_lrp"].append(np.nan)
+            out["fp_fpDijkstra"].append(np.nan)
+            out["fp_fpFMM"].append(np.nan)
+            warnings.append(f"Missing variance entry for Wasserstein length metric at sigma2={var_}.")
+            continue
+
+        lengths = entry.get("lengths", {})
+        fp = _safe_first_size_samples(lengths, "fp")
+        lrp = _safe_first_size_samples(lengths, "lrp")
+        fp_dijkstra = _safe_first_size_samples(lengths, "fp_dijkstra")
+        fp_fmm = _safe_first_size_samples(lengths, "fp_fmm")
+
+        pair_data = {
+            "fp_lrp": lrp,
+            "fp_fpDijkstra": fp_dijkstra,
+            "fp_fpFMM": fp_fmm,
+        }
+        for pair_key, other in pair_data.items():
+            if fp is None or other is None:
+                out[pair_key].append(np.nan)
+                warnings.append(f"Wasserstein length metric skipped for {pair_key} at sigma2={var_} due to missing finite samples.")
+                continue
+            out[pair_key].append(float(wasserstein_distance(fp, other)))
+
+    return {k: np.asarray(v, dtype=float) for k, v in out.items()}, warnings
+
+
 def compute_t_ref(k_g: float, dh: float, field_size: float, length_scale: float) -> float:
     i_y = length_scale * field_size
     q_ref = k_g * dh
@@ -185,6 +237,7 @@ def compute_taylor_times(
 
 def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results: Any | None) -> dict[str, Any]:
     var_stats = _pick(var_results, "stats")
+    var_data = _pick(var_results, "data")
     var_line_integrals = _pick(var_results, "line_integrals")
     var_field_size = _pick(var_results, "field_size")
 
@@ -192,6 +245,7 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
     var = np.asarray(var_values, dtype=float)
     s = collect_primary_stats(var_stats, var_values)
     ints = collect_integral_stats(var_line_integrals, var_values)
+    wasserstein_len, derived_warnings = collect_wasserstein_length_distance(var_data, var_values)
 
     field_size_arr = np.asarray(var_field_size, dtype=float)
     field_size = cfg.field_size_ref if field_size_arr.size == 0 else float(field_size_arr[0])
@@ -227,6 +281,8 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
         "i_y": i_y,
         "t_ref": t_ref,
         "stats_std": stats_std,
+        "wasserstein_len": wasserstein_len,
+        "derived_warnings": derived_warnings,
     }
 
 

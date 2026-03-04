@@ -12,6 +12,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the full 4-stage data analysis pipeline")
     parser.add_argument("--config", required=True, type=Path, help="Path to YAML config")
     parser.add_argument("--section", action="append", default=None, help="Optional section(s) override")
+    parser.add_argument("--output-dir", type=Path, default=None, help="Optional output directory override for Stage 4 figures")
     parser.add_argument("--dry-run", action="store_true", help="Validate config and print plan only")
     parser.add_argument("--cache-dir", type=Path, default=None, help="Optional cache directory")
     parser.add_argument("--skip-std", action="store_true", help="Skip std sweep in stage2")
@@ -31,6 +32,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     cfg = step1.load_config(args.config)
+    if args.output_dir is not None:
+        cfg.output_dir = args.output_dir.expanduser().resolve()
     if args.section:
         cfg.sections = args.section
 
