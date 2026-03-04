@@ -1,0 +1,802 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import pickle
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable
+
+import numpy as np
+from scipy.spatial import cKDTree
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional dependency
+    def tqdm(iterable=None, **kwargs):  # type: ignore[override]
+        return iterable
+
+from step1_index import RunPaths, VisualizationConfig, default_cache_dir, load_config, save_pickle, write_stage_metadata
+
+try:
+    from shapely import LineString, frechet_distance, hausdorff_distance
+except ImportError:  # pragma: no cover - optional dependency
+    LineString = None
+    frechet_distance = None
+    hausdorff_distance = None
+
+PAIR_TO_FIELDS = {
+    "fp_lrp": ("fp", "lrp"),
+    "fp_fpDijkstra": ("fp", "fp_dijkstra"),
+    "fp_fpFMM": ("fp", "fp_fmm"),
+}
+DISTANCE_TYPES = ("end_point", "hausdorff", "frechet")
+
+
+@dataclass(slots=True)
+class PathSet:
+    fp: np.ndarray | None = None
+    lrp: np.ndarray | None = None
+    fp_dijkstra: np.ndarray | None = None
+    fp_fmm: np.ndarray | None = None
+
+
+@dataclass(slots=True)
+class SummaryStats:
+    mean: float
+    std: float
+    count: int
+
+
+@dataclass(slots=True)
+class VarianceResults:
+    field_size: np.ndarray
+    data: dict[str, Any]
+    stats: dict[str, Any]
+    line_integrals: dict[str, Any]
+
+
+@dataclass(slots=True)
+class StdResults:
+    data_path: dict[str, Any]
+    stats_path: dict[str, Any]
+    stats_std: dict[str, np.ndarray]
+
+
+def load_pickle(path: Path) -> Any:
+    with path.open("rb") as f:
+        return pickle.load(f)
+
+
+def runpaths_from_dict(raw: dict[str, Any]) -> RunPaths:
+    return RunPaths(
+        size_dir=Path(raw["size_dir"]),
+        size_value=float(raw["size_value"]),
+        size_str=str(raw["size_str"]),
+        main_output_files=[Path(p) for p in raw["main_output_files"]],
+        fp_files=[Path(p) for p in raw["fp_files"]],
+        lrp_files=[Path(p) for p in raw["lrp_files"]],
+        fp_dijkstra_files=[Path(p) for p in raw["fp_dijkstra_files"]],
+        fp_fmm_files=[Path(p) for p in raw["fp_fmm_files"]],
+        logk_files=[Path(p) for p in raw["logk_files"]],
+    )
+
+
+def deserialize_discovered(raw: dict[float, list[dict[str, Any]]]) -> dict[float, list[RunPaths]]:
+    return {float(k): [runpaths_from_dict(rp) for rp in v] for k, v in raw.items()}
+
+
+def load_main_output(npz_path: Path) -> dict[str, Any]:
+    with np.load(npz_path) as data:
+        return {k: data[k].item() if np.asarray(data[k]).size == 1 else data[k] for k in data.files}
+
+
+def _safe_load(paths: list[Path], idx: int) -> np.ndarray | None:
+    if paths and idx < len(paths):
+        return np.load(paths[idx])
+    return None
+
+
+def load_paths(run_paths: RunPaths, mc_idx: int) -> PathSet:
+    return PathSet(
+        fp=_safe_load(run_paths.fp_files, mc_idx),
+        lrp=_safe_load(run_paths.lrp_files, mc_idx),
+        fp_dijkstra=_safe_load(run_paths.fp_dijkstra_files, mc_idx),
+        fp_fmm=_safe_load(run_paths.fp_fmm_files, mc_idx),
+    )
+
+
+def load_logk_field(run_paths: RunPaths, mc_idx: int) -> np.ndarray | None:
+    if run_paths.logk_files and mc_idx < len(run_paths.logk_files):
+        return np.load(run_paths.logk_files[mc_idx])
+    return None
+
+
+def resample_by_arclength(points: np.ndarray, ds: float = 1.0) -> np.ndarray:
+    seg = np.linalg.norm(np.diff(points, axis=0), axis=1)
+    s = np.concatenate(([0.0], np.cumsum(seg)))
+    if s[-1] == 0:
+        return points[[0]].copy()
+    s_new = np.arange(0, s[-1] + 1e-9, ds)
+    px = np.interp(s_new, s, points[:, 0])
+    py = np.interp(s_new, s, points[:, 1])
+    return np.column_stack([px, py])
+
+
+def directed_nn_distances(a: np.ndarray, b: np.ndarray, workers: int = -1) -> np.ndarray:
+    tree = cKDTree(b)
+    d, _ = tree.query(a, k=1, workers=workers)
+    return d
+
+
+def distance_distribution(a: np.ndarray, b: np.ndarray, ds: float = 1.0, workers: int = -1) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    au = resample_by_arclength(a, ds=ds)
+    bu = resample_by_arclength(b, ds=ds)
+    d_ab = directed_nn_distances(au, bu, workers=workers)
+    d_ba = directed_nn_distances(bu, au, workers=workers)
+    return np.concatenate([d_ab, d_ba]), d_ab, d_ba
+
+
+def path_to_linestring(path_arr: np.ndarray | None) -> LineString | None:
+    if LineString is None:
+        return None
+    if path_arr is None or len(path_arr) < 2:
+        return None
+    return LineString(path_arr.tolist())
+
+
+def shapely_pair_distances(
+    fp: np.ndarray | None,
+    lrp: np.ndarray | None,
+    fp_dijkstra: np.ndarray | None,
+    fp_fmm: np.ndarray | None,
+) -> dict[str, dict[str, float]]:
+    out = {
+        "hausdorff": {"fp_lrp": np.nan, "fp_fpDijkstra": np.nan, "fp_fpFMM": np.nan},
+        "frechet": {"fp_lrp": np.nan, "fp_fpDijkstra": np.nan, "fp_fpFMM": np.nan},
+    }
+    ls_fp = path_to_linestring(fp)
+    if ls_fp is None:
+        return out
+    if hausdorff_distance is None or frechet_distance is None:
+        return out
+    pairs = [("fp_lrp", lrp), ("fp_fpDijkstra", fp_dijkstra), ("fp_fpFMM", fp_fmm)]
+    for name, other in pairs:
+        ls_other = path_to_linestring(other)
+        if ls_other is None:
+            continue
+        out["hausdorff"][name] = hausdorff_distance(ls_fp, ls_other)
+        out["frechet"][name] = frechet_distance(ls_fp, ls_other)
+    return out
+
+
+def endpoint_distance(a: np.ndarray | None, b: np.ndarray | None, *, axis: int = 1, signed: bool = False) -> float:
+    if a is None or b is None or len(a) == 0 or len(b) == 0:
+        return float("nan")
+    d = float(a[-1, axis] - b[-1, axis])
+    return d if signed else abs(d)
+
+
+def _empty_distance_dict() -> dict[str, dict[str, float]]:
+    return {
+        "end_point": {k: np.nan for k in PAIR_TO_FIELDS},
+        "hausdorff": {k: np.nan for k in PAIR_TO_FIELDS},
+        "frechet": {k: np.nan for k in PAIR_TO_FIELDS},
+    }
+
+
+def _compute_endpoint_for_pair(pathset: PathSet, pair: str) -> float:
+    a_name, b_name = PAIR_TO_FIELDS[pair]
+    a = getattr(pathset, a_name)
+    b = getattr(pathset, b_name)
+    return endpoint_distance(a, b, axis=1, signed=True)
+
+
+def _compute_hausdorff_nn_for_pair(pathset: PathSet, pair: str, workers: int) -> float:
+    a_name, b_name = PAIR_TO_FIELDS[pair]
+    a = getattr(pathset, a_name)
+    b = getattr(pathset, b_name)
+    if a is None or b is None:
+        return float("nan")
+    d, _, _ = distance_distribution(a, b, ds=1.0, workers=workers)
+    if len(d) == 0:
+        return float("nan")
+    return float(np.max(d))
+
+
+def resolve_distances(
+    cfg: VisualizationConfig,
+    output_data: dict[str, Any] | None,
+    pathset: PathSet | None,
+    *,
+    workers: int,
+    hausdorff_compute_method: str,
+    pathset_loader: Callable[[], PathSet | None] | None = None,
+) -> tuple[dict[str, dict[str, float]], list[str]]:
+    out = _empty_distance_dict()
+    warnings: list[str] = []
+    shapely_cache: dict[str, dict[str, float]] | None = None
+    pathset_cached = pathset
+
+    def _get_pathset() -> PathSet | None:
+        nonlocal pathset_cached
+        if pathset_cached is None and pathset_loader is not None:
+            pathset_cached = pathset_loader()
+        return pathset_cached
+
+    def _ensure_shapely() -> dict[str, dict[str, float]]:
+        nonlocal shapely_cache
+        if shapely_cache is None:
+            ps = _get_pathset()
+            if ps is None:
+                return {
+                    "hausdorff": {k: np.nan for k in PAIR_TO_FIELDS},
+                    "frechet": {k: np.nan for k in PAIR_TO_FIELDS},
+                }
+            shapely_cache = shapely_pair_distances(ps.fp, ps.lrp, ps.fp_dijkstra, ps.fp_fmm)
+        return shapely_cache
+
+    def _compute_value(distance_type: str, pair: str) -> float:
+        ps = _get_pathset()
+        if ps is None:
+            return float("nan")
+        if distance_type == "end_point":
+            return _compute_endpoint_for_pair(ps, pair)
+        if distance_type == "hausdorff":
+            if hausdorff_compute_method == "nn_max":
+                return _compute_hausdorff_nn_for_pair(ps, pair, workers)
+            return float(_ensure_shapely()["hausdorff"][pair])
+        if distance_type == "frechet":
+            return float(_ensure_shapely()["frechet"][pair])
+        return float("nan")
+
+    for distance_type in DISTANCE_TYPES:
+        if not cfg.distance_enabled.get(distance_type, True):
+            continue
+        mode = cfg.distance_mode[distance_type]
+        for pair in PAIR_TO_FIELDS:
+            value = float("nan")
+            loaded = False
+            if mode == "load_from_main_output":
+                key = cfg.distance_main_output_keys[distance_type][pair]
+                if output_data is not None and key in output_data:
+                    value = float(output_data[key])
+                    loaded = True
+                else:
+                    warnings.append(f"Missing mainOutput key '{key}' for {distance_type}:{pair}")
+
+            if (not loaded) and (mode == "compute_from_paths" or cfg.distance_fallback_on_missing == "compute_from_paths"):
+                value = _compute_value(distance_type, pair)
+
+            out[distance_type][pair] = value
+
+    return out, warnings
+
+def compute_line_integral(path: np.ndarray | None, field: np.ndarray, grid_spacing: float = 1.0) -> tuple[float, float] | tuple[None, None]:
+    if path is None or len(path) == 0:
+        return None, None
+
+    x_idx = np.round(path[:, 0] / grid_spacing).astype(int)
+    y_idx = np.round(path[:, 1] / grid_spacing).astype(int)
+    x_idx = np.clip(x_idx, 0, field.shape[0] - 1)
+    y_idx = np.clip(y_idx, 0, field.shape[1] - 1)
+
+    values = field[x_idx, y_idx]
+    segment_lengths = np.linalg.norm(np.diff(path, axis=0), axis=1)
+    ds = np.concatenate(([0.0], segment_lengths))
+
+    int_logk = float(np.sum(values * ds))
+    int_logk2 = float(np.sum((values ** 2) * ds))
+    return int_logk, int_logk2
+
+
+def compute_mc_line_integrals(pathset: PathSet, field: np.ndarray, grid_spacing: float = 1.0) -> dict[str, tuple[float, float] | tuple[None, None]]:
+    return {
+        "fp": compute_line_integral(pathset.fp, field, grid_spacing),
+        "lrp": compute_line_integral(pathset.lrp, field, grid_spacing),
+        "fp_dijkstra": compute_line_integral(pathset.fp_dijkstra, field, grid_spacing),
+        "fp_fmm": compute_line_integral(pathset.fp_fmm, field, grid_spacing),
+    }
+
+
+def summarize_integral_values(values: list[float]) -> dict[str, float | list[float]]:
+    arr = np.asarray(values, dtype=float)
+    if arr.size == 0:
+        return {"mean": float("nan"), "std": float("nan"), "values": []}
+    return {"mean": float(np.mean(arr)), "std": float(np.std(arr)), "values": values}
+
+
+def mean_std(arr: list[float] | np.ndarray, *, filter_positive: bool = False, ignore_nan: bool = True) -> SummaryStats:
+    a = np.asarray(arr, dtype=float)
+    if filter_positive:
+        a = a[a > 0]
+    if ignore_nan:
+        a = a[~np.isnan(a)]
+    if a.size == 0:
+        return SummaryStats(mean=float("nan"), std=float("nan"), count=0)
+    return SummaryStats(mean=float(np.mean(a)), std=float(np.std(a)), count=int(a.size))
+
+
+def mean_std_matrix(arr_list: list[np.ndarray], *, filter_positive: bool = False) -> np.ndarray:
+    out = []
+    for arr in arr_list:
+        s = mean_std(arr, filter_positive=filter_positive)
+        out.append((s.mean, s.std))
+    return np.asarray(out, dtype=float)
+
+
+def _init_lengths() -> dict[str, list[np.ndarray]]:
+    return {"fp": [], "fp_dijkstra": [], "fp_fmm": [], "lrp": []}
+
+
+def _init_times() -> dict[str, list[np.ndarray]]:
+    return {"fpt": [], "fpt_dijkstra": [], "fpt_fmm": [], "mhr": []}
+
+
+def _init_distances() -> dict[str, dict[str, list[np.ndarray]]]:
+    return {
+        "hausdorff": {"fp_lrp": [], "fp_fpDijkstra": [], "fp_fpFMM": []},
+        "frechet": {"fp_lrp": [], "fp_fpDijkstra": [], "fp_fpFMM": []},
+        "end_point": {"fp_lrp": [], "fp_fpDijkstra": [], "fp_fpFMM": []},
+    }
+
+
+def _append_stat_row(container: dict[str, list[np.ndarray]], key: str, values: list[float]) -> None:
+    container[key].append(np.asarray(values, dtype=float))
+
+
+def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[np.ndarray]], distances: dict[str, dict[str, list[np.ndarray]]]) -> dict[str, Any]:
+    return {
+        "lengths": {
+            "fp": mean_std_matrix(lengths["fp"]),
+            "fp_dijkstra": mean_std_matrix(lengths["fp_dijkstra"]),
+            "fp_fmm": mean_std_matrix(lengths["fp_fmm"]),
+            "lrp": mean_std_matrix(lengths["lrp"]),
+        },
+        "times": {
+            "fpt": mean_std_matrix(times["fpt"], filter_positive=True),
+            "fpt_dijkstra": mean_std_matrix(times["fpt_dijkstra"], filter_positive=True),
+            "fpt_fmm": mean_std_matrix(times["fpt_fmm"], filter_positive=True),
+            "mhr": mean_std_matrix(times["mhr"], filter_positive=True),
+        },
+        "distances": {
+            "hausdorff": {
+                "fp_lrp": mean_std_matrix(distances["hausdorff"]["fp_lrp"]),
+                "fp_fpDijkstra": mean_std_matrix(distances["hausdorff"]["fp_fpDijkstra"], filter_positive=True),
+                "fp_fpFMM": mean_std_matrix(distances["hausdorff"]["fp_fpFMM"], filter_positive=True),
+            },
+            "frechet": {
+                "fp_lrp": mean_std_matrix(distances["frechet"]["fp_lrp"]),
+                "fp_fpDijkstra": mean_std_matrix(distances["frechet"]["fp_fpDijkstra"], filter_positive=True),
+                "fp_fpFMM": mean_std_matrix(distances["frechet"]["fp_fpFMM"], filter_positive=True),
+            },
+            "end_point": {
+                "fp_lrp": mean_std_matrix(distances["end_point"]["fp_lrp"]),
+                "fp_fpDijkstra": mean_std_matrix(distances["end_point"]["fp_fpDijkstra"]),
+                "fp_fpFMM": mean_std_matrix(distances["end_point"]["fp_fpFMM"]),
+            },
+        },
+    }
+
+
+def _compute_line_integrals_for_var(
+    cfg: VisualizationConfig,
+    run_paths: list[RunPaths],
+    *,
+    max_mc_per_size: int | None = None,
+) -> dict[str, dict[str, float | list[float]]]:
+    target = next((rp for rp in run_paths if int(rp.size_value) == int(cfg.field_size_ref)), None)
+    if target is None:
+        empty = summarize_integral_values([])
+        return {
+            "int_logk_fp": empty,
+            "int_logk2_fp": empty,
+            "int_logk_lrp": empty,
+            "int_logk2_lrp": empty,
+            "int_logk_fp_dijkstra": empty,
+            "int_logk2_fp_dijkstra": empty,
+            "int_logk_fp_fmm": empty,
+            "int_logk2_fp_fmm": empty,
+        }
+
+    values = {
+        "fp": {"logk": [], "logk2": []},
+        "lrp": {"logk": [], "logk2": []},
+        "fp_dijkstra": {"logk": [], "logk2": []},
+        "fp_fmm": {"logk": [], "logk2": []},
+    }
+
+    n_mc = len(target.logk_files)
+    if max_mc_per_size is not None:
+        n_mc = min(n_mc, max_mc_per_size)
+
+    for mc_idx in range(n_mc):
+        field = load_logk_field(target, mc_idx)
+        if field is None:
+            continue
+        pathset = load_paths(target, mc_idx)
+        ints = compute_mc_line_integrals(pathset, field, grid_spacing=1.0)
+        for key, pair in ints.items():
+            if pair[0] is None:
+                continue
+            values[key]["logk"].append(pair[0])
+            values[key]["logk2"].append(pair[1])
+
+    return {
+        "int_logk_fp": summarize_integral_values(values["fp"]["logk"]),
+        "int_logk2_fp": summarize_integral_values(values["fp"]["logk2"]),
+        "int_logk_lrp": summarize_integral_values(values["lrp"]["logk"]),
+        "int_logk2_lrp": summarize_integral_values(values["lrp"]["logk2"]),
+        "int_logk_fp_dijkstra": summarize_integral_values(values["fp_dijkstra"]["logk"]),
+        "int_logk2_fp_dijkstra": summarize_integral_values(values["fp_dijkstra"]["logk2"]),
+        "int_logk_fp_fmm": summarize_integral_values(values["fp_fmm"]["logk"]),
+        "int_logk2_fp_fmm": summarize_integral_values(values["fp_fmm"]["logk2"]),
+    }
+
+
+def run_variance_analysis_from_discovered(
+    cfg: VisualizationConfig,
+    discovered: dict[float, list[RunPaths]],
+    *,
+    show_progress: bool = False,
+    max_var_values: int | None = None,
+    max_sizes_per_var: int | None = None,
+    max_mc_per_size: int | None = None,
+) -> tuple[VarianceResults, list[str]]:
+    data: dict[str, dict[str, Any]] = {}
+    stats: dict[str, dict[str, Any]] = {}
+    line_integrals: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+    warning_seen: set[str] = set()
+
+    var_values = cfg.variance_values[:max_var_values] if max_var_values is not None else cfg.variance_values
+    var_iter = tqdm(var_values, desc="Variance sweep", unit="var", leave=False) if show_progress else var_values
+
+    for var_ in var_iter:
+        run_paths = discovered.get(var_, [])
+        if max_sizes_per_var is not None:
+            run_paths = run_paths[:max_sizes_per_var]
+
+        field_size_list: list[float] = []
+        lengths = _init_lengths()
+        times = _init_times()
+        distances = _init_distances()
+
+        run_iter = tqdm(run_paths, desc=f"var={var_} sizes", unit="size", leave=False) if show_progress else run_paths
+        for rp in run_iter:
+            field_size_list.append(rp.size_value)
+            if not rp.main_output_files:
+                warnings.append(f"No mainOutput files found for var={var_}, size={rp.size_str}")
+                continue
+
+            len_fp_m: list[float] = []
+            len_lrp_m: list[float] = []
+            len_fp_dijkstra_m: list[float] = []
+            len_fp_fmm_m: list[float] = []
+            fpt_m: list[float] = []
+            fpt_dijkstra_m: list[float] = []
+            fpt_fmm_m: list[float] = []
+            mhr_m: list[float] = []
+            haus_fp_lrp: list[float] = []
+            haus_fp_d: list[float] = []
+            haus_fp_fmm: list[float] = []
+            fre_fp_lrp: list[float] = []
+            fre_fp_d: list[float] = []
+            fre_fp_fmm: list[float] = []
+            end_fp_lrp: list[float] = []
+            end_fp_d: list[float] = []
+            end_fp_fmm: list[float] = []
+
+            main_output_files = rp.main_output_files[:max_mc_per_size] if max_mc_per_size is not None else rp.main_output_files
+            mc_iter = enumerate(main_output_files)
+            if show_progress:
+                mc_iter = enumerate(tqdm(main_output_files, desc=f"var={var_} size={rp.size_str} MC", unit="mc", leave=False))
+
+            for mc_idx, path in mc_iter:
+                output_data = load_main_output(path)
+                len_fp_m.append(float(output_data["len_fp_m"]))
+                len_fp_dijkstra_m.append(float(output_data["len_fp_dijkstra_m"]))
+                len_fp_fmm_m.append(float(output_data["len_fp_fmm_m"]))
+                len_lrp_m.append(float(output_data["len_lrp_m"]))
+                fpt_m.append(float(output_data["fpt_m"]))
+                fpt_dijkstra_m.append(float(output_data["fpt_dijkstra_m"]))
+                fpt_fmm_m.append(float(output_data["fpt_fmm_m"]))
+                mhr_m.append(float(output_data["mhr_m"]))
+
+                dist_values, distance_warnings = resolve_distances(
+                    cfg,
+                    output_data,
+                    None,
+                    workers=cfg.workers,
+                    hausdorff_compute_method="shapely",
+                    pathset_loader=lambda rp=rp, mc_idx=mc_idx: load_paths(rp, mc_idx),
+                )
+                for warning in distance_warnings:
+                    if warning not in warning_seen:
+                        warning_seen.add(warning)
+                        warnings.append(warning)
+
+                haus_fp_lrp.append(dist_values["hausdorff"]["fp_lrp"])
+                haus_fp_d.append(dist_values["hausdorff"]["fp_fpDijkstra"])
+                haus_fp_fmm.append(dist_values["hausdorff"]["fp_fpFMM"])
+                fre_fp_lrp.append(dist_values["frechet"]["fp_lrp"])
+                fre_fp_d.append(dist_values["frechet"]["fp_fpDijkstra"])
+                fre_fp_fmm.append(dist_values["frechet"]["fp_fpFMM"])
+                end_fp_lrp.append(dist_values["end_point"]["fp_lrp"])
+                end_fp_d.append(dist_values["end_point"]["fp_fpDijkstra"])
+                end_fp_fmm.append(dist_values["end_point"]["fp_fpFMM"])
+
+            _append_stat_row(lengths, "fp", len_fp_m)
+            _append_stat_row(lengths, "fp_dijkstra", len_fp_dijkstra_m)
+            _append_stat_row(lengths, "fp_fmm", len_fp_fmm_m)
+            _append_stat_row(lengths, "lrp", len_lrp_m)
+            _append_stat_row(times, "fpt", fpt_m)
+            _append_stat_row(times, "fpt_dijkstra", fpt_dijkstra_m)
+            _append_stat_row(times, "fpt_fmm", fpt_fmm_m)
+            _append_stat_row(times, "mhr", mhr_m)
+            distances["hausdorff"]["fp_lrp"].append(np.asarray(haus_fp_lrp, dtype=float))
+            distances["hausdorff"]["fp_fpDijkstra"].append(np.asarray(haus_fp_d, dtype=float))
+            distances["hausdorff"]["fp_fpFMM"].append(np.asarray(haus_fp_fmm, dtype=float))
+            distances["frechet"]["fp_lrp"].append(np.asarray(fre_fp_lrp, dtype=float))
+            distances["frechet"]["fp_fpDijkstra"].append(np.asarray(fre_fp_d, dtype=float))
+            distances["frechet"]["fp_fpFMM"].append(np.asarray(fre_fp_fmm, dtype=float))
+            distances["end_point"]["fp_lrp"].append(np.asarray(end_fp_lrp, dtype=float))
+            distances["end_point"]["fp_fpDijkstra"].append(np.asarray(end_fp_d, dtype=float))
+            distances["end_point"]["fp_fpFMM"].append(np.asarray(end_fp_fmm, dtype=float))
+
+        key = f"var_{var_}"
+        data[key] = {
+            "field_size": np.asarray(field_size_list, dtype=float),
+            "lengths": lengths,
+            "times": times,
+            "distances": distances,
+        }
+        stats[key] = _summary_stats(lengths, times, distances)
+        line_integrals[key] = _compute_line_integrals_for_var(cfg, run_paths, max_mc_per_size=max_mc_per_size)
+
+    first_key = f"var_{var_values[0]}" if var_values else ""
+    field_size = data.get(first_key, {}).get("field_size", np.asarray([], dtype=float))
+    return VarianceResults(field_size=field_size, data=data, stats=stats, line_integrals=line_integrals), warnings
+
+
+def run_std_analysis_from_discovered(
+    cfg: VisualizationConfig,
+    discovered: dict[float, list[RunPaths]],
+    *,
+    show_progress: bool = False,
+    max_std_values: int | None = None,
+    max_sizes_per_std: int | None = None,
+    max_mc_per_size: int | None = None,
+) -> tuple[StdResults, list[str]]:
+    data_path: dict[str, dict[str, Any]] = {}
+    stats_path: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+    warning_seen: set[str] = set()
+
+    std_values = cfg.std_values[:max_std_values] if max_std_values is not None else cfg.std_values
+    std_iter = tqdm(std_values, desc="Std sweep", unit="std", leave=False) if show_progress else std_values
+
+    for std_ in std_iter:
+        runs = discovered.get(std_, [])
+        if max_sizes_per_std is not None:
+            runs = runs[:max_sizes_per_std]
+
+        field_size = []
+        hausdorffDist_fp_lrp_sm = []
+        frechetDist_fp_lrp_sm = []
+        endPointDist_fp_lrp_sm = []
+        hausdorffDist_fp_fpDijkstra_sm = []
+        frechetDist_fp_fpDijkstra_sm = []
+        endPointDist_fp_fpDijkstra_sm = []
+        hausdorffDist_fp_fpFMM_sm = []
+        frechetDist_fp_fpFMM_sm = []
+        endPointDist_fp_fpFMM_sm = []
+
+        run_iter = tqdm(runs, desc=f"std={std_} sizes", unit="size", leave=False) if show_progress else runs
+        for rp in run_iter:
+            field_size.append(rp.size_value)
+            if not (rp.fp_files or rp.lrp_files or rp.fp_dijkstra_files or rp.fp_fmm_files or rp.main_output_files):
+                warnings.append(f"No path/mainOutput files found for std={std_}, size={rp.size_str}")
+                continue
+
+            hausdorffDist_fp_lrp_m: list[float] = []
+            frechetDist_fp_lrp_m: list[float] = []
+            endPointDist_fp_lrp_m: list[float] = []
+            hausdorffDist_fp_fpDijkstra_m: list[float] = []
+            frechetDist_fp_fpDijkstra_m: list[float] = []
+            endPointDist_fp_fpDijkstra_m: list[float] = []
+            hausdorffDist_fp_fpFMM_m: list[float] = []
+            frechetDist_fp_fpFMM_m: list[float] = []
+            endPointDist_fp_fpFMM_m: list[float] = []
+
+            n_mc = max(
+                len(rp.fp_files),
+                len(rp.lrp_files),
+                len(rp.fp_dijkstra_files),
+                len(rp.fp_fmm_files),
+                len(rp.main_output_files),
+            )
+            if max_mc_per_size is not None:
+                n_mc = min(n_mc, max_mc_per_size)
+
+            mc_range = tqdm(range(n_mc), desc=f"std={std_} size={rp.size_str} MC", unit="mc", leave=False) if show_progress else range(n_mc)
+            for mc_idx in mc_range:
+                output_data = load_main_output(rp.main_output_files[mc_idx]) if mc_idx < len(rp.main_output_files) else None
+
+                def _load_pathset(rp: RunPaths = rp, mc_idx: int = mc_idx) -> PathSet:
+                    return PathSet(
+                        fp=_safe_load(rp.fp_files, mc_idx),
+                        lrp=_safe_load(rp.lrp_files, mc_idx),
+                        fp_dijkstra=_safe_load(rp.fp_dijkstra_files, mc_idx),
+                        fp_fmm=_safe_load(rp.fp_fmm_files, mc_idx),
+                    )
+
+                dist_values, distance_warnings = resolve_distances(
+                    cfg,
+                    output_data,
+                    None,
+                    workers=cfg.workers,
+                    hausdorff_compute_method="nn_max",
+                    pathset_loader=_load_pathset,
+                )
+                for warning in distance_warnings:
+                    full = f"std={std_}, size={rp.size_str}, {warning}"
+                    if full not in warning_seen:
+                        warning_seen.add(full)
+                        warnings.append(full)
+
+                hausdorffDist_fp_lrp_m.append(dist_values["hausdorff"]["fp_lrp"])
+                frechetDist_fp_lrp_m.append(dist_values["frechet"]["fp_lrp"])
+                endPointDist_fp_lrp_m.append(dist_values["end_point"]["fp_lrp"])
+                hausdorffDist_fp_fpDijkstra_m.append(dist_values["hausdorff"]["fp_fpDijkstra"])
+                frechetDist_fp_fpDijkstra_m.append(dist_values["frechet"]["fp_fpDijkstra"])
+                endPointDist_fp_fpDijkstra_m.append(dist_values["end_point"]["fp_fpDijkstra"])
+                hausdorffDist_fp_fpFMM_m.append(dist_values["hausdorff"]["fp_fpFMM"])
+                frechetDist_fp_fpFMM_m.append(dist_values["frechet"]["fp_fpFMM"])
+                endPointDist_fp_fpFMM_m.append(dist_values["end_point"]["fp_fpFMM"])
+
+            hausdorffDist_fp_lrp_sm.append(hausdorffDist_fp_lrp_m)
+            frechetDist_fp_lrp_sm.append(frechetDist_fp_lrp_m)
+            endPointDist_fp_lrp_sm.append(endPointDist_fp_lrp_m)
+            hausdorffDist_fp_fpDijkstra_sm.append(hausdorffDist_fp_fpDijkstra_m)
+            frechetDist_fp_fpDijkstra_sm.append(frechetDist_fp_fpDijkstra_m)
+            endPointDist_fp_fpDijkstra_sm.append(endPointDist_fp_fpDijkstra_m)
+            hausdorffDist_fp_fpFMM_sm.append(hausdorffDist_fp_fpFMM_m)
+            frechetDist_fp_fpFMM_sm.append(frechetDist_fp_fpFMM_m)
+            endPointDist_fp_fpFMM_sm.append(endPointDist_fp_fpFMM_m)
+
+        key = f"std_{std_}"
+        data_path[key] = {
+            "field_size": field_size,
+            "hausdorffDist_fp_lrp_sm": hausdorffDist_fp_lrp_sm,
+            "frechetDist_fp_lrp_sm": frechetDist_fp_lrp_sm,
+            "endPointDist_fp_lrp_sm": endPointDist_fp_lrp_sm,
+            "hausdorffDist_fp_fpDijkstra_sm": hausdorffDist_fp_fpDijkstra_sm,
+            "frechetDist_fp_fpDijkstra_sm": frechetDist_fp_fpDijkstra_sm,
+            "endPointDist_fp_fpDijkstra_sm": endPointDist_fp_fpDijkstra_sm,
+            "hausdorffDist_fp_fpFMM_sm": hausdorffDist_fp_fpFMM_sm,
+            "frechetDist_fp_fpFMM_sm": frechetDist_fp_fpFMM_sm,
+            "endPointDist_fp_fpFMM_sm": endPointDist_fp_fpFMM_sm,
+        }
+
+    for key_c, value in data_path.items():
+        stats_path[key_c] = {}
+        for key_, arr_lists in value.items():
+            if key_ == "field_size":
+                continue
+            means = [mean_std(lst).mean for lst in arr_lists]
+            stds = [mean_std(lst).std for lst in arr_lists]
+            stats_path[key_c][key_] = [means, stds]
+
+    stats_std = {
+        "hausdorffDist": {"fp_lrp": [], "fp_fpDijkstra": [], "fp_fpFMM": []},
+        "frechetDist": {"fp_lrp": [], "fp_fpDijkstra": [], "fp_fpFMM": []},
+        "endPointDist": {"fp_lrp": [], "fp_fpDijkstra": [], "fp_fpFMM": []},
+    }
+
+    for std_key in stats_path:
+        stats_std["hausdorffDist"]["fp_lrp"].append(stats_path[std_key]["hausdorffDist_fp_lrp_sm"])
+        stats_std["hausdorffDist"]["fp_fpDijkstra"].append(stats_path[std_key]["hausdorffDist_fp_fpDijkstra_sm"])
+        stats_std["hausdorffDist"]["fp_fpFMM"].append(stats_path[std_key]["hausdorffDist_fp_fpFMM_sm"])
+        stats_std["frechetDist"]["fp_lrp"].append(stats_path[std_key]["frechetDist_fp_lrp_sm"])
+        stats_std["frechetDist"]["fp_fpDijkstra"].append(stats_path[std_key]["frechetDist_fp_fpDijkstra_sm"])
+        stats_std["frechetDist"]["fp_fpFMM"].append(stats_path[std_key]["frechetDist_fp_fpFMM_sm"])
+        stats_std["endPointDist"]["fp_lrp"].append(stats_path[std_key]["endPointDist_fp_lrp_sm"])
+        stats_std["endPointDist"]["fp_fpDijkstra"].append(stats_path[std_key]["endPointDist_fp_fpDijkstra_sm"])
+        stats_std["endPointDist"]["fp_fpFMM"].append(stats_path[std_key]["endPointDist_fp_fpFMM_sm"])
+
+    for key1 in stats_std:
+        for key2 in stats_std[key1]:
+            stats_std[key1][key2] = np.asarray(stats_std[key1][key2], dtype=float)
+
+    return StdResults(data_path=data_path, stats_path=stats_path, stats_std=stats_std), warnings
+
+
+def run_stage2(
+    cfg: VisualizationConfig,
+    *,
+    cache_dir: Path | None = None,
+    skip_std: bool = False,
+    max_var_values: int | None = None,
+    max_std_values: int | None = None,
+    max_sizes_per_value: int | None = None,
+    max_mc_per_size: int | None = None,
+) -> Path:
+    cache_dir = cache_dir or default_cache_dir(cfg)
+
+    index = load_pickle(cache_dir / "stage1_index.pkl")
+    discovered_var = deserialize_discovered(index["variance"])
+    discovered_std = deserialize_discovered(index["std"])
+
+    var_results, warnings_var = run_variance_analysis_from_discovered(
+        cfg,
+        discovered_var,
+        show_progress=True,
+        max_var_values=max_var_values,
+        max_sizes_per_var=max_sizes_per_value,
+        max_mc_per_size=max_mc_per_size,
+    )
+
+    std_results: StdResults | None = None
+    warnings_std: list[str] = []
+    if not skip_std:
+        std_results, warnings_std = run_std_analysis_from_discovered(
+            cfg,
+            discovered_std,
+            show_progress=True,
+            max_std_values=max_std_values,
+            max_sizes_per_std=max_sizes_per_value,
+            max_mc_per_size=max_mc_per_size,
+        )
+
+    payload = {
+        "var_results": var_results,
+        "std_results": std_results,
+        "warnings": {"variance": warnings_var, "std": warnings_std},
+    }
+    cache_file = cache_dir / "stage2_metrics.pkl"
+    save_pickle(cache_file, payload)
+
+    notes = {
+        "cache_file": str(cache_file),
+        "warnings_variance": len(warnings_var),
+        "warnings_std": len(warnings_std),
+        "std_computed": std_results is not None,
+        "max_var_values": max_var_values,
+        "max_std_values": max_std_values,
+        "max_sizes_per_value": max_sizes_per_value,
+        "max_mc_per_size": max_mc_per_size,
+    }
+    write_stage_metadata(cache_dir / "stage2_metrics.meta.json", stage="stage2_metrics", config=cfg, notes=notes)
+    return cache_file
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Stage 2: compute metrics and aggregate raw stats")
+    parser.add_argument("--config", required=True, type=Path)
+    parser.add_argument("--cache-dir", type=Path, default=None)
+    parser.add_argument("--skip-std", action="store_true")
+    parser.add_argument("--max-var-values", type=int, default=None, help="Limit number of variance values processed")
+    parser.add_argument("--max-std-values", type=int, default=None, help="Limit number of std values processed")
+    parser.add_argument("--max-sizes-per-value", type=int, default=None, help="Limit number of size runs per var/std value")
+    parser.add_argument("--max-mc-per-size", type=int, default=None, help="Limit number of realizations (MC) per size")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    cfg = load_config(args.config)
+    cache_file = run_stage2(
+        cfg,
+        cache_dir=args.cache_dir,
+        skip_std=args.skip_std,
+        max_var_values=args.max_var_values,
+        max_std_values=args.max_std_values,
+        max_sizes_per_value=args.max_sizes_per_value,
+        max_mc_per_size=args.max_mc_per_size,
+    )
+    print(f"Wrote metrics cache: {cache_file}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

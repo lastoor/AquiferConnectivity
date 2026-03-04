@@ -1,2 +1,37 @@
+
 Output/
 .ipynb_checkpoints
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Test/cache tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Build/distribution
+build/
+dist/
+*.egg-info/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+
+# Local outputs and staged caches
+outputs/*
+!outputs/.gitkeep
+
+# OS/editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

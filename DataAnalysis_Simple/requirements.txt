@@ -1,0 +1,8 @@
+numpy
+matplotlib
+scipy
+PyYAML
+tqdm
+# optional
+shapely
+cmcrameri
