@@ -167,3 +167,89 @@
   - Source verification via `grep -n` confirmed forwarding and argparse choices are present
 - Limitations/follow-up:
   - `pytest` is not installed in the current shell environment, so updated tests were not executed.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Extended `tests/compare_hausdorff.py` to also compare Frechet distance using a custom discrete Frechet implementation against `shapely.frechet_distance` for the same selected path pairs.
+- Files changed:
+  - `tests/compare_hausdorff.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile tests/compare_hausdorff.py`
+  - Manual source review for new Frechet comparison table and helper functions
+- Limitations/follow-up:
+  - End-to-end run of the utility depends on dataset scan/runtime and requires `shapely` in the active environment.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Added per-method runtime comparison to `tests/compare_distance_by_shapely_with_custom.py`, including per-pair timing columns and total/average timing summaries for Hausdorff (shapely vs nn_max) and Frechet (shapely vs custom).
+- Files changed:
+  - `tests/compare_distance_by_shapely_with_custom.py`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile tests/compare_distance_by_shapely_with_custom.py`
+- Limitations/follow-up:
+  - End-to-end timing comparison still requires `shapely` and a matching dataset sample.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Added Stage-2 Frechet method option (`--frechet-compute-method`), renamed Hausdorff method value `nn_max` to `custom`, and unified custom Frechet implementation in `step2_metrics.py` for reuse by the comparison utility.
+- Files changed:
+  - `scripts/step2_metrics.py`
+  - `tests/compare_distance_by_shapely_with_custom.py`
+  - `tests/test_step2_metrics.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `grep -Rni "nn_max|--frechet-compute-method|frechet_compute_method" scripts tests README.md`
+  - `python -m py_compile scripts/step2_metrics.py tests/test_step2_metrics.py tests/compare_distance_by_shapely_with_custom.py`
+- Limitations/follow-up:
+  - Full runtime verification against real data depends on environment and dataset availability; `pytest` is not installed in this shell.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Updated Stage 5 plotting to remove titles, normalize axes (`x/I_Y`, `y/I_Y`), normalize arrival-time field (`T_min/t_ref`), add source/target lines to all figures, and add a third output figure with speed background plus streamlines.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step5_single_field_paths.py tests/test_step5_single_field_paths.py`
+  - `pytest -q tests/test_step5_single_field_paths.py` (`3 passed in 8.49s`)
+- Limitations/follow-up:
+  - Streamline and solver runtime behavior outside tests still depends on external Algorithm/FlowSimulation stack and dataset environment.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Added Stage-4 Frechet plotting (main variance figure), wired Stage-3 Frechet summary stats, and enabled Frechet in default plotting sections/config and test fixture defaults.
+- Files changed:
+  - `scripts/step1_index.py`
+  - `configs/visualization.default.yaml`
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `tests/conftest.py`
+  - `tests/test_step3_stats.py`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step1_index.py scripts/step3_stats.py scripts/step4_plot.py tests/test_step3_stats.py tests/test_step4_plot.py`
+  - `pytest -q tests/test_step3_stats.py tests/test_step4_plot.py` (`3 passed in 4.17s`)
+- Limitations/follow-up:
+  - Frechet plotting scope is main variance only (`frechet` section); no std-sweep Frechet figure was added.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Updated Step 5 velocity visualization to use dimensionless velocity (`v/(k_g*dh)`) for both speed background and streamlines, and updated the stream colorbar label accordingly.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step5_single_field_paths.py tests/test_step5_single_field_paths.py`
+  - `pytest -q tests/test_step5_single_field_paths.py` (`4 passed`)
+- Limitations/follow-up:
+  - End-to-end solver runtime/physics behavior still depends on external Algorithm/FlowSimulation and dataset availability.

@@ -82,6 +82,9 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_hausdorff_lrp = []
     stats_hausdorff_dijkstra = []
     stats_hausdorff_fmm = []
+    stats_frechet_lrp = []
+    stats_frechet_dijkstra = []
+    stats_frechet_fmm = []
     stats_endpoint_lrp = []
     stats_endpoint_dijkstra = []
     stats_endpoint_fmm = []
@@ -100,6 +103,9 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_hausdorff_lrp.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrp"]))
         stats_hausdorff_dijkstra.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_fpDijkstra"]))
         stats_hausdorff_fmm.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_fpFMM"]))
+        stats_frechet_lrp.append(_mean_std_pair(entry["distances"]["frechet"]["fp_lrp"]))
+        stats_frechet_dijkstra.append(_mean_std_pair(entry["distances"]["frechet"]["fp_fpDijkstra"]))
+        stats_frechet_fmm.append(_mean_std_pair(entry["distances"]["frechet"]["fp_fpFMM"]))
         stats_endpoint_lrp.append(_mean_std_pair(entry["distances"]["end_point"]["fp_lrp"]))
         stats_endpoint_dijkstra.append(_mean_std_pair(entry["distances"]["end_point"]["fp_fpDijkstra"]))
         stats_endpoint_fmm.append(_mean_std_pair(entry["distances"]["end_point"]["fp_fpFMM"]))
@@ -116,6 +122,9 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_hausdorff_lrp": np.asarray(stats_hausdorff_lrp, dtype=float),
         "stats_hausdorff_dijkstra": np.asarray(stats_hausdorff_dijkstra, dtype=float),
         "stats_hausdorff_fmm": np.asarray(stats_hausdorff_fmm, dtype=float),
+        "stats_frechet_lrp": np.asarray(stats_frechet_lrp, dtype=float),
+        "stats_frechet_dijkstra": np.asarray(stats_frechet_dijkstra, dtype=float),
+        "stats_frechet_fmm": np.asarray(stats_frechet_fmm, dtype=float),
         "stats_endpoint_lrp": np.asarray(stats_endpoint_lrp, dtype=float),
         "stats_endpoint_dijkstra": np.asarray(stats_endpoint_dijkstra, dtype=float),
         "stats_endpoint_fmm": np.asarray(stats_endpoint_fmm, dtype=float),

@@ -13,6 +13,48 @@ DISTANCE_TYPES = ("end_point", "hausdorff", "frechet")
 DISTANCE_PAIRS = ("fp_lrp", "fp_fpDijkstra", "fp_fpFMM")
 DISTANCE_MODE_VALUES = ("load_from_main_output", "compute_from_paths")
 DISTANCE_FALLBACK_VALUES = ("compute_from_paths", "nan")
+DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
+    "end_point": {
+        "fp_lrp": "endpoint_dy_fp_vs_lrp",
+        "fp_fpDijkstra": "endpoint_dy_fp_vs_dijkstra",
+        "fp_fpFMM": "endpoint_dy_fp_vs_fmm",
+    },
+    "hausdorff": {
+        "fp_lrp": "hausdorff_fp_vs_lrp",
+        "fp_fpDijkstra": "hausdorff_fp_vs_dijkstra",
+        "fp_fpFMM": "hausdorff_fp_vs_fmm",
+    },
+    "frechet": {
+        "fp_lrp": "frechetDist_fp_lrp_m",
+        "fp_fpDijkstra": "frechetDist_fp_fpDijkstra_m",
+        "fp_fpFMM": "frechetDist_fp_fpFMM_m",
+    },
+}
+DISTANCE_MAIN_OUTPUT_KEY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "end_point": {
+        "fp_lrp": ("endpoint_dy_fp_vs_lrp", "endPointDist_fp_lrp_m"),
+        "fp_fpDijkstra": ("endpoint_dy_fp_vs_dijkstra", "endPointDist_fp_fpDijkstra_m"),
+        "fp_fpFMM": ("endpoint_dy_fp_vs_fmm", "endPointDist_fp_fpFMM_m"),
+    },
+    "hausdorff": {
+        "fp_lrp": ("hausdorff_fp_vs_lrp", "hausdorffDist_fp_lrp_m"),
+        "fp_fpDijkstra": ("hausdorff_fp_vs_dijkstra", "hausdorffDist_fp_fpDijkstra_m"),
+        "fp_fpFMM": ("hausdorff_fp_vs_fmm", "hausdorffDist_fp_fpFMM_m"),
+    },
+    "frechet": {
+        "fp_lrp": ("frechetDist_fp_lrp_m",),
+        "fp_fpDijkstra": ("frechetDist_fp_fpDijkstra_m",),
+        "fp_fpFMM": ("frechetDist_fp_fpFMM_m",),
+    },
+}
+
+
+def distance_key_candidates(cfg: "VisualizationConfig", distance_type: str, pair: str) -> list[str]:
+    candidates = [cfg.distance_main_output_keys[distance_type][pair]]
+    for alias in DISTANCE_MAIN_OUTPUT_KEY_ALIASES.get(distance_type, {}).get(pair, ()):
+        if alias not in candidates:
+            candidates.append(alias)
+    return candidates
 
 
 @dataclass(slots=True)
@@ -42,6 +84,7 @@ class VisualizationConfig:
             "taylor",
             "scatter",
             "hausdorff",
+            "frechet",
             "endpoint",
             "std_hausdorff",
             "std_endpoint",
@@ -66,23 +109,7 @@ class VisualizationConfig:
     )
     distance_fallback_on_missing: str = "compute_from_paths"
     distance_main_output_keys: dict[str, dict[str, str]] = field(
-        default_factory=lambda: {
-            "end_point": {
-                "fp_lrp": "endPointDist_fp_lrp_m",
-                "fp_fpDijkstra": "endPointDist_fp_fpDijkstra_m",
-                "fp_fpFMM": "endPointDist_fp_fpFMM_m",
-            },
-            "hausdorff": {
-                "fp_lrp": "hausdorffDist_fp_lrp_m",
-                "fp_fpDijkstra": "hausdorffDist_fp_fpDijkstra_m",
-                "fp_fpFMM": "hausdorffDist_fp_fpFMM_m",
-            },
-            "frechet": {
-                "fp_lrp": "frechetDist_fp_lrp_m",
-                "fp_fpDijkstra": "frechetDist_fp_fpDijkstra_m",
-                "fp_fpFMM": "frechetDist_fp_fpFMM_m",
-            },
-        }
+        default_factory=lambda: {k: dict(v) for k, v in DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS.items()}
     )
     k_g: float = 1.0
     analytical_percentile: float = 0.01
@@ -186,6 +213,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
             "taylor",
             "scatter",
             "hausdorff",
+            "frechet",
             "endpoint",
             "std_hausdorff",
             "std_endpoint",
@@ -206,19 +234,25 @@ def load_config(path: str | Path) -> VisualizationConfig:
         distance_fallback_on_missing=str(raw.get("distance_fallback_on_missing", "compute_from_paths")),
         distance_main_output_keys={
             "end_point": {
-                "fp_lrp": str(raw_keys.get("end_point", {}).get("fp_lrp", "endPointDist_fp_lrp_m")),
-                "fp_fpDijkstra": str(raw_keys.get("end_point", {}).get("fp_fpDijkstra", "endPointDist_fp_fpDijkstra_m")),
-                "fp_fpFMM": str(raw_keys.get("end_point", {}).get("fp_fpFMM", "endPointDist_fp_fpFMM_m")),
+                "fp_lrp": str(raw_keys.get("end_point", {}).get("fp_lrp", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_lrp"])),
+                "fp_fpDijkstra": str(
+                    raw_keys.get("end_point", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_fpDijkstra"])
+                ),
+                "fp_fpFMM": str(raw_keys.get("end_point", {}).get("fp_fpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_fpFMM"])),
             },
             "hausdorff": {
-                "fp_lrp": str(raw_keys.get("hausdorff", {}).get("fp_lrp", "hausdorffDist_fp_lrp_m")),
-                "fp_fpDijkstra": str(raw_keys.get("hausdorff", {}).get("fp_fpDijkstra", "hausdorffDist_fp_fpDijkstra_m")),
-                "fp_fpFMM": str(raw_keys.get("hausdorff", {}).get("fp_fpFMM", "hausdorffDist_fp_fpFMM_m")),
+                "fp_lrp": str(raw_keys.get("hausdorff", {}).get("fp_lrp", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_lrp"])),
+                "fp_fpDijkstra": str(
+                    raw_keys.get("hausdorff", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_fpDijkstra"])
+                ),
+                "fp_fpFMM": str(raw_keys.get("hausdorff", {}).get("fp_fpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_fpFMM"])),
             },
             "frechet": {
-                "fp_lrp": str(raw_keys.get("frechet", {}).get("fp_lrp", "frechetDist_fp_lrp_m")),
-                "fp_fpDijkstra": str(raw_keys.get("frechet", {}).get("fp_fpDijkstra", "frechetDist_fp_fpDijkstra_m")),
-                "fp_fpFMM": str(raw_keys.get("frechet", {}).get("fp_fpFMM", "frechetDist_fp_fpFMM_m")),
+                "fp_lrp": str(raw_keys.get("frechet", {}).get("fp_lrp", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_lrp"])),
+                "fp_fpDijkstra": str(
+                    raw_keys.get("frechet", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fpDijkstra"])
+                ),
+                "fp_fpFMM": str(raw_keys.get("frechet", {}).get("fp_fpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fpFMM"])),
             },
         },
         k_g=float(raw.get("k_g", 1.0)),

@@ -33,3 +33,10 @@ def test_step3_prepares_plot_inputs(pipeline_fixture) -> None:
         assert key in prepared["wasserstein_len"]
         series = np.asarray(prepared["wasserstein_len"][key], dtype=float)
         assert series.shape == prepared["var"].shape
+
+    stats = prepared["stats"]
+    for key in ["stats_frechet_lrp", "stats_frechet_fmm", "stats_frechet_dijkstra"]:
+        assert key in stats
+        arr = np.asarray(stats[key], dtype=float)
+        assert arr.shape[0] == prepared["var"].shape[0]
+        assert arr.shape[1] == 2

@@ -200,7 +200,7 @@ def plot_taylor_comparison(var: np.ndarray, stats_mhr: np.ndarray, stats_fpt: np
     ax.plot(var, taylor["fp"] / t_ref, "--", color=COLORS["fp"], linewidth=1.5, label="Taylor Expansion (FP)")
     ax.plot(var, taylor["fp_fmm"] / t_ref, "--", color=COLORS["fpFMM"], linewidth=1.5, label="Taylor Expansion (FP, FMM)")
     ax.plot(var, taylor["fp_dijkstra"] / t_ref, "--", color=COLORS["fpDijkstra"], linewidth=1.5, label="Taylor Expansion (FP, Dijkstra)")
-    ax.set_yscale("log")
+    # ax.set_yscale("log")
     ax.set_ylim([10 ** (-2), 10 ** 2])
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}[t_{\mathrm{min}}] U / I_Y$")
@@ -269,7 +269,7 @@ def plot_hausdorff_vs_variance(var: np.ndarray, stats_hausdorff_lrp: np.ndarray,
     ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, yerr=stats_hausdorff_lrp[:, 1] / i_y, label="$d_H$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, yerr=stats_hausdorff_fmm[:, 1] / i_y, label="$d_H$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, yerr=stats_hausdorff_dijkstra[:, 1] / i_y, label="$d_H$[FP, FP(Dijkstra)]", linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None")
-    ax.set_xscale("log")
+    # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ d_H / I_Y \right]$")
     ax.legend(fontsize="9", loc="upper left")
@@ -278,12 +278,26 @@ def plot_hausdorff_vs_variance(var: np.ndarray, stats_hausdorff_lrp: np.ndarray,
     return fig, {"kind": "hausdorff_variance"}
 
 
+def plot_frechet_vs_variance(var: np.ndarray, stats_frechet_lrp: np.ndarray, stats_frechet_fmm: np.ndarray, stats_frechet_dijkstra: np.ndarray, i_y: float):
+    fig, ax = plt.subplots(figsize=[5, 4])
+    ax.errorbar(var, stats_frechet_lrp[:, 0] / i_y, yerr=stats_frechet_lrp[:, 1] / i_y, label="$d_F$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
+    ax.errorbar(var, stats_frechet_fmm[:, 0] / i_y, yerr=stats_frechet_fmm[:, 1] / i_y, label="$d_F$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")
+    ax.errorbar(var, stats_frechet_dijkstra[:, 0] / i_y, yerr=stats_frechet_dijkstra[:, 1] / i_y, label="$d_F$[FP, FP(Dijkstra)]", linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None")
+    # ax.set_xscale("log")
+    ax.set_xlabel("$\\sigma_{Y}^2$")
+    ax.set_ylabel(r"$\mathbb{E}\left[ d_F / I_Y \right]$")
+    ax.legend(fontsize="9", loc="upper left")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": "frechet_variance"}
+
+
 def plot_endpoint_vs_variance(var: np.ndarray, stats_end_lrp: np.ndarray, stats_end_fmm: np.ndarray, stats_end_dijkstra: np.ndarray, i_y: float):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.errorbar(var, stats_end_lrp[:, 0] / i_y, yerr=stats_end_lrp[:, 1] / i_y, label="$d_{EP}$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_end_fmm[:, 0] / i_y, yerr=stats_end_fmm[:, 1] / i_y, label="$d_{EP}$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_end_dijkstra[:, 0] / i_y, yerr=stats_end_dijkstra[:, 1] / i_y, label="$d_{EP}$[FP, FP(Dijkstra)]", linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None")
-    ax.set_xscale("log")
+    # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ d_{EP} / I_Y \right]$")
     ax.legend(fontsize="9", loc="upper left")
@@ -297,7 +311,7 @@ def plot_ratio_mean_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm
     ax.plot(var, ratio_fp, linestyle="-", color=COLORS["fp"], marker="o", markerfacecolor="None", label="FP")
     ax.plot(var, ratio_fmm, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="FP (FMM)")
     ax.plot(var, ratio_dijkstra, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="FP (Dijkstra)")
-    ax.set_xscale("log")
+    # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}[t_{\mathrm{min}}]/\mathbb{E}[R_{\mathrm{min}}]$")
     ax.set_title("Variation of Mean Ratio with Variance")
@@ -312,7 +326,7 @@ def plot_ratio_var_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm:
     ax.plot(var, ratio_fp, linestyle="-", color=COLORS["fp"], marker="o", markerfacecolor="None", label="FP")
     ax.plot(var, ratio_fmm, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="FP (FMM)")
     ax.plot(var, ratio_dijkstra, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="FP (Dijkstra)")
-    ax.set_xscale("log")
+    # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathrm{Var}(t_{\mathrm{min}})/\mathrm{Var}(R_{\mathrm{min}})$")
     ax.set_title("Variation of Variance Ratio with Variance")
@@ -333,7 +347,7 @@ def plot_wasserstein_len_vs_variance(
     ax.plot(var, w_fp_lrp / i_y, linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None", label="$W_1$[FP, LRP]")
     ax.plot(var, w_fp_fmm / i_y, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="$W_1$[FP, FP(FMM)]")
     ax.plot(var, w_fp_dijkstra / i_y, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="$W_1$[FP, FP(Dijkstra)]")
-    ax.set_xscale("log")
+    # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$W_1(\mathrm{len})/I_Y$")
     ax.set_title("Wasserstein Distance of Path-Length CDFs")
@@ -351,7 +365,7 @@ def plot_std_hausdorff(x_var: np.ndarray, stats_std: dict[str, np.ndarray], i_y:
     ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{FP(FMM)}]$", linestyle="-", color="orange", marker="o", markerfacecolor="None")
     y, yerr = _extract_std_series(stats_std, "hausdorffDist", "fp_fpDijkstra", len(x_var), i_y)
     ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{FP(Dijkstra)}]$", linestyle="-", color="red", marker="o", markerfacecolor="None")
-    ax.set_xscale("log")
+    # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel("$\\mathbb{E}\\left[ \\frac{d_{\\text{Hausdorff}}}{I_Y} \\right]$")
     ax.set_title("Variation of Hausdorff Distance with Variance")
@@ -369,7 +383,7 @@ def plot_std_endpoint(x_var: np.ndarray, stats_std: dict[str, np.ndarray], i_y: 
     ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{FP(FMM)}]$", linestyle="-", color="orange", marker="o", markerfacecolor="None")
     y, yerr = _extract_std_series(stats_std, "endPointDist", "fp_fpDijkstra", len(x_var), i_y)
     ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{FP(Dijkstra)}]$", linestyle="-", color="red", marker="o", markerfacecolor="None")
-    ax.set_xscale("log")
+    # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel("$\\mathbb{E}\\left[ \\frac{d_{\\text{end-point}}}{I_Y} \\right]$")
     ax.set_title("Variation of End-Point Distance with Variance")
@@ -493,6 +507,11 @@ def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, uniqu
     if "hausdorff" in cfg.sections:
         fig, meta = plot_hausdorff_vs_variance(var, s["stats_hausdorff_lrp"], s["stats_hausdorff_fmm"], s["stats_hausdorff_dijkstra"], i_y)
         artifacts.extend(save_figure(fig, section="hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+        plt.close(fig)
+
+    if "frechet" in cfg.sections:
+        fig, meta = plot_frechet_vs_variance(var, s["stats_frechet_lrp"], s["stats_frechet_fmm"], s["stats_frechet_dijkstra"], i_y)
+        artifacts.extend(save_figure(fig, section="frechet", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
 
     if "endpoint" in cfg.sections:

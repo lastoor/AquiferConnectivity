@@ -19,6 +19,7 @@ def test_step4_generates_stable_and_unique_outputs(pipeline_fixture) -> None:
     artifacts_stable = step4.run_stage4(cfg, cache_dir=pipeline_fixture["cache_dir"], unique_filenames=False)
     assert artifacts_stable
     assert any(a.filename == "run3_times.png" for a in artifacts_stable)
+    assert any(a.filename == "run3_frechet.png" for a in artifacts_stable)
     assert any(a.filename == "run3_ratio_mean.png" for a in artifacts_stable)
     assert any(a.filename == "run3_ratio_var.png" for a in artifacts_stable)
     assert any(a.filename == "run3_wasserstein_len.png" for a in artifacts_stable)
@@ -26,6 +27,7 @@ def test_step4_generates_stable_and_unique_outputs(pipeline_fixture) -> None:
     artifacts_unique = step4.run_stage4(cfg, cache_dir=pipeline_fixture["cache_dir"], unique_filenames=True)
     assert artifacts_unique
     assert any(a.filename.startswith("run3_times_") and a.filename.endswith(".png") for a in artifacts_unique)
+    assert any(a.filename.startswith("run3_frechet_") and a.filename.endswith(".png") for a in artifacts_unique)
     assert any(a.filename.startswith("run3_ratio_mean_") and a.filename.endswith(".png") for a in artifacts_unique)
     assert any(a.filename.startswith("run3_ratio_var_") and a.filename.endswith(".png") for a in artifacts_unique)
     assert any(a.filename.startswith("run3_wasserstein_len_") and a.filename.endswith(".png") for a in artifacts_unique)

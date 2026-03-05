@@ -54,7 +54,7 @@ CACHE_DIR=outputs/cache/run3
 FIGURE_DIR=outputs/visualization/run3
 
 PYTHONPATH=./scripts python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
-PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --max-var-values 3 --max-mc-per-size 5
+PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --max-var-values 3 --max-mc-per-size 5 --hausdorff-compute-method custom --frechet-compute-method custom
 PYTHONPATH=./scripts python scripts/step3_stats.py   --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR"
 ```
@@ -79,7 +79,8 @@ Use Stage 2 limit flags for faster debugging:
 PYTHONPATH=./scripts python scripts/step2_metrics.py \
   --config configs/visualization.default.yaml \
   --cache-dir "$CACHE_DIR" \
-  --hausdorff-compute-method nn_max \
+  --hausdorff-compute-method custom \
+  --frechet-compute-method custom \
   --max-var-values 2 \
   --max-std-values 2 \
   --max-sizes-per-value 2 \
@@ -114,17 +115,23 @@ PYTHONPATH=./scripts python scripts/step5_single_field_paths.py \
   --sweep variance \
   --value 0.1 \
   --field-size 200 \
-  --mc-index 0
+  --mc-index 0 \
+  --output-dir "$FIGURE_DIR"
 ```
 
 Outputs:
 
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_logk_paths.png`
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_arrival_paths.png`
+- `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_speed_streamlines.png`
 
 Notes:
 
-- This script re-solves paths from a selected logK field and keeps the minimal-arrival-time field in memory for plotting.
+- This script re-solves paths from a selected logK field and keeps the minimal-arrival-time and velocity fields in memory for plotting.
+- All Step 5 figures omit title text and include source/target lines plus FP/FP(FMM)/FP(Dijkstra)/LRP paths.
+- Spatial axes are normalized as `x/I_Y` and `y/I_Y`.
+- Arrival-time background is normalized as `T_min/t_ref`, with `t_ref = I_Y / (k_g * dh)`.
+- Speed/streamline background uses dimensionless velocity magnitude `|v|/(k_g*dh)` and streamlines from `v/(k_g*dh)`.
 - Solver imports require both `Algorithm/src` and the sibling `FlowSimulation` repo.
 - Override FlowSimulation path with `FLOWSIM_PATH=/path/to/FlowSimulation` if needed.
 
@@ -136,12 +143,15 @@ Default `sections` now include:
 - `taylor`
 - `scatter`
 - `hausdorff`
+- `frechet`
 - `endpoint`
 - `std_hausdorff`
 - `std_endpoint`
 - `ratio_mean`: plots `mean(t_min)/mean(R_min)` vs variance for FP, FP(FMM), FP(Dijkstra)
 - `ratio_var`: plots `var(t_min)/var(R_min)` vs variance for FP, FP(FMM), FP(Dijkstra)
 - `wasserstein_len`: plots normalized Wasserstein-1 distance between path-length distributions (CDF proxy) for FP-LRP, FP-FMM, FP-Dijkstra
+
+When enabled, the Frechet section is saved as `run<id>_frechet.png` (or corresponding configured format).
 
 ## Cache Contracts
 
@@ -164,14 +174,16 @@ pytest -q
 
 ## Hausdorff Comparison Utility
 
-Use `tests/compare_hausdorff.py` to compare Hausdorff distances from:
+Use `tests/compare_distance_by_shapely_with_custom.py` to compare distances from:
 - Shapely (`hausdorff_distance`)
-- Stage-2 `nn_max` (max symmetric nearest-neighbor distance with `ds=1.0`)
+- Stage-2 custom Hausdorff (max symmetric nearest-neighbor distance with `ds=1.0`)
+- Shapely (`frechet_distance`)
+- Stage-2 custom discrete Frechet implementation
 
 For one selected variance sample and one MC label:
 
 ```bash
-PYTHONPATH=./scripts python tests/compare_hausdorff.py \
+PYTHONPATH=./scripts python tests/compare_distance_by_shapely_with_custom.py \
   --config configs/visualization.default.yaml \
   --variance 0.1 \
   --field-size 200 \

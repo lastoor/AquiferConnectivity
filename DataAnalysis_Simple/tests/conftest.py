@@ -13,20 +13,43 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_DIR))
 
 
-def _write_main_output(path: Path, scale: float) -> None:
+def _write_main_output(path: Path, scale: float, *, legacy: bool = False) -> None:
+    if legacy:
+        np.savez(
+            path,
+            len_fp_m=10.0 * scale,
+            len_fp_dijkstra_m=10.5 * scale,
+            len_fp_fmm_m=9.8 * scale,
+            len_lrp_m=9.6 * scale,
+            fpt_m=5.0 * scale,
+            fpt_dijkstra_m=5.2 * scale,
+            fpt_fmm_m=4.9 * scale,
+            mhr_m=4.7 * scale,
+            endPointDist_fp_lrp_m=0.2 * scale,
+            endPointDist_fp_fpDijkstra_m=0.3 * scale,
+            endPointDist_fp_fpFMM_m=0.1 * scale,
+            hausdorffDist_fp_lrp_m=1.2 * scale,
+            hausdorffDist_fp_fpDijkstra_m=1.3 * scale,
+            hausdorffDist_fp_fpFMM_m=1.1 * scale,
+        )
+        return
+
     np.savez(
         path,
-        len_fp_m=10.0 * scale,
-        len_fp_dijkstra_m=10.5 * scale,
-        len_fp_fmm_m=9.8 * scale,
-        len_lrp_m=9.6 * scale,
-        fpt_m=5.0 * scale,
-        fpt_dijkstra_m=5.2 * scale,
-        fpt_fmm_m=4.9 * scale,
-        mhr_m=4.7 * scale,
-        endPointDist_fp_lrp_m=0.2 * scale,
-        endPointDist_fp_fpDijkstra_m=0.3 * scale,
-        endPointDist_fp_fpFMM_m=0.1 * scale,
+        len_fp_rk45=10.0 * scale,
+        len_fp_dijkstra=10.5 * scale,
+        len_fp_fmm=9.8 * scale,
+        len_lrp=9.6 * scale,
+        travel_time_rk45=5.0 * scale,
+        travel_time_dijkstra=5.2 * scale,
+        travel_time_fmm=4.9 * scale,
+        resistance_lrp=4.7 * scale,
+        endpoint_dy_fp_vs_lrp=0.2 * scale,
+        endpoint_dy_fp_vs_dijkstra=0.3 * scale,
+        endpoint_dy_fp_vs_fmm=0.1 * scale,
+        hausdorff_fp_vs_lrp=1.2 * scale,
+        hausdorff_fp_vs_dijkstra=1.3 * scale,
+        hausdorff_fp_vs_fmm=1.1 * scale,
     )
 
 
@@ -80,7 +103,7 @@ def pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
         "figure_dpi": 120,
         "workers": -1,
         "save_formats": ["png"],
-        "sections": ["times", "endpoint", "hausdorff", "std_endpoint", "std_hausdorff", "ratio_mean", "ratio_var", "wasserstein_len"],
+        "sections": ["times", "endpoint", "hausdorff", "frechet", "std_endpoint", "std_hausdorff", "ratio_mean", "ratio_var", "wasserstein_len"],
         "distance_mode": {
             "end_point": "load_from_main_output",
             "hausdorff": "compute_from_paths",
@@ -89,19 +112,19 @@ def pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
         "distance_enabled": {
             "end_point": True,
             "hausdorff": True,
-            "frechet": False,
+            "frechet": True,
         },
         "distance_fallback_on_missing": "compute_from_paths",
         "distance_main_output_keys": {
             "end_point": {
-                "fp_lrp": "endPointDist_fp_lrp_m",
-                "fp_fpDijkstra": "endPointDist_fp_fpDijkstra_m",
-                "fp_fpFMM": "endPointDist_fp_fpFMM_m",
+                "fp_lrp": "endpoint_dy_fp_vs_lrp",
+                "fp_fpDijkstra": "endpoint_dy_fp_vs_dijkstra",
+                "fp_fpFMM": "endpoint_dy_fp_vs_fmm",
             },
             "hausdorff": {
-                "fp_lrp": "hausdorffDist_fp_lrp_m",
-                "fp_fpDijkstra": "hausdorffDist_fp_fpDijkstra_m",
-                "fp_fpFMM": "hausdorffDist_fp_fpFMM_m",
+                "fp_lrp": "hausdorff_fp_vs_lrp",
+                "fp_fpDijkstra": "hausdorff_fp_vs_dijkstra",
+                "fp_fpFMM": "hausdorff_fp_vs_fmm",
             },
             "frechet": {
                 "fp_lrp": "frechetDist_fp_lrp_m",
@@ -131,7 +154,7 @@ def pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
         "figure_dpi: 120",
         "workers: -1",
         "save_formats: [png]",
-        "sections: [times, endpoint, hausdorff, std_endpoint, std_hausdorff, ratio_mean, ratio_var, wasserstein_len]",
+        "sections: [times, endpoint, hausdorff, frechet, std_endpoint, std_hausdorff, ratio_mean, ratio_var, wasserstein_len]",
         "distance_mode:",
         "  end_point: load_from_main_output",
         "  hausdorff: compute_from_paths",
@@ -139,17 +162,17 @@ def pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
         "distance_enabled:",
         "  end_point: true",
         "  hausdorff: true",
-        "  frechet: false",
+        "  frechet: true",
         "distance_fallback_on_missing: compute_from_paths",
         "distance_main_output_keys:",
         "  end_point:",
-        "    fp_lrp: endPointDist_fp_lrp_m",
-        "    fp_fpDijkstra: endPointDist_fp_fpDijkstra_m",
-        "    fp_fpFMM: endPointDist_fp_fpFMM_m",
+        "    fp_lrp: endpoint_dy_fp_vs_lrp",
+        "    fp_fpDijkstra: endpoint_dy_fp_vs_dijkstra",
+        "    fp_fpFMM: endpoint_dy_fp_vs_fmm",
         "  hausdorff:",
-        "    fp_lrp: hausdorffDist_fp_lrp_m",
-        "    fp_fpDijkstra: hausdorffDist_fp_fpDijkstra_m",
-        "    fp_fpFMM: hausdorffDist_fp_fpFMM_m",
+        "    fp_lrp: hausdorff_fp_vs_lrp",
+        "    fp_fpDijkstra: hausdorff_fp_vs_dijkstra",
+        "    fp_fpFMM: hausdorff_fp_vs_fmm",
         "  frechet:",
         "    fp_lrp: frechetDist_fp_lrp_m",
         "    fp_fpDijkstra: frechetDist_fp_fpDijkstra_m",

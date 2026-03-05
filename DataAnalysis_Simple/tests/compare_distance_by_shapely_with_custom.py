@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import time
 from pathlib import Path
 
 import numpy as np
@@ -60,13 +61,27 @@ def _hausdorff_shapely(a: np.ndarray | None, b: np.ndarray | None) -> float:
     return float(step2.hausdorff_distance(ls_a, ls_b))
 
 
-def _hausdorff_nn_max(a: np.ndarray | None, b: np.ndarray | None, *, workers: int) -> float:
+def _hausdorff_custom(a: np.ndarray | None, b: np.ndarray | None, *, workers: int) -> float:
     if a is None or b is None:
         return float("nan")
     d, _, _ = step2.distance_distribution(a, b, ds=1.0, workers=workers)
     if d.size == 0:
         return float("nan")
     return float(np.max(d))
+
+
+def _frechet_shapely(a: np.ndarray | None, b: np.ndarray | None) -> float:
+    if step2.frechet_distance is None:
+        return float("nan")
+    ls_a = step2.path_to_linestring(a)
+    ls_b = step2.path_to_linestring(b)
+    if ls_a is None or ls_b is None:
+        return float("nan")
+    return float(step2.frechet_distance(ls_a, ls_b))
+
+
+def _frechet_custom(a: np.ndarray | None, b: np.ndarray | None) -> float:
+    return float(step2._compute_frechet_custom(a, b))
 
 
 def _fmt(value: float) -> str:
@@ -84,7 +99,7 @@ def _available_labels_text(paths: list[Path]) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Compare Hausdorff distance computed by shapely vs nn_max for one variance/size/mc sample."
+        description="Compare Hausdorff/Frechet distances computed by shapely vs custom for one variance/size/mc sample."
     )
     parser.add_argument("--config", required=True, type=Path, help="Path to visualization YAML config")
     parser.add_argument("--variance", required=True, type=float, help="Variance value to select")
@@ -96,7 +111,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if step2.hausdorff_distance is None:
+    if step2.hausdorff_distance is None or step2.frechet_distance is None:
         print("Shapely is not available. Install it first to run this comparison: pip install shapely")
         return 2
 
@@ -136,7 +151,13 @@ def main() -> int:
     print(f"  workers: {workers}")
     print("")
 
-    header = f"{'pair':<16} {'shapely':>14} {'nn_max':>14} {'abs_diff':>14} {'rel_diff':>14} {'note'}"
+    haus_time_totals = {"shapely": 0.0, "custom": 0.0}
+    frechet_time_totals = {"shapely": 0.0, "custom": 0.0}
+
+    header = (
+        f"{'pair':<16} {'shapely':>14} {'custom':>14} {'abs_diff':>14} "
+        f"{'rel_diff':>14} {'t_shapely_s':>14} {'t_custom_s':>14} {'note'}"
+    )
     print(header)
     print("-" * len(header))
 
@@ -146,8 +167,16 @@ def main() -> int:
         a = getattr(pathset, a_name)
         b = getattr(pathset, b_name)
 
+        t0 = time.perf_counter()
         shapely_value = _hausdorff_shapely(a, b)
-        nn_value = _hausdorff_nn_max(a, b, workers=workers)
+        t_shapely = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        nn_value = _hausdorff_custom(a, b, workers=workers)
+        t_nn = time.perf_counter() - t0
+
+        haus_time_totals["shapely"] += t_shapely
+        haus_time_totals["custom"] += t_nn
 
         if np.isnan(shapely_value) or np.isnan(nn_value):
             abs_diff = float("nan")
@@ -162,12 +191,72 @@ def main() -> int:
         elif np.isnan(shapely_value):
             note = "invalid shapely geometry"
         elif np.isnan(nn_value):
-            note = "invalid nn_max geometry"
+            note = "invalid custom geometry"
 
         print(
             f"{pair:<16} {_fmt(shapely_value):>14} {_fmt(nn_value):>14} "
-            f"{_fmt(abs_diff):>14} {_fmt(rel_diff):>14} {note}"
+            f"{_fmt(abs_diff):>14} {_fmt(rel_diff):>14} "
+            f"{t_shapely:>14.6e} {t_nn:>14.6e} {note}"
         )
+
+    print("")
+    header_f = (
+        f"{'pair':<16} {'shapely_frechet':>18} {'custom_frechet':>18} "
+        f"{'abs_diff':>14} {'rel_diff':>14} {'t_shapely_s':>14} {'t_custom_s':>14} {'note'}"
+    )
+    print(header_f)
+    print("-" * len(header_f))
+
+    for pair in _PAIRS:
+        a_name, b_name = step2.PAIR_TO_FIELDS[pair]
+        a = getattr(pathset, a_name)
+        b = getattr(pathset, b_name)
+
+        t0 = time.perf_counter()
+        shapely_value = _frechet_shapely(a, b)
+        t_shapely = time.perf_counter() - t0
+
+        t0 = time.perf_counter()
+        custom_value = _frechet_custom(a, b)
+        t_custom = time.perf_counter() - t0
+
+        frechet_time_totals["shapely"] += t_shapely
+        frechet_time_totals["custom"] += t_custom
+
+        if np.isnan(shapely_value) or np.isnan(custom_value):
+            abs_diff = float("nan")
+            rel_diff = float("nan")
+        else:
+            abs_diff = abs(shapely_value - custom_value)
+            rel_diff = abs_diff / max(abs(shapely_value), eps)
+
+        note = ""
+        if b is None:
+            note = f"missing {b_name} path for mc={args.mc}"
+        elif np.isnan(shapely_value):
+            note = "invalid shapely geometry"
+        elif np.isnan(custom_value):
+            note = "invalid custom frechet geometry"
+
+        print(
+            f"{pair:<16} {_fmt(shapely_value):>18} {_fmt(custom_value):>18} "
+            f"{_fmt(abs_diff):>14} {_fmt(rel_diff):>14} "
+            f"{t_shapely:>14.6e} {t_custom:>14.6e} {note}"
+        )
+
+    n_pairs = float(len(_PAIRS))
+    print("")
+    print("Timing summary (seconds)")
+    print(f"  Hausdorff: shapely_total={haus_time_totals['shapely']:.6e}, custom_total={haus_time_totals['custom']:.6e}")
+    print(f"  Hausdorff: shapely_avg={haus_time_totals['shapely']/n_pairs:.6e}, custom_avg={haus_time_totals['custom']/n_pairs:.6e}")
+    print(
+        f"  Frechet:   shapely_total={frechet_time_totals['shapely']:.6e}, "
+        f"custom_total={frechet_time_totals['custom']:.6e}"
+    )
+    print(
+        f"  Frechet:   shapely_avg={frechet_time_totals['shapely']/n_pairs:.6e}, "
+        f"custom_avg={frechet_time_totals['custom']/n_pairs:.6e}"
+    )
 
     return 0
 

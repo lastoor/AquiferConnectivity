@@ -12,9 +12,12 @@ from typing import Any
 
 import matplotlib.pyplot as plt
 import numpy as np
+import cmcrameri.cm as cmc
+from matplotlib.colors import to_rgba
 
 import step1_index as step1
 import step2_metrics as step2
+import step3_stats as step3
 import step4_plot as step4
 
 
@@ -38,6 +41,12 @@ class PathSolveResult:
     fp_dijkstra: np.ndarray
     lrp: np.ndarray
     t_min: np.ndarray
+    x: np.ndarray
+    y: np.ndarray
+    vx: np.ndarray
+    vy: np.ndarray
+    source_xy: np.ndarray
+    target_xy: np.ndarray
 
 
 def _sweep_token(sweep: str) -> str:
@@ -325,34 +334,122 @@ def solve_single_field(
     fp = fp[fp[:, 0] <= x1]
     _require_path_valid(sim_path, fp, domain_box, x0, x1, "FP")
 
-    return PathSolveResult(fp=fp, fp_fmm=fp_fmm, fp_dijkstra=fp_dijkstra, lrp=lrp, t_min=t_min)
+    source_xy = np.column_stack([np.full(y1 - y0, x0, dtype=float), np.arange(y0, y1, dtype=float)])
+    target_xy = np.column_stack([np.full(field_size - 1, x1, dtype=float), np.arange(0, field_size - 1, dtype=float)])
+
+    return PathSolveResult(
+        fp=fp,
+        fp_fmm=fp_fmm,
+        fp_dijkstra=fp_dijkstra,
+        lrp=lrp,
+        t_min=t_min,
+        x=np.asarray(x, dtype=float),
+        y=np.asarray(y, dtype=float),
+        vx=np.asarray(vx, dtype=float),
+        vy=np.asarray(vy, dtype=float),
+        source_xy=source_xy,
+        target_xy=target_xy,
+    )
+
+
+def _normalized_extent(x: np.ndarray, y: np.ndarray, i_y: float) -> tuple[float, float, float, float]:
+    return (x[0] / i_y, (x[-1] + 1.0) / i_y, y[0] / i_y, (y[-1] + 1.0) / i_y)
+
+
+def _plot_common_overlays(ax: Any, result: PathSolveResult, i_y: float) -> None:
+    ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="black", linewidth=1.0, label="Source")
+    ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="black", linewidth=1.0, label="Target")
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=step4.COLORS["fp"], linewidth=1.8, label="FP")
+    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=step4.COLORS["fpFMM"], linewidth=1.6, label="FP (FMM)")
+    ax.plot(
+        result.fp_dijkstra[:, 0] / i_y,
+        result.fp_dijkstra[:, 1] / i_y,
+        color=step4.COLORS["fpDijkstra"],
+        linewidth=1.6,
+        label="FP (Dijkstra)",
+    )
+    ax.plot(result.lrp[:, 0] / i_y, result.lrp[:, 1] / i_y, color=step4.COLORS["lrp"], linewidth=1.6, label="LRP")
+    ax.set_title("")
+    ax.set_xlabel(r"$x/I_Y$")
+    ax.set_ylabel(r"$y/I_Y$")
+    ax.set_aspect("equal", adjustable="box")
+    ax.legend(fontsize="8", loc="best", facecolor="lightgray")
+
+
+def _coerce_velocity_for_streamplot(result: PathSolveResult) -> tuple[np.ndarray, np.ndarray]:
+    ny = len(result.y)
+    nx = len(result.x)
+    vx = np.asarray(result.vx, dtype=float)
+    vy = np.asarray(result.vy, dtype=float)
+
+    if vx.shape == (ny, nx) and vy.shape == (ny, nx):
+        return vx, vy
+    if vx.shape == (ny, nx + 1) and vy.shape == (ny + 1, nx):
+        vx_c = 0.5 * (vx[:, :-1] + vx[:, 1:])
+        vy_c = 0.5 * (vy[:-1, :] + vy[1:, :])
+        return vx_c, vy_c
+
+    m = min(vx.shape[0], vy.shape[0], ny)
+    n = min(vx.shape[1], vy.shape[1], nx)
+    out_vx = np.zeros((ny, nx), dtype=float)
+    out_vy = np.zeros((ny, nx), dtype=float)
+    out_vx[:m, :n] = vx[:m, :n]
+    out_vy[:m, :n] = vy[:m, :n]
+    return out_vx, out_vy
+
+
+def _dimensionless_velocity(vx: np.ndarray, vy: np.ndarray, q_ref: float) -> tuple[np.ndarray, np.ndarray]:
+    if not np.isfinite(q_ref) or q_ref <= 0.0:
+        raise ValueError(f"Invalid reference velocity q_ref={q_ref}; expected a positive finite value.")
+    return np.asarray(vx, dtype=float) / q_ref, np.asarray(vy, dtype=float) / q_ref
 
 
 def plot_paths_over_field(
     field: np.ndarray,
     *,
-    title: str,
     cmap: str,
     colorbar_label: str,
     result: PathSolveResult,
+    i_y: float,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
-    im = ax.imshow(field, origin="lower", cmap=cmap, interpolation="nearest")
-    ax.plot(result.fp[:, 0], result.fp[:, 1], color=step4.COLORS["fp"], linewidth=1.8, label="FP")
-    ax.plot(result.fp_fmm[:, 0], result.fp_fmm[:, 1], color=step4.COLORS["fpFMM"], linewidth=1.6, label="FP (FMM)")
-    ax.plot(
-        result.fp_dijkstra[:, 0],
-        result.fp_dijkstra[:, 1],
-        color=step4.COLORS["fpDijkstra"],
-        linewidth=1.6,
-        label="FP (Dijkstra)",
+    im = ax.imshow(field, origin="lower", cmap=cmap, interpolation="nearest", extent=_normalized_extent(result.x, result.y, i_y))
+    _plot_common_overlays(ax, result, i_y)
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label(colorbar_label)
+    fig.tight_layout()
+    return fig
+
+
+def plot_paths_over_speed_with_streamlines(
+    speed_field: np.ndarray,
+    vx_field: np.ndarray,
+    vy_field: np.ndarray,
+    *,
+    result: PathSolveResult,
+    i_y: float,
+    colorbar_label: str = r"$|v|/q_{\mathrm{ref}}$",
+):
+    fig, ax = plt.subplots(figsize=[5, 4])
+    im = ax.imshow(
+        speed_field,
+        origin="lower",
+        cmap=cmc.oslo.reversed(),
+        interpolation="nearest",
+        extent=_normalized_extent(result.x, result.y, i_y),
     )
-    ax.plot(result.lrp[:, 0], result.lrp[:, 1], color=step4.COLORS["lrp"], linewidth=1.6, label="LRP")
-    ax.set_title(title)
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_aspect("equal", adjustable="box")
-    ax.legend(fontsize="8", loc="upper right")
+    x_norm = result.x / i_y
+    y_norm = result.y / i_y
+    ax.streamplot(
+        x_norm,
+        y_norm,
+        vx_field,
+        vy_field,
+        color=to_rgba("black", alpha=0.4),
+        linewidth=0.8,
+        arrowsize=0.6,
+    )
+    _plot_common_overlays(ax, result, i_y)
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label(colorbar_label)
     fig.tight_layout()
@@ -386,14 +483,15 @@ def run_step5(
     max_iters: int,
     rk45_min_success_frac: float,
     rk45_max_bad_frac: float,
-) -> tuple[Path, Path]:
+) -> tuple[Path, Path, Path]:
     selected = select_run_input(cfg, sweep=sweep, value=value, field_size=field_size, mc_index=mc_index)
     logk_field = load_selected_logk(selected)
 
+    dh_eff = cfg.dh if dh is None else dh
     result = solve_single_field(
         logk_field,
         field_size=field_size,
-        dh=cfg.dh if dh is None else dh,
+        dh=dh_eff,
         fmm_velocity_layout=fmm_velocity_layout,
         fmm_face_mapping=fmm_face_mapping,
         fmm_zero_policy=fmm_zero_policy,
@@ -418,30 +516,50 @@ def run_step5(
         f"run{cfg.run_id}_{_sweep_token(sweep)}{_value_slug(selected.value_key)}_"
         f"size{field_size}_mc{selected.mc_label}"
     )
+    i_y = cfg.length_scale * float(field_size)
+    t_ref = step3.compute_t_ref(cfg.k_g, dh_eff, float(field_size), cfg.length_scale)
+    q_ref = cfg.k_g * dh_eff
+    if not np.isfinite(q_ref) or q_ref <= 0.0:
+        raise ValueError(f"Invalid reference velocity q_ref={q_ref}; check k_g and dh.")
+
     logk_path = out_dir / f"{stem}_logk_paths.png"
     tmin_path = out_dir / f"{stem}_arrival_paths.png"
+    stream_path = out_dir / f"{stem}_speed_streamlines.png"
 
     fig_logk = plot_paths_over_field(
         logk_field,
-        title=f"logK with Paths ({_sweep_token(sweep)}={selected.value_key:g}, size={field_size}, mc={selected.mc_label})",
-        cmap="viridis",
-        colorbar_label="logK",
+        cmap=cmc.oslo.reversed(),
+        colorbar_label=r"$\ln K$",
         result=result,
+        i_y=i_y,
     )
     fig_logk.savefig(logk_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_logk)
 
-    tmin_plot = np.where(np.isfinite(result.t_min), result.t_min, np.nan)
+    tmin_plot = np.where(np.isfinite(result.t_min), result.t_min / t_ref, np.nan)
     fig_tmin = plot_paths_over_field(
         tmin_plot,
-        title=f"Minimal Arrival Time with Paths ({_sweep_token(sweep)}={selected.value_key:g}, size={field_size}, mc={selected.mc_label})",
-        cmap="magma",
-        colorbar_label=r"$T_{\min}$",
+        cmap=cmc.oslo.reversed(),
+        colorbar_label=r"$T_{\min}/t_{\mathrm{ref}}$",
         result=result,
+        i_y=i_y,
     )
     fig_tmin.savefig(tmin_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_tmin)
-    return logk_path, tmin_path
+
+    vx_plot, vy_plot = _coerce_velocity_for_streamplot(result)
+    vx_star, vy_star = _dimensionless_velocity(vx_plot, vy_plot, q_ref)
+    speed_field = np.hypot(vx_star, vy_star)
+    fig_stream = plot_paths_over_speed_with_streamlines(
+        speed_field,
+        vx_star,
+        vy_star,
+        result=result,
+        i_y=i_y,
+    )
+    fig_stream.savefig(stream_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+    plt.close(fig_stream)
+    return logk_path, tmin_path, stream_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -477,7 +595,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     cfg = step1.load_config(args.config)
-    logk_path, tmin_path = run_step5(
+    logk_path, tmin_path, stream_path = run_step5(
         cfg,
         sweep=args.sweep,
         value=args.value,
@@ -502,6 +620,7 @@ def main() -> int:
     )
     print(f"Saved figure: {logk_path}")
     print(f"Saved figure: {tmin_path}")
+    print(f"Saved figure: {stream_path}")
     return 0
 
 

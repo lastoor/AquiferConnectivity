@@ -15,7 +15,15 @@ except ImportError:  # pragma: no cover - optional dependency
     def tqdm(iterable=None, **kwargs):  # type: ignore[override]
         return iterable
 
-from step1_index import RunPaths, VisualizationConfig, default_cache_dir, load_config, save_pickle, write_stage_metadata
+from step1_index import (
+    RunPaths,
+    VisualizationConfig,
+    default_cache_dir,
+    distance_key_candidates,
+    load_config,
+    save_pickle,
+    write_stage_metadata,
+)
 
 try:
     from shapely import LineString, frechet_distance, hausdorff_distance
@@ -30,6 +38,16 @@ PAIR_TO_FIELDS = {
     "fp_fpFMM": ("fp", "fp_fmm"),
 }
 DISTANCE_TYPES = ("end_point", "hausdorff", "frechet")
+VARIANCE_METRIC_KEY_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "len_fp": ("len_fp_rk45", "len_fp_m"),
+    "len_fp_dijkstra": ("len_fp_dijkstra", "len_fp_dijkstra_m"),
+    "len_fp_fmm": ("len_fp_fmm", "len_fp_fmm_m"),
+    "len_lrp": ("len_lrp", "len_lrp_m"),
+    "travel_time_fp": ("travel_time_rk45", "fpt_m"),
+    "travel_time_fp_dijkstra": ("travel_time_dijkstra", "fpt_dijkstra_m"),
+    "travel_time_fp_fmm": ("travel_time_fmm", "fpt_fmm_m"),
+    "resistance_lrp": ("resistance_lrp", "mhr_m"),
+}
 
 
 @dataclass(slots=True)
@@ -222,6 +240,52 @@ def _compute_hausdorff_nn_for_pair(pathset: PathSet, pair: str, workers: int) ->
     return float(np.max(d))
 
 
+def _compute_frechet_custom(a: np.ndarray | None, b: np.ndarray | None) -> float:
+    # Discrete Frechet distance via dynamic programming.
+    if a is None or b is None or len(a) == 0 or len(b) == 0:
+        return float("nan")
+
+    na = len(a)
+    nb = len(b)
+    ca = np.full((na, nb), np.nan, dtype=float)
+
+    for i in range(na):
+        for j in range(nb):
+            d = float(np.linalg.norm(a[i] - b[j]))
+            if i == 0 and j == 0:
+                ca[i, j] = d
+            elif i == 0:
+                ca[i, j] = max(ca[i, j - 1], d)
+            elif j == 0:
+                ca[i, j] = max(ca[i - 1, j], d)
+            else:
+                ca[i, j] = max(min(ca[i - 1, j], ca[i - 1, j - 1], ca[i, j - 1]), d)
+
+    return float(ca[-1, -1])
+
+
+def _compute_frechet_custom_for_pair(pathset: PathSet, pair: str) -> float:
+    a_name, b_name = PAIR_TO_FIELDS[pair]
+    a = getattr(pathset, a_name)
+    b = getattr(pathset, b_name)
+    return _compute_frechet_custom(a, b)
+
+
+def _load_main_output_value(output_data: dict[str, Any] | None, candidates: list[str] | tuple[str, ...]) -> tuple[float, str | None]:
+    if output_data is None:
+        return float("nan"), None
+    for key in candidates:
+        if key in output_data:
+            return float(output_data[key]), key
+    return float("nan"), None
+
+
+def _add_unique_warning(warnings: list[str], warning_seen: set[str], message: str) -> None:
+    if message not in warning_seen:
+        warning_seen.add(message)
+        warnings.append(message)
+
+
 def resolve_distances(
     cfg: VisualizationConfig,
     output_data: dict[str, Any] | None,
@@ -229,6 +293,7 @@ def resolve_distances(
     *,
     workers: int,
     hausdorff_compute_method: str,
+    frechet_compute_method: str,
     pathset_loader: Callable[[], PathSet | None] | None = None,
 ) -> tuple[dict[str, dict[str, float]], list[str]]:
     out = _empty_distance_dict()
@@ -261,10 +326,12 @@ def resolve_distances(
         if distance_type == "end_point":
             return _compute_endpoint_for_pair(ps, pair)
         if distance_type == "hausdorff":
-            if hausdorff_compute_method == "nn_max":
+            if hausdorff_compute_method == "custom":
                 return _compute_hausdorff_nn_for_pair(ps, pair, workers)
             return float(_ensure_shapely()["hausdorff"][pair])
         if distance_type == "frechet":
+            if frechet_compute_method == "custom":
+                return _compute_frechet_custom_for_pair(ps, pair)
             return float(_ensure_shapely()["frechet"][pair])
         return float("nan")
 
@@ -276,12 +343,13 @@ def resolve_distances(
             value = float("nan")
             loaded = False
             if mode == "load_from_main_output":
-                key = cfg.distance_main_output_keys[distance_type][pair]
-                if output_data is not None and key in output_data:
-                    value = float(output_data[key])
+                candidates = distance_key_candidates(cfg, distance_type, pair)
+                value, loaded_key = _load_main_output_value(output_data, candidates)
+                if loaded_key is not None:
                     loaded = True
                 else:
-                    warnings.append(f"Missing mainOutput key '{key}' for {distance_type}:{pair}")
+                    joined = ", ".join(candidates)
+                    warnings.append(f"Missing mainOutput keys [{joined}] for {distance_type}:{pair}")
 
             if (not loaded) and (mode == "compute_from_paths" or cfg.distance_fallback_on_missing == "compute_from_paths"):
                 value = _compute_value(distance_type, pair)
@@ -458,6 +526,7 @@ def run_variance_analysis_from_discovered(
     *,
     show_progress: bool = False,
     hausdorff_compute_method: str = "shapely",
+    frechet_compute_method: str = "shapely",
     max_var_values: int | None = None,
     max_sizes_per_var: int | None = None,
     max_mc_per_size: int | None = None,
@@ -513,14 +582,41 @@ def run_variance_analysis_from_discovered(
 
             for mc_idx, path in mc_iter:
                 output_data = load_main_output(path)
-                len_fp_m.append(float(output_data["len_fp_m"]))
-                len_fp_dijkstra_m.append(float(output_data["len_fp_dijkstra_m"]))
-                len_fp_fmm_m.append(float(output_data["len_fp_fmm_m"]))
-                len_lrp_m.append(float(output_data["len_lrp_m"]))
-                fpt_m.append(float(output_data["fpt_m"]))
-                fpt_dijkstra_m.append(float(output_data["fpt_dijkstra_m"]))
-                fpt_fmm_m.append(float(output_data["fpt_fmm_m"]))
-                mhr_m.append(float(output_data["mhr_m"]))
+                len_fp_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp"])
+                len_fp_dijkstra_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp_dijkstra"])
+                len_fp_fmm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp_fmm"])
+                len_lrp_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_lrp"])
+                fpt_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fp"])
+                fpt_dijkstra_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fp_dijkstra"])
+                fpt_fmm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fp_fmm"])
+                mhr_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["resistance_lrp"])
+                metric_values = {
+                    "len_fp": len_fp_val,
+                    "len_fp_dijkstra": len_fp_dijkstra_val,
+                    "len_fp_fmm": len_fp_fmm_val,
+                    "len_lrp": len_lrp_val,
+                    "travel_time_fp": fpt_val,
+                    "travel_time_fp_dijkstra": fpt_dijkstra_val,
+                    "travel_time_fp_fmm": fpt_fmm_val,
+                    "resistance_lrp": mhr_val,
+                }
+                for metric_name, metric_value in metric_values.items():
+                    if np.isnan(metric_value):
+                        joined = ", ".join(VARIANCE_METRIC_KEY_CANDIDATES[metric_name])
+                        _add_unique_warning(
+                            warnings,
+                            warning_seen,
+                            f"var={var_}, size={rp.size_str}, mc={mc_idx}: missing mainOutput keys [{joined}] for {metric_name}",
+                        )
+
+                len_fp_m.append(len_fp_val)
+                len_fp_dijkstra_m.append(len_fp_dijkstra_val)
+                len_fp_fmm_m.append(len_fp_fmm_val)
+                len_lrp_m.append(len_lrp_val)
+                fpt_m.append(fpt_val)
+                fpt_dijkstra_m.append(fpt_dijkstra_val)
+                fpt_fmm_m.append(fpt_fmm_val)
+                mhr_m.append(mhr_val)
 
                 dist_values, distance_warnings = resolve_distances(
                     cfg,
@@ -528,12 +624,11 @@ def run_variance_analysis_from_discovered(
                     None,
                     workers=cfg.workers,
                     hausdorff_compute_method=hausdorff_compute_method,
+                    frechet_compute_method=frechet_compute_method,
                     pathset_loader=lambda rp=rp, mc_idx=mc_idx: load_paths(rp, mc_idx),
                 )
                 for warning in distance_warnings:
-                    if warning not in warning_seen:
-                        warning_seen.add(warning)
-                        warnings.append(warning)
+                    _add_unique_warning(warnings, warning_seen, warning)
 
                 haus_fp_lrp.append(dist_values["hausdorff"]["fp_lrp"])
                 haus_fp_d.append(dist_values["hausdorff"]["fp_fpDijkstra"])
@@ -584,6 +679,7 @@ def run_std_analysis_from_discovered(
     *,
     show_progress: bool = False,
     hausdorff_compute_method: str = "shapely",
+    frechet_compute_method: str = "shapely",
     max_std_values: int | None = None,
     max_sizes_per_std: int | None = None,
     max_mc_per_size: int | None = None,
@@ -657,13 +753,12 @@ def run_std_analysis_from_discovered(
                     None,
                     workers=cfg.workers,
                     hausdorff_compute_method=hausdorff_compute_method,
+                    frechet_compute_method=frechet_compute_method,
                     pathset_loader=_load_pathset,
                 )
                 for warning in distance_warnings:
                     full = f"std={std_}, size={rp.size_str}, {warning}"
-                    if full not in warning_seen:
-                        warning_seen.add(full)
-                        warnings.append(full)
+                    _add_unique_warning(warnings, warning_seen, full)
 
                 hausdorffDist_fp_lrp_m.append(dist_values["hausdorff"]["fp_lrp"])
                 frechetDist_fp_lrp_m.append(dist_values["frechet"]["fp_lrp"])
@@ -738,6 +833,7 @@ def run_stage2(
     cache_dir: Path | None = None,
     skip_std: bool = False,
     hausdorff_compute_method: str = "shapely",
+    frechet_compute_method: str = "shapely",
     max_var_values: int | None = None,
     max_std_values: int | None = None,
     max_sizes_per_value: int | None = None,
@@ -754,6 +850,7 @@ def run_stage2(
         discovered_var,
         show_progress=True,
         hausdorff_compute_method=hausdorff_compute_method,
+        frechet_compute_method=frechet_compute_method,
         max_var_values=max_var_values,
         max_sizes_per_var=max_sizes_per_value,
         max_mc_per_size=max_mc_per_size,
@@ -767,6 +864,7 @@ def run_stage2(
             discovered_std,
             show_progress=True,
             hausdorff_compute_method=hausdorff_compute_method,
+            frechet_compute_method=frechet_compute_method,
             max_std_values=max_std_values,
             max_sizes_per_std=max_sizes_per_value,
             max_mc_per_size=max_mc_per_size,
@@ -786,6 +884,7 @@ def run_stage2(
         "warnings_std": len(warnings_std),
         "std_computed": std_results is not None,
         "hausdorff_compute_method": hausdorff_compute_method,
+        "frechet_compute_method": frechet_compute_method,
         "max_var_values": max_var_values,
         "max_std_values": max_std_values,
         "max_sizes_per_value": max_sizes_per_value,
@@ -803,9 +902,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hausdorff-compute-method",
         type=str,
-        choices=["shapely", "nn_max"],
+        choices=["shapely", "custom"],
         default="shapely",
         help="Method for Hausdorff distance computation",
+    )
+    parser.add_argument(
+        "--frechet-compute-method",
+        type=str,
+        choices=["shapely", "custom"],
+        default="shapely",
+        help="Method for Frechet distance computation",
     )
     parser.add_argument("--max-var-values", type=int, default=None, help="Limit number of variance values processed")
     parser.add_argument("--max-std-values", type=int, default=None, help="Limit number of std values processed")
@@ -822,6 +928,7 @@ def main() -> int:
         cache_dir=args.cache_dir,
         skip_std=args.skip_std,
         hausdorff_compute_method=args.hausdorff_compute_method,
+        frechet_compute_method=args.frechet_compute_method,
         max_var_values=args.max_var_values,
         max_std_values=args.max_std_values,
         max_sizes_per_value=args.max_sizes_per_value,
