@@ -300,3 +300,33 @@
   - `pytest -q tests/test_step4_plot.py`
 - Limitations/follow-up:
   - Ratio moments are computed from aligned finite `scatter_time_samples`; missing per-variance samples produce `NaN` points with manifest warnings.
+
+## 2026-03-09
+- Agent/tool: Codex (GPT-5)
+- Summary: Added standalone `step6_single_field_arrival_hist.py` to generate one GRF logK field, solve hydraulic head/velocity, run particle tracking, and compare empirical arrival-time CDF (`status==0` particles) against analytical `_g_tau` from `step4_plot.py`; updated README documentation and added focused unit tests.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `tests/test_step6_single_field_arrival_hist.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m compileall scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
+- Limitations/follow-up:
+  - `pytest` is not installed in the current shell environment, so new tests were added but not executed with `pytest`.
+
+## 2026-03-09
+- Agent/tool: Codex (GPT-5)
+- Summary: Fixed Step 6 arrival-time extraction to use terminal time per successful particle trajectory (instead of flattened per-step times), and added optional artifact-save flags (`--save-npz`, `--save-json`) so figure-only output is default while NPZ/JSON saves are opt-in.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `tests/test_step6_single_field_arrival_hist.py`
+  - `scripts/step4_plot.py`
+  - `tests/test_analytical_tmin.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m compileall scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
+  - `python -m compileall scripts/step4_plot.py tests/test_analytical_tmin.py`
+  - Lightweight runtime sanity check for `_g_tau` and `compute_analytical_tmin_curve` via `PYTHONPATH=./scripts python - <<'PY' ...`
+- Limitations/follow-up:
+  - `pytest` is not installed in the current shell environment, so updated tests were compile-checked but not executed with `pytest`.

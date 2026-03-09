@@ -79,12 +79,16 @@ def compute_effective_length(field_size: float) -> float:
 
 def _g_tau(t: float, *, length: float, velocity: float, i_y: float, sigma_y_sq: float, euler_const: float) -> float:
     tiny = np.finfo(float).tiny
-    t_prime = max((t * velocity) / i_y, tiny)
-    term_bracket = expi(-t_prime) + (np.exp(-t_prime) * (1.0 + t_prime) - 1.0) / (t_prime**2)
+    eps = np.finfo(float).eps
+    t_prime = max((t * velocity) / i_y, eps)
+    # Use expm1 to avoid catastrophic cancellation for small t_prime.
+    num = np.expm1(-t_prime) + t_prime * np.exp(-t_prime)
+    term_bracket = expi(-t_prime) + num / (t_prime * t_prime)
     f_norm = 2.0 * t_prime - 3.0 * np.log(t_prime) + 1.5 - 3.0 * euler_const + 3.0 * term_bracket
     x11 = max(sigma_y_sq * (i_y**2) * f_norm, tiny)
     x1 = velocity * t
-    return 0.5 * erfc((length - x1) / np.sqrt(2.0 * x11))
+    value = 0.5 * erfc((length - x1) / np.sqrt(2.0 * x11))
+    return float(np.clip(value, 0.0, 1.0))
 
 
 def _find_root_bracket(
@@ -100,20 +104,20 @@ def _find_root_bracket(
     max_expand_steps: int = 12,
 ) -> tuple[float, float] | None:
     base_time = length / velocity
-    lo = max(base_time * lo_factor, np.finfo(float).tiny)
+    lo = max(base_time * lo_factor, np.finfo(float).eps)
     hi = base_time * hi_factor
     objective = lambda t: _g_tau(t, length=length, velocity=velocity, i_y=i_y, sigma_y_sq=sigma_y_sq, euler_const=euler_const) - percentile
     f_lo = objective(lo)
     f_hi = objective(hi)
-    if np.signbit(f_lo) != np.signbit(f_hi):
+    if np.isfinite(f_lo) and np.isfinite(f_hi) and np.signbit(f_lo) != np.signbit(f_hi):
         return lo, hi
 
     for _ in range(max_expand_steps):
-        lo = max(lo / 2.0, np.finfo(float).tiny)
+        lo = max(lo / 2.0, np.finfo(float).eps)
         hi = hi * 2.0
         f_lo = objective(lo)
         f_hi = objective(hi)
-        if np.signbit(f_lo) != np.signbit(f_hi):
+        if np.isfinite(f_lo) and np.isfinite(f_hi) and np.signbit(f_lo) != np.signbit(f_hi):
             return lo, hi
     return None
 
@@ -164,10 +168,18 @@ def compute_analytical_tmin_curve(
             sigma_y_sq=float(sigma_y_sq),
             euler_const=euler_const,
         ) - percentile
+        f0 = objective(bracket[0])
+        f1 = objective(bracket[1])
+        if not (np.isfinite(f0) and np.isfinite(f1)):
+            warnings.append(f"Analytical tmin objective non-finite for sigma2={sigma_y_sq}.")
+            continue
         try:
             t_solution = brentq(objective, bracket[0], bracket[1])
         except ValueError:
             warnings.append(f"Analytical tmin root solve failed for sigma2={sigma_y_sq}.")
+            continue
+        if not np.isfinite(t_solution):
+            warnings.append(f"Analytical tmin root solve returned non-finite value for sigma2={sigma_y_sq}.")
             continue
         out[idx] = t_solution * velocity / i_y
     return out, warnings

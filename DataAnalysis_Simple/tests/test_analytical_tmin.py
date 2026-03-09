@@ -30,6 +30,20 @@ def test_compute_analytical_tmin_curve_typical_variances() -> None:
     assert warnings == []
 
 
+def test_g_tau_tiny_time_is_finite_and_bounded() -> None:
+    with np.errstate(invalid="raise", divide="raise", over="raise"):
+        value = step4._g_tau(
+            1e-300,
+            length=180.0,
+            velocity=0.1,
+            i_y=10.0,
+            sigma_y_sq=1.0,
+            euler_const=float(getattr(step4.constants, "euler_gamma", np.euler_gamma)),
+        )
+    assert np.isfinite(value)
+    assert 0.0 <= value <= 1.0
+
+
 def test_compute_analytical_tmin_curve_invalid_params_returns_nan() -> None:
     var = np.asarray([0.1, 0.5], dtype=float)
     values, warnings = step4.compute_analytical_tmin_curve(
@@ -41,6 +55,20 @@ def test_compute_analytical_tmin_curve_invalid_params_returns_nan() -> None:
     )
     assert np.all(np.isnan(values))
     assert warnings
+
+
+def test_compute_analytical_tmin_curve_stress_params_do_not_crash() -> None:
+    var = np.asarray([1e-12, 1e-6, 1e-3], dtype=float)
+    values, warnings = step4.compute_analytical_tmin_curve(
+        var,
+        length=180.0,
+        velocity=1e-12,
+        i_y=10.0,
+        percentile=0.01,
+    )
+    assert values.shape == var.shape
+    # Values may be NaN for difficult regimes, but function should return safely with warnings.
+    assert isinstance(warnings, list)
 
 
 def test_plot_characteristic_time_includes_analytical_label() -> None:

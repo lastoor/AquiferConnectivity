@@ -10,6 +10,7 @@
 Additional standalone utility:
 
 - `scripts/step5_single_field_paths.py`: solve and plot `FP`, `FP (FMM)`, `FP (Dijkstra)`, and `LRP` for one selected logK realization.
+- `scripts/step6_single_field_arrival_hist.py`: generate one GRF logK field, solve flow/particle tracking, and compare empirical arrival-time CDF of all successful particles against analytical `_g_tau`.
 
 All implementation logic is inside the step scripts (no `visualization/` package).
 
@@ -22,6 +23,7 @@ All implementation logic is inside the step scripts (no `visualization/` package
 - `scripts/step4_plot.py`: render and save figures + manifest
 - `scripts/run_all.py`: one-shot runner for all four stages
 - `scripts/step5_single_field_paths.py`: single-realization path solving + overlay figures (`logK` and minimal arrival time)
+- `scripts/step6_single_field_arrival_hist.py`: single-realization arrival-time CDF analysis (`status==0` particles) vs analytical `_g_tau`
 - `tests/`: focused tests for each stage and end-to-end smoke run
 
 ## Agent Workflow
@@ -137,6 +139,38 @@ Notes:
 - Speed/streamline background uses dimensionless velocity magnitude `|v|/(k_g*dh)` and streamlines from `v/(k_g*dh)`.
 - Solver imports require both `Algorithm/src` and the sibling `FlowSimulation` repo.
 - Override FlowSimulation path with `FLOWSIM_PATH=/path/to/FlowSimulation` if needed.
+
+## Single-Field Arrival-Time CDF vs Analytical
+
+Use `step6_single_field_arrival_hist.py` to generate one GRF realization and compare
+the empirical CDF of particle arrival times (successful exits only, `status==0`) with
+analytical `_g_tau` from `step4_plot.py`.
+
+```bash
+PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
+  --config configs/visualization.default.yaml \
+  --field-size 200 \
+  --std 1.0 \
+  --seed 0 \
+  --save-npz \
+  --save-json \
+  --output-dir "$FIGURE_DIR"
+```
+
+Outputs:
+
+- `<output_dir>/run<id>_singlefield_std<std>_var<var>_size<size>_seed<seed>_arrival_cdf_vs_analytical.png`
+- Optional (when `--save-npz`): `<output_dir>/run<id>_singlefield_std<std>_var<var>_size<size>_seed<seed>_arrival_times.npz`
+- Optional (when `--save-json`): `<output_dir>/run<id>_singlefield_std<std>_var<var>_size<size>_seed<seed>_arrival_summary.json`
+
+Notes:
+
+- GRF generation uses exponential covariance (`ExpCov`) with `GaussianRandomFieldCircEmbed`.
+- Hydraulic head and velocity are solved using the same solver stack as Step 5.
+- Arrival times use one terminal time per successful particle (`status==0`, final trajectory timestamp), not flattened per-step trajectory times.
+- Comparison is done in dimensionless time `tU/I_Y` (`U = k_g * dh`, `I_Y = length_scale * field_size`).
+- By default, Step 6 saves only the figure; use `--save-npz` and/or `--save-json` to persist data artifacts.
+- Script requires the external `Algorithm/src` + `FlowSimulation` runtime stack; set `FLOWSIM_PATH` if needed.
 
 ## Figure Sections
 
