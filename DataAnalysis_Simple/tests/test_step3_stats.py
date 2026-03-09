@@ -27,6 +27,8 @@ def test_step3_prepares_plot_inputs(pipeline_fixture) -> None:
     assert "i_y" in prepared
     assert "t_ref" in prepared
     assert "wasserstein_len" in prepared
+    assert "length_cdf_samples" in prepared
+    assert "scatter_time_samples" in prepared
     assert "derived_warnings" in prepared
     assert isinstance(prepared["derived_warnings"], list)
     for key in ["fp_lrp", "fp_fpFMM", "fp_fpDijkstra"]:
@@ -40,3 +42,21 @@ def test_step3_prepares_plot_inputs(pipeline_fixture) -> None:
         arr = np.asarray(stats[key], dtype=float)
         assert arr.shape[0] == prepared["var"].shape[0]
         assert arr.shape[1] == 2
+
+    cdf_samples = prepared["length_cdf_samples"]
+    assert isinstance(cdf_samples, dict)
+    assert cdf_samples
+    first_key = sorted(cdf_samples.keys())[0]
+    for key in ["fp", "lrp", "fp_fmm", "fp_dijkstra"]:
+        assert key in cdf_samples[first_key]
+        arr = np.asarray(cdf_samples[first_key][key], dtype=float)
+        assert arr.size > 0
+
+    scatter_samples = prepared["scatter_time_samples"]
+    assert isinstance(scatter_samples, dict)
+    assert scatter_samples
+    first_scatter_key = sorted(scatter_samples.keys())[0]
+    for key in ["fpt", "fpt_fmm", "fpt_dijkstra", "mhr"]:
+        assert key in scatter_samples[first_scatter_key]
+        arr = np.asarray(scatter_samples[first_scatter_key][key], dtype=float)
+        assert arr.size > 0

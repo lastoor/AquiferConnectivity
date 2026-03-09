@@ -13,6 +13,7 @@ from typing import Any
 
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
+import matplotlib.patheffects as pe
 import numpy as np
 from scipy import constants
 from scipy.optimize import brentq
@@ -22,11 +23,19 @@ from step1_index import VisualizationConfig, default_cache_dir, load_config
 
 COLORS = {
     "fp": "black",
-    "lrp": "#5278C4",
-    "fpFMM": "#C46552",
-    "fpDijkstra": "#B1C452",
+    "lrp": "#5278C4", #"#FC1212",
+    "fpFMM": "#C46552", #"#31830B",
+    "fpDijkstra": "#B1C452", #"#131EE2",
 }
 
+LINESTYLES = {
+    "fp": "-",
+    "lrp": "-",
+    "fpFMM": "--",
+    "fpDijkstra": ":",
+}
+
+LINEWIDTH = 2
 
 @dataclass(slots=True)
 class FigureArtifact:
@@ -171,17 +180,18 @@ def plot_characteristic_time(
     stats_fpt_fmm: np.ndarray,
     stats_fpt_dijkstra: np.ndarray,
     t_ref: float,
+    dh: float,
     analytical_tmin: np.ndarray | None = None,
     analytical_label: str = "Analytical $t_{\\mathrm{min}}$",
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="FP")
-    ax.errorbar(var, stats_mhr[:, 0] / t_ref, stats_mhr[:, 1] / t_ref, color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="LRP")
+    ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), stats_mhr[:, 1] / (t_ref * dh), color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="LRP")
     ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, stats_fpt_fmm[:, 1] / t_ref, color=COLORS["fpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FMM)")
     ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, stats_fpt_dijkstra[:, 1] / t_ref, color=COLORS["fpDijkstra"], linestyle="-", marker="o", markerfacecolor="None", label="FP (Dijkstra)")
     if analytical_tmin is not None:
         ax.plot(var, analytical_tmin, color="black", linestyle="--", linewidth=1.8, label=analytical_label)
-    ax.set_yscale("log")
+    # ax.set_yscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ tU / I_Y \right]$")
     ax.legend()
@@ -210,18 +220,18 @@ def plot_taylor_comparison(var: np.ndarray, stats_mhr: np.ndarray, stats_fpt: np
     return fig, {"kind": "taylor_comparison"}
 
 
-def plot_scatter_tmin_vs_rmin(stats_fpt: np.ndarray, stats_fpt_fmm: np.ndarray, stats_fpt_dijkstra: np.ndarray, stats_mhr: np.ndarray, t_ref: float):
+def plot_scatter_tmin_vs_rmin(stats_fpt: np.ndarray, stats_fpt_fmm: np.ndarray, stats_fpt_dijkstra: np.ndarray, stats_mhr: np.ndarray, t_ref: float, dh: float):
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.scatter(stats_fpt[:, 0] / t_ref, stats_fpt_fmm[:, 0] / t_ref, color="orange", label="$t_{\\text{min}}\\text{(FMM)}$", alpha=1)
-    ax.scatter(stats_fpt[:, 0] / t_ref, stats_fpt_dijkstra[:, 0] / t_ref, color="blue", label="$t_{\\text{min}}\\text{(Dijkstra)}$", alpha=0.6)
-    ax.scatter(stats_fpt[:, 0] / t_ref, stats_mhr[:, 0] / t_ref, color="darkred", marker="^", label="$R_{\\text{min}}$", alpha=1)
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("$t_{\\text{min}}\\text{(RK45)}$ (s)")
-    ax.set_ylabel("$\\tau$ (s)")
+    ax.scatter(stats_fpt[:, 0] / t_ref, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], label="FP (FMM)", alpha=0.6)
+    ax.scatter(stats_fpt[:, 0] / t_ref, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], label="$FP (Dijkstra)", alpha=0.6)
+    ax.scatter(stats_fpt[:, 0] / t_ref, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], label="LRP", alpha=0.6)
+    # ax.set_xscale("log")
+    # ax.set_yscale("log")
+    ax.set_xlabel("$t_{\\text{min}} U / I_Y$ (Particle Tracking)")
+    ax.set_ylabel("$t_{\\text{min}} U / I_Y$ (Other Methods)")
     ax.grid(True, which="both", color="gray", linestyle="-", linewidth=0.8, alpha=0.6)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_title("Characteristic Time Scale")
+    # ax.set_title("Characteristic Time Scale")
     ax.legend()
     fig.tight_layout()
     return fig, {"kind": "scatter_tmin_vs_rmin"}
@@ -262,6 +272,196 @@ def _safe_ratio(num: np.ndarray, den: np.ndarray, *, label: str, warnings: list[
     if invalid_count > 0:
         warnings.append(f"{label}: set {invalid_count} ratio point(s) to NaN due to non-finite values or zero denominator.")
     return out
+
+
+def _aligned_ratio_moments(num: np.ndarray, den: np.ndarray, *, dh: float, label: str, warnings: list[str]) -> tuple[float, float]:
+    n = np.asarray(num, dtype=float).ravel()
+    d = np.asarray(den, dtype=float).ravel()
+    m = min(n.size, d.size)
+    if m == 0:
+        warnings.append(f"{label}: empty samples; returning NaN.")
+        return float("nan"), float("nan")
+    n = n[:m]
+    d_norm = d[:m] / dh
+    valid = np.isfinite(n) & np.isfinite(d_norm) & (d_norm != 0.0)
+    if not np.any(valid):
+        warnings.append(f"{label}: no valid samples after finite/nonzero filtering; returning NaN.")
+        return float("nan"), float("nan")
+    ratio = n[valid] / d_norm[valid]
+    return float(np.mean(ratio)), float(np.var(ratio))
+
+
+def _compute_ratio_moments_series(
+    var: np.ndarray,
+    *,
+    scatter_samples_by_var: dict[str, Any] | None,
+    dh: float,
+    warnings: list[str],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    n_var = len(np.asarray(var, dtype=float).ravel())
+    mean_fp = np.full(n_var, np.nan, dtype=float)
+    mean_fmm = np.full(n_var, np.nan, dtype=float)
+    mean_dijkstra = np.full(n_var, np.nan, dtype=float)
+    var_fp = np.full(n_var, np.nan, dtype=float)
+    var_fmm = np.full(n_var, np.nan, dtype=float)
+    var_dijkstra = np.full(n_var, np.nan, dtype=float)
+
+    if not isinstance(scatter_samples_by_var, dict):
+        warnings.append("Ratio plots require scatter_time_samples from Stage 3; received missing/invalid payload.")
+        return mean_fp, mean_fmm, mean_dijkstra, var_fp, var_fmm, var_dijkstra
+
+    for idx, variance_value in enumerate(np.asarray(var, dtype=float).ravel()):
+        key = _resolve_sample_key(scatter_samples_by_var, float(variance_value))
+        if key is None:
+            warnings.append(f"Ratio plots missing scatter samples for sigma2={variance_value}; setting NaN.")
+            continue
+        sample_dict = scatter_samples_by_var.get(key, {})
+        required = ("fpt", "fpt_fmm", "fpt_dijkstra", "mhr")
+        if not all(rk in sample_dict for rk in required):
+            warnings.append(f"Ratio plots have incomplete scatter samples for sigma2={variance_value}; setting NaN.")
+            continue
+
+        mean_fp[idx], var_fp[idx] = _aligned_ratio_moments(
+            sample_dict["fpt"],
+            sample_dict["mhr"],
+            dh=dh,
+            label=f"FP ratio moments at sigma2={variance_value}",
+            warnings=warnings,
+        )
+        mean_fmm[idx], var_fmm[idx] = _aligned_ratio_moments(
+            sample_dict["fpt_fmm"],
+            sample_dict["mhr"],
+            dh=dh,
+            label=f"FP(FMM) ratio moments at sigma2={variance_value}",
+            warnings=warnings,
+        )
+        mean_dijkstra[idx], var_dijkstra[idx] = _aligned_ratio_moments(
+            sample_dict["fpt_dijkstra"],
+            sample_dict["mhr"],
+            dh=dh,
+            label=f"FP(Dijkstra) ratio moments at sigma2={variance_value}",
+            warnings=warnings,
+        )
+
+    return mean_fp, mean_fmm, mean_dijkstra, var_fp, var_fmm, var_dijkstra
+
+
+def _value_slug(value: float) -> str:
+    return str(f"{float(value):g}").replace("-", "m").replace(".", "p")
+
+
+def _empirical_cdf(samples: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    x = np.sort(np.asarray(samples, dtype=float).ravel())
+    n = x.size
+    y = np.arange(1, n + 1, dtype=float) / float(n)
+    return x, y
+
+
+def _parse_var_from_key(key: str) -> float | None:
+    if not key.startswith("var_"):
+        return None
+    try:
+        return float(key[4:])
+    except ValueError:
+        return None
+
+
+def _resolve_requested_plot_variances(var: np.ndarray, requested: list[float] | None) -> list[float]:
+    available = [float(v) for v in np.asarray(var, dtype=float).ravel()]
+    if not available:
+        return []
+    if not requested:
+        return [available[0]]
+    out: list[float] = []
+    for req in requested:
+        match = next((v for v in available if abs(v - float(req)) < 1e-12), None)
+        if match is None:
+            raise ValueError(f"Requested plot variance {req} is not available. Available values: {available}")
+        if not any(abs(match - prev) < 1e-12 for prev in out):
+            out.append(match)
+    return out
+
+
+def _resolve_sample_key(samples_by_var: dict[str, Any], variance_value: float) -> str | None:
+    for key in samples_by_var:
+        parsed = _parse_var_from_key(key)
+        if parsed is not None and abs(parsed - float(variance_value)) < 1e-12:
+            return key
+    return None
+
+
+def _parse_plot_variances(raw: str | None) -> list[float] | None:
+    if raw is None:
+        return None
+    tokens = [tok.strip() for tok in raw.split(",")]
+    values: list[float] = []
+    for tok in tokens:
+        if not tok:
+            continue
+        values.append(float(tok))
+    return values or None
+
+
+def _parse_scatter_modes(raw: str | None) -> list[str]:
+    if raw is None:
+        return ["mean"]
+    tokens = [tok.strip().lower() for tok in raw.split(",") if tok.strip()]
+    if not tokens:
+        return ["mean"]
+    allowed = {"mean", "all_points"}
+    out: list[str] = []
+    for token in tokens:
+        if token not in allowed:
+            allowed_str = ", ".join(sorted(allowed))
+            raise ValueError(f"Invalid scatter mode '{token}'. Allowed values: {allowed_str}")
+        if token not in out:
+            out.append(token)
+    return out
+
+
+def plot_scatter_tmin_vs_rmin_all_points(samples: dict[str, np.ndarray], *, t_ref: float, dh: float, variance_value: float):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    x = np.asarray(samples.get("fpt", []), dtype=float).ravel() / t_ref
+    y_fmm = np.asarray(samples.get("fpt_fmm", []), dtype=float).ravel() / t_ref
+    y_dij = np.asarray(samples.get("fpt_dijkstra", []), dtype=float).ravel() / t_ref
+    y_mhr = np.asarray(samples.get("mhr", []), dtype=float).ravel() / (t_ref * dh)
+    n = min(x.size, y_fmm.size, y_dij.size, y_mhr.size)
+    if n == 0:
+        raise ValueError(f"No valid scatter samples for variance {variance_value}")
+    x = x[:n]
+    y_fmm = y_fmm[:n]
+    y_dij = y_dij[:n]
+    y_mhr = y_mhr[:n]
+    m_fmm = np.isfinite(x) & np.isfinite(y_fmm) & (x > 0.0) & (y_fmm > 0.0)
+    m_dij = np.isfinite(x) & np.isfinite(y_dij) & (x > 0.0) & (y_dij > 0.0)
+    m_mhr = np.isfinite(x) & np.isfinite(y_mhr) & (x > 0.0) & (y_mhr > 0.0)
+    ax.scatter(x[m_fmm], y_fmm[m_fmm], color=COLORS["fpFMM"], label="$t_{\\text{min}}\\text{(FMM)}$", alpha=0.6, s=12)
+    ax.scatter(x[m_dij], y_dij[m_dij], color=COLORS["fpDijkstra"], label="$t_{\\text{min}}\\text{(Dijkstra)}$", alpha=0.6, s=12)
+    ax.scatter(x[m_mhr], y_mhr[m_mhr], color=COLORS["lrp"], label=r"$R_{\text{min}}/\mathcal{J}$", alpha=0.6, s=12)
+
+    # Linear regression fits
+    if np.any(m_fmm):
+        coeffs_fmm = np.polyfit(x[m_fmm], y_fmm[m_fmm], 1)
+        ax.plot(x[m_fmm], np.polyval(coeffs_fmm, x[m_fmm]), color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=LINEWIDTH, path_effects=[pe.Stroke(linewidth=2*LINEWIDTH, foreground="white"), pe.Normal()])
+    if np.any(m_dij):
+        coeffs_dij = np.polyfit(x[m_dij], y_dij[m_dij], 1)
+        ax.plot(x[m_dij], np.polyval(coeffs_dij, x[m_dij]), color=COLORS["fpDijkstra"], linestyle=LINESTYLES["fpDijkstra"], linewidth=LINEWIDTH, path_effects=[pe.Stroke(linewidth=2*LINEWIDTH, foreground="white"), pe.Normal()])
+    if np.any(m_mhr):
+        coeffs_mhr = np.polyfit(x[m_mhr], y_mhr[m_mhr], 1)
+        ax.plot(x[m_mhr], np.polyval(coeffs_mhr, x[m_mhr]), color=COLORS["lrp"], linestyle=LINESTYLES["lrp"], linewidth=LINEWIDTH, path_effects=[pe.Stroke(linewidth=2*LINEWIDTH, foreground="white"), pe.Normal()])
+
+    # ax.set_xscale("log")
+    # ax.set_yscale("log")
+    ax.set_xlim(left=0, right=16)
+    ax.set_ylim(bottom=0, top=14)
+    ax.set_xlabel("$t_{\\text{min}}\\text{(RK45)}$ (s)")
+    ax.set_ylabel("$\\tau$ (s)")
+    ax.grid(True, which="both", color="gray", linestyle="-", linewidth=0.8, alpha=0.6)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_title(f"Characteristic Time Scale ($\\sigma_Y^2={variance_value:g}$)")
+    ax.legend()
+    fig.tight_layout()
+    return fig, {"kind": "scatter_tmin_vs_rmin_all_points", "variance": float(variance_value)}
 
 
 def plot_hausdorff_vs_variance(var: np.ndarray, stats_hausdorff_lrp: np.ndarray, stats_hausdorff_fmm: np.ndarray, stats_hausdorff_dijkstra: np.ndarray, i_y: float):
@@ -313,7 +513,7 @@ def plot_ratio_mean_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm
     ax.plot(var, ratio_dijkstra, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="FP (Dijkstra)")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
-    ax.set_ylabel(r"$\mathbb{E}[t_{\mathrm{min}}]/\mathbb{E}[R_{\mathrm{min}}]$")
+    ax.set_ylabel(r"$\mathbb{E}\left[t_{\mathrm{min}}/(R_{\mathrm{min}}/dh)\right]$")
     ax.set_title("Variation of Mean Ratio with Variance")
     ax.legend(fontsize="9", loc="best")
     ax.grid(True, which="both")
@@ -328,7 +528,7 @@ def plot_ratio_var_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm:
     ax.plot(var, ratio_dijkstra, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="FP (Dijkstra)")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
-    ax.set_ylabel(r"$\mathrm{Var}(t_{\mathrm{min}})/\mathrm{Var}(R_{\mathrm{min}})$")
+    ax.set_ylabel(r"$\mathrm{Var}\left(t_{\mathrm{min}}/(R_{\mathrm{min}}/dh)\right)$")
     ax.set_title("Variation of Variance Ratio with Variance")
     ax.legend(fontsize="9", loc="best")
     ax.grid(True, which="both")
@@ -355,6 +555,29 @@ def plot_wasserstein_len_vs_variance(
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "wasserstein_len_variance"}
+
+
+def plot_length_cdf_for_variance(*, samples: dict[str, np.ndarray], variance_value: float, i_y: float):
+    fig, ax = plt.subplots(figsize=[5, 4])
+    for key, label, color in [
+        ("fp", "FP", COLORS["fp"]),
+        ("lrp", "LRP", COLORS["lrp"]),
+        ("fp_fmm", "FP (FMM)", COLORS["fpFMM"]),
+        ("fp_dijkstra", "FP (Dijkstra)", COLORS["fpDijkstra"]),
+    ]:
+        arr = np.asarray(samples.get(key, []), dtype=float).ravel()
+        finite = arr[np.isfinite(arr)]
+        if finite.size == 0:
+            continue
+        x, y = _empirical_cdf(finite / i_y)
+        ax.plot(x, y, linestyle="-", color=color, label=label)
+    ax.set_xlabel(r"$\ell / I_Y$")
+    ax.set_ylabel("Empirical CDF")
+    ax.set_title(fr"Path-Length CDFs ($\sigma_Y^2={variance_value:g}$)")
+    ax.legend(fontsize="9", loc="best")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": "length_cdf", "variance": float(variance_value)}
 
 
 def plot_std_hausdorff(x_var: np.ndarray, stats_std: dict[str, np.ndarray], i_y: float):
@@ -452,7 +675,14 @@ def write_manifest(output_dir: Path, *, config: dict[str, Any], artifacts: list[
     return path
 
 
-def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, unique_filenames: bool = False) -> list[FigureArtifact]:
+def run_stage4(
+    cfg: VisualizationConfig,
+    *,
+    cache_dir: Path | None = None,
+    unique_filenames: bool = False,
+    plot_variances: list[float] | None = None,
+    scatter_modes: list[str] | None = None,
+) -> list[FigureArtifact]:
     cache_dir = cache_dir or default_cache_dir(cfg)
     payload = load_pickle(cache_dir / "stage3_plot_inputs.pkl")
     prepared = payload["plot_inputs"]
@@ -469,6 +699,9 @@ def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, uniqu
     t_ref = prepared["t_ref"]
     x_var = prepared["std_x"]
     field_size = float(prepared.get("field_size", cfg.field_size_ref))
+    scatter_modes = ["mean"] if scatter_modes is None else scatter_modes
+    ratio_mean_fp = ratio_mean_fmm = ratio_mean_dijkstra = None
+    ratio_var_fp = ratio_var_fmm = ratio_var_dijkstra = None
 
     if "times" in cfg.sections:
         u1 = cfg.k_g * cfg.dh
@@ -488,6 +721,7 @@ def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, uniqu
             s["stats_fpt_fmm"],
             s["stats_fpt_dijkstra"],
             t_ref,
+            cfg.dh,
             analytical_tmin=analytical_tmin,
             analytical_label=f"Analytical $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
         )
@@ -500,9 +734,45 @@ def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, uniqu
         plt.close(fig)
 
     if "scatter" in cfg.sections:
-        fig, meta = plot_scatter_tmin_vs_rmin(s["stats_fpt"], s["stats_fpt_fmm"], s["stats_fpt_dijkstra"], s["stats_mhr"], t_ref)
-        artifacts.extend(save_figure(fig, section="scatter", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
-        plt.close(fig)
+        if "mean" in scatter_modes:
+            fig, meta = plot_scatter_tmin_vs_rmin(s["stats_fpt"], s["stats_fpt_fmm"], s["stats_fpt_dijkstra"], s["stats_mhr"], t_ref, cfg.dh)
+            artifacts.extend(save_figure(fig, section="scatter", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+            plt.close(fig)
+        if "all_points" in scatter_modes:
+            scatter_samples_by_var = prepared.get("scatter_time_samples")
+            if not isinstance(scatter_samples_by_var, dict):
+                all_warnings.append("Requested scatter all-points mode but Stage 3 cache is missing scatter_time_samples.")
+            else:
+                requested = _resolve_requested_plot_variances(var, plot_variances)
+                for variance_value in requested:
+                    key = _resolve_sample_key(scatter_samples_by_var, variance_value)
+                    if key is None:
+                        all_warnings.append(f"Missing scatter samples for sigma2={variance_value}.")
+                        continue
+                    sample_dict = scatter_samples_by_var.get(key, {})
+                    required = ("fpt", "fpt_fmm", "fpt_dijkstra", "mhr")
+                    if not all(rk in sample_dict for rk in required):
+                        all_warnings.append(f"Incomplete scatter samples for sigma2={variance_value}; skipping scatter figure.")
+                        continue
+                    try:
+                        fig, meta = plot_scatter_tmin_vs_rmin_all_points(sample_dict, t_ref=t_ref, dh=cfg.dh, variance_value=variance_value)
+                    except ValueError:
+                        all_warnings.append(f"Scatter samples invalid for sigma2={variance_value}; skipping scatter figure.")
+                        continue
+                    section = f"scatter_var{_value_slug(variance_value)}"
+                    artifacts.extend(
+                        save_figure(
+                            fig,
+                            section=section,
+                            output_dir=cfg.output_dir,
+                            run_id=cfg.run_id,
+                            dpi=cfg.figure_dpi,
+                            save_formats=cfg.save_formats,
+                            metadata=meta,
+                            unique_filenames=unique_filenames,
+                        )
+                    )
+                    plt.close(fig)
 
     if "hausdorff" in cfg.sections:
         fig, meta = plot_hausdorff_vs_variance(var, s["stats_hausdorff_lrp"], s["stats_hausdorff_fmm"], s["stats_hausdorff_dijkstra"], i_y)
@@ -520,18 +790,27 @@ def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, uniqu
         plt.close(fig)
 
     if "ratio_mean" in cfg.sections:
-        ratio_fp = _safe_ratio(s["stats_fpt"][:, 0], s["stats_mhr"][:, 0], label="mean(t_min)/mean(R_min) for FP", warnings=all_warnings)
-        ratio_fmm = _safe_ratio(s["stats_fpt_fmm"][:, 0], s["stats_mhr"][:, 0], label="mean(t_min)/mean(R_min) for FP(FMM)", warnings=all_warnings)
-        ratio_dijkstra = _safe_ratio(s["stats_fpt_dijkstra"][:, 0], s["stats_mhr"][:, 0], label="mean(t_min)/mean(R_min) for FP(Dijkstra)", warnings=all_warnings)
-        fig, meta = plot_ratio_mean_vs_variance(var, ratio_fp, ratio_fmm, ratio_dijkstra)
+        if ratio_mean_fp is None:
+            scatter_samples_by_var = prepared.get("scatter_time_samples")
+            ratio_mean_fp, ratio_mean_fmm, ratio_mean_dijkstra, ratio_var_fp, ratio_var_fmm, ratio_var_dijkstra = _compute_ratio_moments_series(
+                var,
+                scatter_samples_by_var=scatter_samples_by_var,
+                dh=cfg.dh,
+                warnings=all_warnings,
+            )
+        fig, meta = plot_ratio_mean_vs_variance(var, ratio_mean_fp, ratio_mean_fmm, ratio_mean_dijkstra)
         artifacts.extend(save_figure(fig, section="ratio_mean", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
 
     if "ratio_var" in cfg.sections:
-        var_rmin = np.square(s["stats_mhr"][:, 1])
-        ratio_var_fp = _safe_ratio(np.square(s["stats_fpt"][:, 1]), var_rmin, label="var(t_min)/var(R_min) for FP", warnings=all_warnings)
-        ratio_var_fmm = _safe_ratio(np.square(s["stats_fpt_fmm"][:, 1]), var_rmin, label="var(t_min)/var(R_min) for FP(FMM)", warnings=all_warnings)
-        ratio_var_dijkstra = _safe_ratio(np.square(s["stats_fpt_dijkstra"][:, 1]), var_rmin, label="var(t_min)/var(R_min) for FP(Dijkstra)", warnings=all_warnings)
+        if ratio_var_fp is None:
+            scatter_samples_by_var = prepared.get("scatter_time_samples")
+            ratio_mean_fp, ratio_mean_fmm, ratio_mean_dijkstra, ratio_var_fp, ratio_var_fmm, ratio_var_dijkstra = _compute_ratio_moments_series(
+                var,
+                scatter_samples_by_var=scatter_samples_by_var,
+                dh=cfg.dh,
+                warnings=all_warnings,
+            )
         fig, meta = plot_ratio_var_vs_variance(var, ratio_var_fp, ratio_var_fmm, ratio_var_dijkstra)
         artifacts.extend(save_figure(fig, section="ratio_var", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
@@ -547,6 +826,37 @@ def run_stage4(cfg: VisualizationConfig, *, cache_dir: Path | None = None, uniqu
             fig, meta = plot_wasserstein_len_vs_variance(var, w_fp_lrp, w_fp_fmm, w_fp_dijkstra, i_y)
             artifacts.extend(save_figure(fig, section="wasserstein_len", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
             plt.close(fig)
+
+            samples_by_var = prepared.get("length_cdf_samples")
+            if not isinstance(samples_by_var, dict):
+                all_warnings.append("Requested Wasserstein/CDF plot but Stage 3 cache is missing length_cdf_samples.")
+            else:
+                requested = _resolve_requested_plot_variances(var, plot_variances)
+                for variance_value in requested:
+                    key = _resolve_sample_key(samples_by_var, variance_value)
+                    if key is None:
+                        all_warnings.append(f"Missing length CDF samples for sigma2={variance_value}.")
+                        continue
+                    sample_dict = samples_by_var.get(key, {})
+                    required = ("fp", "lrp", "fp_fmm", "fp_dijkstra")
+                    if not all(rk in sample_dict for rk in required):
+                        all_warnings.append(f"Incomplete length CDF samples for sigma2={variance_value}; skipping CDF figure.")
+                        continue
+                    fig, meta = plot_length_cdf_for_variance(samples=sample_dict, variance_value=variance_value, i_y=i_y)
+                    section = f"cdf_len_var{_value_slug(variance_value)}"
+                    artifacts.extend(
+                        save_figure(
+                            fig,
+                            section=section,
+                            output_dir=cfg.output_dir,
+                            run_id=cfg.run_id,
+                            dpi=cfg.figure_dpi,
+                            save_formats=cfg.save_formats,
+                            metadata=meta,
+                            unique_filenames=unique_filenames,
+                        )
+                    )
+                    plt.close(fig)
 
     if "std_hausdorff" in cfg.sections and prepared["stats_std"] is not None:
         fig, meta = plot_std_hausdorff(x_var, prepared["stats_std"], i_y)
@@ -568,6 +878,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cache-dir", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None, help="Optional output directory override for figures/manifest")
     parser.add_argument(
+        "--plot-variances",
+        type=str,
+        default=None,
+        help="Comma-separated variance values used by CDF and scatter(all_points) plots (default: first available variance).",
+    )
+    parser.add_argument(
+        "--scatter-mode",
+        type=str,
+        default="mean",
+        help="Comma-separated scatter modes: mean, all_points, or both.",
+    )
+    parser.add_argument(
         "--unique-filenames",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -581,7 +903,13 @@ def main() -> int:
     cfg = load_config(args.config)
     if args.output_dir is not None:
         cfg.output_dir = args.output_dir.expanduser().resolve()
-    artifacts = run_stage4(cfg, cache_dir=args.cache_dir, unique_filenames=args.unique_filenames)
+    artifacts = run_stage4(
+        cfg,
+        cache_dir=args.cache_dir,
+        unique_filenames=args.unique_filenames,
+        plot_variances=_parse_plot_variances(args.plot_variances),
+        scatter_modes=_parse_scatter_modes(args.scatter_mode),
+    )
     print(f"Generated {len(artifacts)} figure artifact(s) in {cfg.output_dir}")
     return 0
 

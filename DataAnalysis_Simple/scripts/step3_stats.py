@@ -207,6 +207,78 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
     return {k: np.asarray(v, dtype=float) for k, v in out.items()}, warnings
 
 
+def collect_length_cdf_samples(var_data: dict[str, dict[str, Any]], var_values: list[float]) -> tuple[dict[str, dict[str, np.ndarray]], list[str]]:
+    out: dict[str, dict[str, np.ndarray]] = {}
+    warnings: list[str] = []
+
+    for var_ in var_values:
+        key = f"var_{var_}"
+        entry = var_data.get(key)
+        if entry is None:
+            warnings.append(f"Missing variance entry for length CDF samples at sigma2={var_}.")
+            continue
+
+        lengths = entry.get("lengths", {})
+        samples = {
+            "fp": _safe_first_size_samples(lengths, "fp"),
+            "lrp": _safe_first_size_samples(lengths, "lrp"),
+            "fp_fmm": _safe_first_size_samples(lengths, "fp_fmm"),
+            "fp_dijkstra": _safe_first_size_samples(lengths, "fp_dijkstra"),
+        }
+        if any(v is None for v in samples.values()):
+            warnings.append(f"Length CDF samples incomplete at sigma2={var_}; skipping this variance.")
+            continue
+
+        out[key] = {
+            "fp": np.asarray(samples["fp"], dtype=float),
+            "lrp": np.asarray(samples["lrp"], dtype=float),
+            "fp_fmm": np.asarray(samples["fp_fmm"], dtype=float),
+            "fp_dijkstra": np.asarray(samples["fp_dijkstra"], dtype=float),
+        }
+
+    return out, warnings
+
+
+def collect_scatter_time_samples(var_data: dict[str, dict[str, Any]], var_values: list[float]) -> tuple[dict[str, dict[str, np.ndarray]], list[str]]:
+    out: dict[str, dict[str, np.ndarray]] = {}
+    warnings: list[str] = []
+
+    keys = ("fpt", "fpt_fmm", "fpt_dijkstra", "mhr")
+    for var_ in var_values:
+        var_key = f"var_{var_}"
+        entry = var_data.get(var_key)
+        if entry is None:
+            warnings.append(f"Missing variance entry for scatter time samples at sigma2={var_}.")
+            continue
+        times = entry.get("times", {})
+        series = {k: times.get(k, []) for k in keys}
+        n_sizes = min(len(series[k]) for k in keys)
+        if n_sizes == 0:
+            warnings.append(f"No scatter time samples found at sigma2={var_}.")
+            continue
+
+        aligned: dict[str, list[np.ndarray]] = {k: [] for k in keys}
+        for size_idx in range(n_sizes):
+            arr = {k: np.asarray(series[k][size_idx], dtype=float).ravel() for k in keys}
+            n = min(arr[k].size for k in keys)
+            if n == 0:
+                continue
+            mask = np.ones(n, dtype=bool)
+            for k in keys:
+                mask &= np.isfinite(arr[k][:n])
+            if not np.any(mask):
+                continue
+            for k in keys:
+                aligned[k].append(arr[k][:n][mask])
+
+        if not all(aligned[k] for k in keys):
+            warnings.append(f"Scatter time samples are incomplete at sigma2={var_}; skipping this variance.")
+            continue
+        out[var_key] = {k: np.concatenate(aligned[k]).astype(float) for k in keys}
+
+    return out, warnings
+
+
 def compute_t_ref(k_g: float, dh: float, field_size: float, length_scale: float) -> float:
     i_y = length_scale * field_size
     q_ref = k_g * dh
@@ -255,6 +327,10 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
     s = collect_primary_stats(var_stats, var_values)
     ints = collect_integral_stats(var_line_integrals, var_values)
     wasserstein_len, derived_warnings = collect_wasserstein_length_distance(var_data, var_values)
+    length_cdf_samples, cdf_warnings = collect_length_cdf_samples(var_data, var_values)
+    scatter_time_samples, scatter_warnings = collect_scatter_time_samples(var_data, var_values)
+    derived_warnings.extend(cdf_warnings)
+    derived_warnings.extend(scatter_warnings)
 
     field_size_arr = np.asarray(var_field_size, dtype=float)
     field_size = cfg.field_size_ref if field_size_arr.size == 0 else float(field_size_arr[0])
@@ -291,6 +367,8 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
         "t_ref": t_ref,
         "stats_std": stats_std,
         "wasserstein_len": wasserstein_len,
+        "length_cdf_samples": length_cdf_samples,
+        "scatter_time_samples": scatter_time_samples,
         "derived_warnings": derived_warnings,
     }
 

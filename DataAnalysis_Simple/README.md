@@ -56,7 +56,7 @@ FIGURE_DIR=outputs/visualization/run3
 PYTHONPATH=./scripts python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --max-var-values 3 --max-mc-per-size 5 --hausdorff-compute-method custom --frechet-compute-method custom
 PYTHONPATH=./scripts python scripts/step3_stats.py   --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
-PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR"
+PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR" --plot-variances 0.1 --scatter-mode mean,all_points
 ```
 
 `configs/visualization.default.yaml` no longer specifies `output_dir`.  
@@ -103,6 +103,9 @@ PYTHONPATH=./scripts python scripts/step4_plot.py --config configs/visualization
 
 # override output directory
 PYTHONPATH=./scripts python scripts/step4_plot.py --config configs/visualization.default.yaml --output-dir ./outputs/visualization
+
+# choose variance values for separate path-length CDF and scatter(all_points) figures
+PYTHONPATH=./scripts python scripts/step4_plot.py --config configs/visualization.default.yaml --plot-variances 0.1,1.0 --scatter-mode all_points
 ```
 
 ## Single-Field Path Overlay
@@ -147,9 +150,13 @@ Default `sections` now include:
 - `endpoint`
 - `std_hausdorff`
 - `std_endpoint`
-- `ratio_mean`: plots `mean(t_min)/mean(R_min)` vs variance for FP, FP(FMM), FP(Dijkstra)
-- `ratio_var`: plots `var(t_min)/var(R_min)` vs variance for FP, FP(FMM), FP(Dijkstra)
+- `ratio_mean`: plots `mean(t_min/(R_min/dh))` vs variance for FP, FP(FMM), FP(Dijkstra)
+- `ratio_var`: plots `var(t_min/(R_min/dh))` vs variance for FP, FP(FMM), FP(Dijkstra)
 - `wasserstein_len`: plots normalized Wasserstein-1 distance between path-length distributions (CDF proxy) for FP-LRP, FP-FMM, FP-Dijkstra
+  - also writes separate path-length CDF figure(s) `run<id>_cdf_len_var<value>.png` for selected variance values
+  - use `--plot-variances` (comma-separated) to choose variance values; default is the first available variance
+- `scatter`: supports `--scatter-mode mean`, `--scatter-mode all_points`, or `--scatter-mode mean,all_points`
+  - all-points mode writes `run<id>_scatter_var<value>.png` for selected `--plot-variances`
 
 When enabled, the Frechet section is saved as `run<id>_frechet.png` (or corresponding configured format).
 
@@ -197,3 +204,4 @@ PYTHONPATH=./scripts python tests/compare_distance_by_shapely_with_custom.py \
 - `times` plot includes an analytical `t_min` overlay controlled by `analytical_percentile` (default `0.01`).
 - Analytical solve failures are recorded as warnings in `<output_dir>/manifest.json`.
 - `wasserstein_len` is normalized by `I_Y` and computed from Stage 2 path-length sample arrays.
+- Separate CDF figures use empirical CDF of normalized path length (`\ell/I_Y`) for FP, LRP, FP(FMM), FP(Dijkstra).

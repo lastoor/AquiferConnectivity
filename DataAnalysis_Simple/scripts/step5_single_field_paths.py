@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import cmcrameri.cm as cmc
 from matplotlib.colors import to_rgba
+import matplotlib.patheffects as pe
 
 import step1_index as step1
 import step2_metrics as step2
@@ -23,6 +24,21 @@ import step4_plot as step4
 
 _MC_PATTERN = re.compile(r"(?:_mc|_)(-?\d+)$")
 
+COLORS = {
+    "fp": "#000000",
+    "fpFMM": "#000000",
+    "fpDijkstra": "#000000",
+    "lrp": "#00008B",
+}
+
+LINESTYLES = {
+    "fp": "-",
+    "fpFMM": "--",
+    "fpDijkstra": ":",
+    "lrp": "-",
+}
+
+LINEWIDTHS = 2
 
 @dataclass(slots=True)
 class SelectedRun:
@@ -352,28 +368,40 @@ def solve_single_field(
     )
 
 
-def _normalized_extent(x: np.ndarray, y: np.ndarray, i_y: float) -> tuple[float, float, float, float]:
-    return (x[0] / i_y, (x[-1] + 1.0) / i_y, y[0] / i_y, (y[-1] + 1.0) / i_y)
+# def _normalized_extent(x: np.ndarray, y: np.ndarray, i_y: float) -> tuple[float, float, float, float]:
+#     return (x[0] / i_y, (x[-1] + 1.0) / i_y, y[0] / i_y, (y[-1] + 1.0) / i_y)
 
+def _normalized_extent(x: np.ndarray, y: np.ndarray, i_y: float) -> tuple[float, float, float, float]:
+    dx = x[1] - x[0]
+    dy = y[1] - y[0]
+    return (
+        (x[0] - dx/2) / i_y,
+        (x[-1] + dx/2) / i_y,
+        (y[0] - dy/2) / i_y,
+        (y[-1] + dy/2) / i_y,
+    )
 
 def _plot_common_overlays(ax: Any, result: PathSolveResult, i_y: float) -> None:
-    ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="black", linewidth=1.0, label="Source")
-    ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="black", linewidth=1.0, label="Target")
-    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=step4.COLORS["fp"], linewidth=1.8, label="FP")
-    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=step4.COLORS["fpFMM"], linewidth=1.6, label="FP (FMM)")
+    lw = LINEWIDTHS
+    ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label="FP", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label="FP (FMM)", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(
         result.fp_dijkstra[:, 0] / i_y,
         result.fp_dijkstra[:, 1] / i_y,
-        color=step4.COLORS["fpDijkstra"],
-        linewidth=1.6,
+        color=COLORS["fpDijkstra"],
+        linestyle=LINESTYLES["fpDijkstra"],
+        linewidth=lw,
         label="FP (Dijkstra)",
+        path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()],
     )
-    ax.plot(result.lrp[:, 0] / i_y, result.lrp[:, 1] / i_y, color=step4.COLORS["lrp"], linewidth=1.6, label="LRP")
+    ax.plot(result.lrp[:, 0] / i_y, result.lrp[:, 1] / i_y, color=COLORS["lrp"], linestyle=LINESTYLES["lrp"], linewidth=lw, label="LRP", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.set_title("")
     ax.set_xlabel(r"$x/I_Y$")
     ax.set_ylabel(r"$y/I_Y$")
     ax.set_aspect("equal", adjustable="box")
-    ax.legend(fontsize="8", loc="best", facecolor="lightgray")
+    ax.legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
 
 
 def _coerce_velocity_for_streamplot(result: PathSolveResult) -> tuple[np.ndarray, np.ndarray]:
@@ -428,13 +456,13 @@ def plot_paths_over_speed_with_streamlines(
     *,
     result: PathSolveResult,
     i_y: float,
-    colorbar_label: str = r"$|v|/q_{\mathrm{ref}}$",
+    colorbar_label: str = r"$|\mathbf{v}|/U$",
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     im = ax.imshow(
         speed_field,
         origin="lower",
-        cmap=cmc.oslo.reversed(),
+        cmap=cmc.lajolla.reversed(),
         interpolation="nearest",
         extent=_normalized_extent(result.x, result.y, i_y),
     )
@@ -528,7 +556,7 @@ def run_step5(
 
     fig_logk = plot_paths_over_field(
         logk_field,
-        cmap=cmc.oslo.reversed(),
+        cmap=cmc.lajolla.reversed(),
         colorbar_label=r"$\ln K$",
         result=result,
         i_y=i_y,
@@ -539,8 +567,8 @@ def run_step5(
     tmin_plot = np.where(np.isfinite(result.t_min), result.t_min / t_ref, np.nan)
     fig_tmin = plot_paths_over_field(
         tmin_plot,
-        cmap=cmc.oslo.reversed(),
-        colorbar_label=r"$T_{\min}/t_{\mathrm{ref}}$",
+        cmap=cmc.lajolla.reversed(),
+        colorbar_label=r"$T_{\min} U/I_Y$",
         result=result,
         i_y=i_y,
     )

@@ -253,3 +253,50 @@
   - `pytest -q tests/test_step5_single_field_paths.py` (`4 passed`)
 - Limitations/follow-up:
   - End-to-end solver runtime/physics behavior still depends on external Algorithm/FlowSimulation and dataset availability.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Added separate Stage-4 path-length CDF figure generation (one figure per selected variance), exposed CDF sample arrays from Stage 3, and added `--cdf-variances` CLI option in `step4_plot.py`.
+- Files changed:
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `tests/test_step3_stats.py`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step3_stats.py scripts/step4_plot.py tests/test_step3_stats.py tests/test_step4_plot.py`
+  - `pytest -q tests/test_step3_stats.py tests/test_step4_plot.py`
+- Limitations/follow-up:
+  - CDF figures are generated only when `wasserstein_len` section is enabled and rely on first-size finite length samples from Stage 2 payloads.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Updated Stage-4 scatter behavior to support `mhr/dh` normalization and optional raw all-point scatter per selected variance; unified variance CLI option to `--plot-variances` for both CDF and scatter(all_points), with comma-list `--scatter-mode` supporting `mean`, `all_points`, or both.
+- Files changed:
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `tests/conftest.py`
+  - `tests/test_step3_stats.py`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step3_stats.py scripts/step4_plot.py tests/test_step3_stats.py tests/test_step4_plot.py`
+  - `pytest -q tests/test_step3_stats.py tests/test_step4_plot.py`
+- Limitations/follow-up:
+  - Scatter all-points output depends on Stage-3 `scatter_time_samples` availability and currently pairs samples by aligned index after finite filtering.
+
+## 2026-03-04
+- Agent/tool: Codex (GPT-5)
+- Summary: Changed Stage-4 ratio plots to use `R_min/dh` normalization and compute moments of the sample-wise ratio (`mean(t_min/(R_min/dh))`, `var(t_min/(R_min/dh))`) instead of ratio-of-moments.
+- Files changed:
+  - `scripts/step4_plot.py`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step4_plot.py tests/test_step4_plot.py`
+  - `pytest -q tests/test_step4_plot.py`
+- Limitations/follow-up:
+  - Ratio moments are computed from aligned finite `scatter_time_samples`; missing per-variance samples produce `NaN` points with manifest warnings.
