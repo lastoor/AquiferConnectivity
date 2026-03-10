@@ -34,7 +34,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 3
+MC_SCHEMA_VERSION = 4
 
 # Flat output schema v3: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -44,6 +44,7 @@ MC_FIELDS = [
     "status_code",
     "status_message",
     "len_lrp",
+    "len_lrp_fmm",
     "len_fp_rk45",
     "len_fp_dijkstra",
     "len_fp_fmm",
@@ -51,20 +52,25 @@ MC_FIELDS = [
     "travel_time_dijkstra",
     "travel_time_fmm",
     "resistance_lrp",
+    "resistance_lrp_fmm",
     "hausdorff_fp_vs_lrp",
+    "hausdorff_fp_vs_lrp_fmm",
     "hausdorff_fp_vs_dijkstra",
     "hausdorff_fp_vs_fmm",
     "endpoint_dy_fp_vs_lrp",
+    "endpoint_dy_fp_vs_lrp_fmm",
     "endpoint_dy_fp_vs_dijkstra",
     "endpoint_dy_fp_vs_fmm",
     "endpoint_method",
     "endpoint_x_ref",
     "x_end_fp",
     "x_end_lrp",
+    "x_end_lrp_fmm",
     "x_end_fp_dijkstra",
     "x_end_fp_fmm",
     "y_end_fp",
     "y_end_lrp",
+    "y_end_lrp_fmm",
     "y_end_fp_dijkstra",
     "y_end_fp_fmm",
     "pt_velocity_layout",
@@ -139,8 +145,17 @@ def save_mc_outputs(config_mc: dict[str, Any], mc_index: int, outputs: dict[str,
     )
 
 
-def save_path_outputs(config_mc: dict[str, Any], mc_index: int, lrp: np.ndarray, fp_dijkstra: np.ndarray, fp_fmm: np.ndarray, fp_rk45: np.ndarray) -> None:
+def save_path_outputs(
+    config_mc: dict[str, Any],
+    mc_index: int,
+    lrp: np.ndarray,
+    lrp_fmm: np.ndarray,
+    fp_dijkstra: np.ndarray,
+    fp_fmm: np.ndarray,
+    fp_rk45: np.ndarray,
+) -> None:
     np.save(config_mc["path_size_path"] / f"lrp_size{config_mc['field_size_']}_mc{mc_index}.npy", lrp)
+    np.save(config_mc["path_size_path"] / f"lrp_fmm_size{config_mc['field_size_']}_mc{mc_index}.npy", lrp_fmm)
     np.save(config_mc["path_size_path"] / f"fp_dijkstra_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_dijkstra)
     np.save(config_mc["path_size_path"] / f"fp_fmm_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_fmm)
     np.save(config_mc["path_size_path"] / f"fp_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_rk45)
@@ -220,6 +235,49 @@ def endpoint_y_at_x(path_xy: np.ndarray, x_ref: float) -> float:
 
     idx = int(np.argmin(np.abs(x - x_ref)))
     return float(y[idx])
+
+
+def compute_fmm_path(
+    field: np.ndarray,
+    *,
+    source_rows: np.ndarray,
+    target_rows: np.ndarray,
+    x0: int,
+    x1: int,
+    grid_spacing: float,
+    traversable_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray | None, float | None, str | None]:
+    n_y, n_x = field.shape
+    source_mask = np.zeros((n_y, n_x), dtype=bool)
+    source_mask[source_rows, x0] = True
+    target_mask = np.zeros((n_y, n_x), dtype=bool)
+    target_mask[target_rows, x1] = True
+
+    if traversable_mask is None:
+        traversable_mask = np.isfinite(field) & (field > 0.0)
+    source_mask = source_mask & traversable_mask
+    target_mask = target_mask & traversable_mask
+    if not np.any(source_mask) or not np.any(target_mask):
+        return None, None, "No traversable source/target after masking"
+
+    T, _state = fast_marching_2d_regions(
+        field,
+        source_mask,
+        h=grid_spacing,
+        traversable_mask=traversable_mask,
+    )
+    path_ij, chosen_target = extract_path_source_to_target(
+        T,
+        source_mask,
+        target_mask,
+        traversable_mask=traversable_mask,
+    )
+    if len(path_ij) < 2:
+        return None, None, "FMM path extraction failed"
+
+    path_xy = np.asarray(path_ij, dtype=float)[:, [1, 0]][::-1]
+    travel_value = float(T[chosen_target[0], chosen_target[1]])
+    return path_xy, travel_value, None
 
 
 def make_config_for_size(config_base: dict[str, Any], idx_size: int) -> dict[str, Any]:
@@ -337,6 +395,27 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 logger.warning(f"[MC {mc_index}] Invalid LRP, retrying next trial.")
                 continue
 
+            k_traversable_mask = np.isfinite(k_field) & (k_field > 0.0)
+            lrp_fmm, total_R_fmm, lrp_fmm_error = compute_fmm_path(
+                k_field,
+                source_rows=source_rows,
+                target_rows=target_rows,
+                x0=x0,
+                x1=x1,
+                grid_spacing=config_mc["dx"],
+                traversable_mask=k_traversable_mask,
+            )
+            if lrp_fmm is None:
+                record["status_code"] = 10
+                record["status_message"] = lrp_fmm_error or "LRP(FMM) path extraction failed"
+                logger.warning(f"[MC {mc_index}] Invalid LRP (FMM), retrying next trial.")
+                continue
+            if not sim_path.is_path_valid(lrp_fmm, domain_box, len_min=np.abs(x1 - x0)):
+                record["status_code"] = 10
+                record["status_message"] = "Invalid LRP(FMM) geometry"
+                logger.warning(f"[MC {mc_index}] Invalid LRP (FMM), retrying next trial.")
+                continue
+
             # 3) Hydraulic head and velocity
             h, msg, is_successful = sim_hyd.solve_head(
                 k_field,
@@ -396,41 +475,20 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             # 3.2) FMM on speed
-            n_y, n_x = speed_fmm.shape
-            source_mask = np.zeros((n_y, n_x), dtype=bool)
-            source_mask[source_rows, x0] = True
-            target_mask = np.zeros((n_y, n_x), dtype=bool)
-            target_mask[target_rows, x1] = True
-
-            source_mask = source_mask & traversable_mask
-            target_mask = target_mask & traversable_mask
-            if not np.any(source_mask) or not np.any(target_mask):
-                record["status_code"] = 5
-                record["status_message"] = "No traversable source/target after masking"
-                logger.warning(f"[MC {mc_index}] No traversable source/target for FMM, retrying.")
-                continue
-
-            T, _state = fast_marching_2d_regions(
+            fp_fmm, total_t_fmm, fp_fmm_error = compute_fmm_path(
                 speed_fmm,
-                source_mask,
-                h=config_mc["dx"],
+                source_rows=source_rows,
+                target_rows=target_rows,
+                x0=x0,
+                x1=x1,
+                grid_spacing=config_mc["dx"],
                 traversable_mask=traversable_mask,
             )
-            path_ij, chosen_target = extract_path_source_to_target(
-                T,
-                source_mask,
-                target_mask,
-                traversable_mask=traversable_mask,
-            )
-            if len(path_ij) < 2:
+            if fp_fmm is None:
                 record["status_code"] = 5
-                record["status_message"] = "FMM path extraction failed"
+                record["status_message"] = fp_fmm_error or "FMM path extraction failed"
                 logger.warning(f"[MC {mc_index}] Invalid FP (FMM), retrying next trial.")
                 continue
-
-            path_ij = np.asarray(path_ij, dtype=float)
-            # convert (i, j) -> (x, y), source -> target orientation
-            fp_fmm = path_ij[:, [1, 0]][::-1]
             if not sim_path.is_path_valid(fp_fmm, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 5
                 record["status_message"] = "Invalid FP(FMM) geometry"
@@ -481,10 +539,12 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
 
             # 5) Metrics and persist
             hist_fp_lrp, _, _ = distance_distribution(fp_rk45, lrp, ds=1.0)
+            hist_fp_lrp_fmm, _, _ = distance_distribution(fp_rk45, lrp_fmm, ds=1.0)
             hist_fp_dij, _, _ = distance_distribution(fp_rk45, fp_dijkstra, ds=1.0)
             hist_fp_fmm, _, _ = distance_distribution(fp_rk45, fp_fmm, ds=1.0)
             y_end_fp = endpoint_y_at_x(fp_rk45, x_ref=x_ref)
             y_end_lrp = endpoint_y_at_x(lrp, x_ref=x_ref)
+            y_end_lrp_fmm = endpoint_y_at_x(lrp_fmm, x_ref=x_ref)
             y_end_fp_dij = endpoint_y_at_x(fp_dijkstra, x_ref=x_ref)
             y_end_fp_fmm = endpoint_y_at_x(fp_fmm, x_ref=x_ref)
 
@@ -493,27 +553,33 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "status_code": 0,
                     "status_message": "ok",
                     "len_lrp": float(sim_utils.euclidean_length(lrp)),
+                    "len_lrp_fmm": float(sim_utils.euclidean_length(lrp_fmm)),
                     "len_fp_rk45": float(sim_utils.euclidean_length(fp_rk45)),
                     "len_fp_dijkstra": float(sim_utils.euclidean_length(fp_dijkstra)),
                     "len_fp_fmm": float(sim_utils.euclidean_length(fp_fmm)),
                     "travel_time_rk45": float(res["travel_time"]),
                     "travel_time_dijkstra": float(total_t_dijkstra),
-                    "travel_time_fmm": float(T[chosen_target[0], chosen_target[1]]),
+                    "travel_time_fmm": float(total_t_fmm),
                     "resistance_lrp": float(total_R),
+                    "resistance_lrp_fmm": float(total_R_fmm),
                     "hausdorff_fp_vs_lrp": float(np.max(hist_fp_lrp)),
+                    "hausdorff_fp_vs_lrp_fmm": float(np.max(hist_fp_lrp_fmm)),
                     "hausdorff_fp_vs_dijkstra": float(np.max(hist_fp_dij)),
                     "hausdorff_fp_vs_fmm": float(np.max(hist_fp_fmm)),
                     "endpoint_method": "interp_at_xref",
                     "endpoint_x_ref": float(x_ref),
                     "x_end_fp": float(fp_rk45[-1, 0]),
                     "x_end_lrp": float(lrp[-1, 0]),
+                    "x_end_lrp_fmm": float(lrp_fmm[-1, 0]),
                     "x_end_fp_dijkstra": float(fp_dijkstra[-1, 0]),
                     "x_end_fp_fmm": float(fp_fmm[-1, 0]),
                     "y_end_fp": float(y_end_fp),
                     "y_end_lrp": float(y_end_lrp),
+                    "y_end_lrp_fmm": float(y_end_lrp_fmm),
                     "y_end_fp_dijkstra": float(y_end_fp_dij),
                     "y_end_fp_fmm": float(y_end_fp_fmm),
                     "endpoint_dy_fp_vs_lrp": float(y_end_fp - y_end_lrp),
+                    "endpoint_dy_fp_vs_lrp_fmm": float(y_end_fp - y_end_lrp_fmm),
                     "endpoint_dy_fp_vs_dijkstra": float(y_end_fp - y_end_fp_dij),
                     "endpoint_dy_fp_vs_fmm": float(y_end_fp - y_end_fp_fmm),
                     "pt_velocity_layout": config_mc["pt_velocity_layout"],
@@ -531,6 +597,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 config_mc=config_mc,
                 mc_index=mc_index,
                 lrp=lrp,
+                lrp_fmm=lrp_fmm,
                 fp_dijkstra=fp_dijkstra,
                 fp_fmm=fp_fmm,
                 fp_rk45=fp_rk45,

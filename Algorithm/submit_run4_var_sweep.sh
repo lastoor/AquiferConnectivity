@@ -4,7 +4,7 @@ set -euo pipefail
 VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5") 
 # VAR=("0.1" "5")
 length_scale="0.05"
-run="4_refined"
+run="5"
 dh="0.1"
 
 # Keep original workload profile
@@ -13,7 +13,7 @@ num_mc="1000"
 field_size="200"
 
 # Keep original Slurm CPU profile
-time="1:30:00"
+time="1:00:00"
 # time="00:10:00"
 mem_per_cpu="8GB"
 cpus_per_task="10"
@@ -45,6 +45,9 @@ for var in "${VAR[@]}"; do
 echo "Running var=${var} on node \$SLURM_NODELIST"
 echo "Start Time: \$(date)"
 
+output_dir="${run_root}/var_${var}"
+mkdir -p "\${output_dir}"
+
 # Keep threading controlled for stability
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
@@ -57,28 +60,43 @@ conda deactivate
 conda activate taichi_env
 which python
 
-# ./scripts/run_in_fmm_env.sh python ./scripts/run_fmm.py \\
-#   --path_workdir ${run_root}/var_${var} \\
-#   --num_mc ${num_mc} \\
-#   --field_size ${field_size} \\
-#   --length_scale ${length_scale} \\
-#   --minpadding 0 \\
-#   --var ${var} \\
-#   --dh ${dh} \\
-#   --fmm_velocity_layout face \\
-#   --fmm_face_mapping to_cell_avg \\
-#   --fmm_zero_policy obstacle \\
-#   --fmm_min_speed 1e-12
+info_file="\${output_dir}/run_info.txt"
+{
+  echo "created_at=\$(date --iso-8601=seconds)"
+  echo "job_id=\${SLURM_JOB_ID:-}"
+  echo "job_name=\${SLURM_JOB_NAME:-}"
+  echo "node_list=\${SLURM_NODELIST:-}"
+  echo "repo_root=${repo_root}"
+  echo "run_root=${run_root}"
+  echo "output_dir=\${output_dir}"
+  echo "var=${var}"
+  echo "length_scale=${length_scale}"
+  echo "run=${run}"
+  echo "dh=${dh}"
+  echo "num_mc=${num_mc}"
+  echo "field_size=${field_size}"
+  echo "time=${time}"
+  echo "mem_per_cpu=${mem_per_cpu}"
+  echo "cpus_per_task=${cpus_per_task}"
+  echo "account=${account}"
+  echo "partition=${partition}"
+  echo "seed=0"
+  echo "seed_mode=strict_mc"
+  echo "variance_seed_policy=same"
+  echo "fmm_velocity_layout=face"
+  echo "fmm_face_mapping=to_cell_avg"
+  echo "fmm_zero_policy=obstacle"
+  echo "fmm_min_speed=1e-12"
+} > "\${info_file}"
 
 ./scripts/run_in_fmm_env.sh python ./scripts/run_fmm.py \\
-  --path_workdir ${run_root}/var_${var} \\
+  --path_workdir "\${output_dir}" \\
   --num_mc ${num_mc} \\
   --field_size ${field_size} \\
   --length_scale ${length_scale} \\
   --minpadding 0 \\
   --var ${var} \\
   --dh ${dh} \\
-  # --pt_velocity_layout face \\
   --seed 0 \\
   --seed_mode strict_mc \\
   --variance_seed_policy same \\

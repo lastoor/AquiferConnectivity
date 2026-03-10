@@ -72,20 +72,25 @@ def _infer_std_count(stats_std: dict[str, np.ndarray] | None) -> int | None:
 
 def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[float]) -> dict[str, np.ndarray]:
     stats_lrp = []
+    stats_lrp_fmm = []
     stats_fp = []
     stats_fp_dijkstra = []
     stats_fp_fmm = []
     stats_mhr = []
+    stats_mhr_fmm = []
     stats_fpt = []
     stats_fpt_dijkstra = []
     stats_fpt_fmm = []
     stats_hausdorff_lrp = []
+    stats_hausdorff_lrp_fmm = []
     stats_hausdorff_dijkstra = []
     stats_hausdorff_fmm = []
     stats_frechet_lrp = []
+    stats_frechet_lrp_fmm = []
     stats_frechet_dijkstra = []
     stats_frechet_fmm = []
     stats_endpoint_lrp = []
+    stats_endpoint_lrp_fmm = []
     stats_endpoint_dijkstra = []
     stats_endpoint_fmm = []
 
@@ -93,39 +98,49 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         key = f"var_{var_}"
         entry = stats[key]
         stats_lrp.append(_mean_std_pair(entry["lengths"]["lrp"]))
+        stats_lrp_fmm.append(_mean_std_pair(entry["lengths"]["lrp_fmm"]))
         stats_fp.append(_mean_std_pair(entry["lengths"]["fp"]))
         stats_fp_dijkstra.append(_mean_std_pair(entry["lengths"]["fp_dijkstra"]))
         stats_fp_fmm.append(_mean_std_pair(entry["lengths"]["fp_fmm"]))
         stats_mhr.append(_mean_std_pair(entry["times"]["mhr"]))
+        stats_mhr_fmm.append(_mean_std_pair(entry["times"]["mhr_fmm"]))
         stats_fpt.append(_mean_std_pair(entry["times"]["fpt"]))
         stats_fpt_dijkstra.append(_mean_std_pair(entry["times"]["fpt_dijkstra"]))
         stats_fpt_fmm.append(_mean_std_pair(entry["times"]["fpt_fmm"]))
         stats_hausdorff_lrp.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrp"]))
+        stats_hausdorff_lrp_fmm.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrpFMM"]))
         stats_hausdorff_dijkstra.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_fpDijkstra"]))
         stats_hausdorff_fmm.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_fpFMM"]))
         stats_frechet_lrp.append(_mean_std_pair(entry["distances"]["frechet"]["fp_lrp"]))
+        stats_frechet_lrp_fmm.append(_mean_std_pair(entry["distances"]["frechet"]["fp_lrpFMM"]))
         stats_frechet_dijkstra.append(_mean_std_pair(entry["distances"]["frechet"]["fp_fpDijkstra"]))
         stats_frechet_fmm.append(_mean_std_pair(entry["distances"]["frechet"]["fp_fpFMM"]))
         stats_endpoint_lrp.append(_mean_std_pair(entry["distances"]["end_point"]["fp_lrp"]))
+        stats_endpoint_lrp_fmm.append(_mean_std_pair(entry["distances"]["end_point"]["fp_lrpFMM"]))
         stats_endpoint_dijkstra.append(_mean_std_pair(entry["distances"]["end_point"]["fp_fpDijkstra"]))
         stats_endpoint_fmm.append(_mean_std_pair(entry["distances"]["end_point"]["fp_fpFMM"]))
 
     return {
         "stats_lrp": np.asarray(stats_lrp, dtype=float),
+        "stats_lrp_fmm": np.asarray(stats_lrp_fmm, dtype=float),
         "stats_fp": np.asarray(stats_fp, dtype=float),
         "stats_fp_dijkstra": np.asarray(stats_fp_dijkstra, dtype=float),
         "stats_fp_fmm": np.asarray(stats_fp_fmm, dtype=float),
         "stats_mhr": np.asarray(stats_mhr, dtype=float),
+        "stats_mhr_fmm": np.asarray(stats_mhr_fmm, dtype=float),
         "stats_fpt": np.asarray(stats_fpt, dtype=float),
         "stats_fpt_dijkstra": np.asarray(stats_fpt_dijkstra, dtype=float),
         "stats_fpt_fmm": np.asarray(stats_fpt_fmm, dtype=float),
         "stats_hausdorff_lrp": np.asarray(stats_hausdorff_lrp, dtype=float),
+        "stats_hausdorff_lrp_fmm": np.asarray(stats_hausdorff_lrp_fmm, dtype=float),
         "stats_hausdorff_dijkstra": np.asarray(stats_hausdorff_dijkstra, dtype=float),
         "stats_hausdorff_fmm": np.asarray(stats_hausdorff_fmm, dtype=float),
         "stats_frechet_lrp": np.asarray(stats_frechet_lrp, dtype=float),
+        "stats_frechet_lrp_fmm": np.asarray(stats_frechet_lrp_fmm, dtype=float),
         "stats_frechet_dijkstra": np.asarray(stats_frechet_dijkstra, dtype=float),
         "stats_frechet_fmm": np.asarray(stats_frechet_fmm, dtype=float),
         "stats_endpoint_lrp": np.asarray(stats_endpoint_lrp, dtype=float),
+        "stats_endpoint_lrp_fmm": np.asarray(stats_endpoint_lrp_fmm, dtype=float),
         "stats_endpoint_dijkstra": np.asarray(stats_endpoint_dijkstra, dtype=float),
         "stats_endpoint_fmm": np.asarray(stats_endpoint_fmm, dtype=float),
     }
@@ -137,6 +152,8 @@ def collect_integral_stats(line_integrals: dict[str, dict[str, Any]], var_values
         "int2_fp": [],
         "int_lrp": [],
         "int2_lrp": [],
+        "int_lrp_fmm": [],
+        "int2_lrp_fmm": [],
         "int_fp_dijkstra": [],
         "int2_fp_dijkstra": [],
         "int_fp_fmm": [],
@@ -148,6 +165,8 @@ def collect_integral_stats(line_integrals: dict[str, dict[str, Any]], var_values
         out["int2_fp"].append([li["int_logk2_fp"]["mean"], li["int_logk2_fp"]["std"]])
         out["int_lrp"].append([li["int_logk_lrp"]["mean"], li["int_logk_lrp"]["std"]])
         out["int2_lrp"].append([li["int_logk2_lrp"]["mean"], li["int_logk2_lrp"]["std"]])
+        out["int_lrp_fmm"].append([li["int_logk_lrp_fmm"]["mean"], li["int_logk_lrp_fmm"]["std"]])
+        out["int2_lrp_fmm"].append([li["int_logk2_lrp_fmm"]["mean"], li["int_logk2_lrp_fmm"]["std"]])
         out["int_fp_dijkstra"].append([li["int_logk_fp_dijkstra"]["mean"], li["int_logk_fp_dijkstra"]["std"]])
         out["int2_fp_dijkstra"].append([li["int_logk2_fp_dijkstra"]["mean"], li["int_logk2_fp_dijkstra"]["std"]])
         out["int_fp_fmm"].append([li["int_logk_fp_fmm"]["mean"], li["int_logk_fp_fmm"]["std"]])
@@ -172,6 +191,7 @@ def _safe_first_size_samples(lengths: dict[str, list[np.ndarray]], key: str) -> 
 def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var_values: list[float]) -> tuple[dict[str, np.ndarray], list[str]]:
     out = {
         "fp_lrp": [],
+        "fp_lrpFMM": [],
         "fp_fpDijkstra": [],
         "fp_fpFMM": [],
     }
@@ -181,6 +201,7 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
         entry = var_data.get(f"var_{var_}")
         if entry is None:
             out["fp_lrp"].append(np.nan)
+            out["fp_lrpFMM"].append(np.nan)
             out["fp_fpDijkstra"].append(np.nan)
             out["fp_fpFMM"].append(np.nan)
             warnings.append(f"Missing variance entry for Wasserstein length metric at sigma2={var_}.")
@@ -189,11 +210,13 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
         lengths = entry.get("lengths", {})
         fp = _safe_first_size_samples(lengths, "fp")
         lrp = _safe_first_size_samples(lengths, "lrp")
+        lrp_fmm = _safe_first_size_samples(lengths, "lrp_fmm")
         fp_dijkstra = _safe_first_size_samples(lengths, "fp_dijkstra")
         fp_fmm = _safe_first_size_samples(lengths, "fp_fmm")
 
         pair_data = {
             "fp_lrp": lrp,
+            "fp_lrpFMM": lrp_fmm,
             "fp_fpDijkstra": fp_dijkstra,
             "fp_fpFMM": fp_fmm,
         }
@@ -222,6 +245,7 @@ def collect_length_cdf_samples(var_data: dict[str, dict[str, Any]], var_values: 
         samples = {
             "fp": _safe_first_size_samples(lengths, "fp"),
             "lrp": _safe_first_size_samples(lengths, "lrp"),
+            "lrp_fmm": _safe_first_size_samples(lengths, "lrp_fmm"),
             "fp_fmm": _safe_first_size_samples(lengths, "fp_fmm"),
             "fp_dijkstra": _safe_first_size_samples(lengths, "fp_dijkstra"),
         }
@@ -232,6 +256,7 @@ def collect_length_cdf_samples(var_data: dict[str, dict[str, Any]], var_values: 
         out[key] = {
             "fp": np.asarray(samples["fp"], dtype=float),
             "lrp": np.asarray(samples["lrp"], dtype=float),
+            "lrp_fmm": np.asarray(samples["lrp_fmm"], dtype=float),
             "fp_fmm": np.asarray(samples["fp_fmm"], dtype=float),
             "fp_dijkstra": np.asarray(samples["fp_dijkstra"], dtype=float),
         }
@@ -243,7 +268,7 @@ def collect_scatter_time_samples(var_data: dict[str, dict[str, Any]], var_values
     out: dict[str, dict[str, np.ndarray]] = {}
     warnings: list[str] = []
 
-    keys = ("fpt", "fpt_fmm", "fpt_dijkstra", "mhr")
+    keys = ("fpt", "fpt_fmm", "fpt_dijkstra", "mhr", "mhr_fmm")
     for var_ in var_values:
         var_key = f"var_{var_}"
         entry = var_data.get(var_key)
@@ -279,6 +304,78 @@ def collect_scatter_time_samples(var_data: dict[str, dict[str, Any]], var_values
     return out, warnings
 
 
+def collect_endpoint_box_samples(var_data: dict[str, dict[str, Any]], var_values: list[float]) -> tuple[dict[str, dict[str, np.ndarray]], list[str]]:
+    out: dict[str, dict[str, np.ndarray]] = {}
+    warnings: list[str] = []
+    pair_keys = ("fp_lrp", "fp_lrpFMM", "fp_fpFMM", "fp_fpDijkstra")
+
+    for var_ in var_values:
+        key = f"var_{var_}"
+        entry = var_data.get(key)
+        if entry is None:
+            warnings.append(f"Missing variance entry for endpoint box samples at sigma2={var_}.")
+            continue
+
+        distances = entry.get("distances", {}).get("end_point", {})
+        sample_dict: dict[str, np.ndarray] = {}
+        missing = False
+        for pair_key in pair_keys:
+            arr_list = distances.get(pair_key, [])
+            merged: list[np.ndarray] = []
+            for arr in arr_list:
+                flat = np.asarray(arr, dtype=float).ravel()
+                finite = flat[np.isfinite(flat)]
+                if finite.size > 0:
+                    merged.append(finite)
+            if not merged:
+                warnings.append(f"Endpoint box samples missing for {pair_key} at sigma2={var_}.")
+                missing = True
+                continue
+            sample_dict[pair_key] = np.concatenate(merged).astype(float)
+
+        if missing:
+            continue
+        out[key] = sample_dict
+
+    return out, warnings
+
+
+def collect_hausdorff_box_samples(var_data: dict[str, dict[str, Any]], var_values: list[float]) -> tuple[dict[str, dict[str, np.ndarray]], list[str]]:
+    out: dict[str, dict[str, np.ndarray]] = {}
+    warnings: list[str] = []
+    pair_keys = ("fp_lrp", "fp_lrpFMM", "fp_fpFMM", "fp_fpDijkstra")
+
+    for var_ in var_values:
+        key = f"var_{var_}"
+        entry = var_data.get(key)
+        if entry is None:
+            warnings.append(f"Missing variance entry for Hausdorff box samples at sigma2={var_}.")
+            continue
+
+        distances = entry.get("distances", {}).get("hausdorff", {})
+        sample_dict: dict[str, np.ndarray] = {}
+        missing = False
+        for pair_key in pair_keys:
+            arr_list = distances.get(pair_key, [])
+            merged: list[np.ndarray] = []
+            for arr in arr_list:
+                flat = np.asarray(arr, dtype=float).ravel()
+                finite = flat[np.isfinite(flat)]
+                if finite.size > 0:
+                    merged.append(finite)
+            if not merged:
+                warnings.append(f"Hausdorff box samples missing for {pair_key} at sigma2={var_}.")
+                missing = True
+                continue
+            sample_dict[pair_key] = np.concatenate(merged).astype(float)
+
+        if missing:
+            continue
+        out[key] = sample_dict
+
+    return out, warnings
+
+
 def compute_t_ref(k_g: float, dh: float, field_size: float, length_scale: float) -> float:
     i_y = length_scale * field_size
     q_ref = k_g * dh
@@ -292,24 +389,29 @@ def compute_i_y(field_size: float, length_scale: float) -> float:
 def compute_taylor_times(
     stats_fp: np.ndarray,
     stats_lrp: np.ndarray,
+    stats_lrp_fmm: np.ndarray,
     stats_fp_dijkstra: np.ndarray,
     stats_fp_fmm: np.ndarray,
     int_fp: np.ndarray,
     int_lrp: np.ndarray,
+    int_lrp_fmm: np.ndarray,
     int_fp_dijkstra: np.ndarray,
     int_fp_fmm: np.ndarray,
     int2_fp: np.ndarray,
     int2_lrp: np.ndarray,
+    int2_lrp_fmm: np.ndarray,
     int2_fp_dijkstra: np.ndarray,
     int2_fp_fmm: np.ndarray,
     dh: float,
 ) -> dict[str, np.ndarray]:
     taylor_lrp = stats_lrp[:, 0] - int_lrp[:, 0] + int2_lrp[:, 0] / 2.0
+    taylor_lrp_fmm = stats_lrp_fmm[:, 0] - int_lrp_fmm[:, 0] + int2_lrp_fmm[:, 0] / 2.0
     taylor_fp = (stats_fp[:, 0] - int_fp[:, 0] + int2_fp[:, 0] / 2.0) / dh
     taylor_fp_dijkstra = (stats_fp_dijkstra[:, 0] - int_fp_dijkstra[:, 0] + int2_fp_dijkstra[:, 0] / 2.0) / dh
     taylor_fp_fmm = (stats_fp_fmm[:, 0] - int_fp_fmm[:, 0] + int2_fp_fmm[:, 0] / 2.0) / dh
     return {
         "lrp": taylor_lrp,
+        "lrp_fmm": taylor_lrp_fmm,
         "fp": taylor_fp,
         "fp_dijkstra": taylor_fp_dijkstra,
         "fp_fmm": taylor_fp_fmm,
@@ -329,8 +431,12 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
     wasserstein_len, derived_warnings = collect_wasserstein_length_distance(var_data, var_values)
     length_cdf_samples, cdf_warnings = collect_length_cdf_samples(var_data, var_values)
     scatter_time_samples, scatter_warnings = collect_scatter_time_samples(var_data, var_values)
+    endpoint_box_samples, endpoint_box_warnings = collect_endpoint_box_samples(var_data, var_values)
+    hausdorff_box_samples, hausdorff_box_warnings = collect_hausdorff_box_samples(var_data, var_values)
     derived_warnings.extend(cdf_warnings)
     derived_warnings.extend(scatter_warnings)
+    derived_warnings.extend(endpoint_box_warnings)
+    derived_warnings.extend(hausdorff_box_warnings)
 
     field_size_arr = np.asarray(var_field_size, dtype=float)
     field_size = cfg.field_size_ref if field_size_arr.size == 0 else float(field_size_arr[0])
@@ -339,14 +445,17 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
     taylor = compute_taylor_times(
         s["stats_fp"],
         s["stats_lrp"],
+        s["stats_lrp_fmm"],
         s["stats_fp_dijkstra"],
         s["stats_fp_fmm"],
         ints["int_fp"],
         ints["int_lrp"],
+        ints["int_lrp_fmm"],
         ints["int_fp_dijkstra"],
         ints["int_fp_fmm"],
         ints["int2_fp"],
         ints["int2_lrp"],
+        ints["int2_lrp_fmm"],
         ints["int2_fp_dijkstra"],
         ints["int2_fp_fmm"],
         cfg.dh,
@@ -369,6 +478,8 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
         "wasserstein_len": wasserstein_len,
         "length_cdf_samples": length_cdf_samples,
         "scatter_time_samples": scatter_time_samples,
+        "endpoint_box_samples": endpoint_box_samples,
+        "hausdorff_box_samples": hausdorff_box_samples,
         "derived_warnings": derived_warnings,
     }
 

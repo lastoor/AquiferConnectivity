@@ -1,5 +1,20 @@
 # Agent Work Log
 
+## 2026-03-10
+- Agent/tool: Codex (GPT-5)
+- Summary: Updated Stage 4 plotting so `endpoint` renders as a grouped sample-based box plot, added separate `times_box` and `hausdorff_box` grouped box-plot sections while keeping the existing `times` and `hausdorff` summary plots, and refreshed README documentation to match the current path/plot outputs.
+- Files changed:
+  - `scripts/step1_index.py`
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step3_stats.py scripts/step4_plot.py`
+  - `python -m py_compile scripts/step1_index.py scripts/step3_stats.py scripts/step4_plot.py`
+- Limitations/follow-up:
+  - Full Stage 4 runtime was not executed here, so figure generation was validated by compile checks and code-path review rather than a complete plotting run.
+
 ## 2026-03-04
 - Agent/tool: Codex (GPT-5)
 - Summary: Created `DataAnalysis_Simple` as a standalone simplified repository with a flat 4-stage pipeline and no `visualization/` package boundary.

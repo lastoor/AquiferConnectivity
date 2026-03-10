@@ -29,6 +29,7 @@ COLORS = {
     "fpFMM": "#000000",
     "fpDijkstra": "#000000",
     "lrp": "#00008B",
+    "lrpFMM": "#6A3FB6",
 }
 
 LINESTYLES = {
@@ -36,6 +37,7 @@ LINESTYLES = {
     "fpFMM": "--",
     "fpDijkstra": ":",
     "lrp": "-",
+    "lrpFMM": "-.",
 }
 
 LINEWIDTHS = 2
@@ -56,6 +58,7 @@ class PathSolveResult:
     fp_fmm: np.ndarray
     fp_dijkstra: np.ndarray
     lrp: np.ndarray
+    lrp_fmm: np.ndarray
     t_min: np.ndarray
     x: np.ndarray
     y: np.ndarray
@@ -229,6 +232,43 @@ def _require_path_valid(sim_path: Any, path: np.ndarray, domain_box: tuple[int, 
         raise RuntimeError(f"Invalid {name} geometry.")
 
 
+def _compute_fmm_path(
+    field: np.ndarray,
+    *,
+    source_rows: np.ndarray,
+    target_rows: np.ndarray,
+    x0: int,
+    x1: int,
+    grid_spacing: float,
+    fast_marching_2d_regions: Any,
+    extract_path_source_to_target: Any,
+    traversable_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    n_y, n_x = field.shape
+    source_mask = np.zeros((n_y, n_x), dtype=bool)
+    target_mask = np.zeros((n_y, n_x), dtype=bool)
+    source_mask[source_rows, x0] = True
+    target_mask[target_rows, x1] = True
+    if traversable_mask is None:
+        traversable_mask = np.isfinite(field) & (field > 0.0)
+    source_mask = source_mask & traversable_mask
+    target_mask = target_mask & traversable_mask
+    if not np.any(source_mask) or not np.any(target_mask):
+        raise RuntimeError("No traversable source/target cells for FMM.")
+
+    t_field, _state = fast_marching_2d_regions(field, source_mask, h=grid_spacing, traversable_mask=traversable_mask)
+    path_ij, _chosen_target = extract_path_source_to_target(
+        t_field,
+        source_mask,
+        target_mask,
+        traversable_mask=traversable_mask,
+    )
+    if len(path_ij) < 2:
+        raise RuntimeError("FMM path extraction failed.")
+    path_xy = np.asarray(path_ij, dtype=float)[:, [1, 0]][::-1]
+    return path_xy, t_field
+
+
 def solve_single_field(
     logk_field: np.ndarray,
     *,
@@ -271,9 +311,22 @@ def solve_single_field(
     source = domain["source"]
     target = domain["target"]
     domain_box = domain["domain_box"]
+    source_rows = np.arange(y0, y1, dtype=int)
+    target_rows = np.arange(0, field_size - 1, dtype=int)
 
     lrp, _total_r, _s_node, _e_node, _rmap = sim_path.dijkstra_2d_least_resistance(k_field, source, target, average="harmonic")
     _require_path_valid(sim_path, lrp, domain_box, x0, x1, "LRP")
+    lrp_fmm, _r_min_field = _compute_fmm_path(
+        k_field,
+        source_rows=source_rows,
+        target_rows=target_rows,
+        x0=x0,
+        x1=x1,
+        grid_spacing=1.0,
+        fast_marching_2d_regions=fast_marching_2d_regions,
+        extract_path_source_to_target=extract_path_source_to_target,
+    )
+    _require_path_valid(sim_path, lrp_fmm, domain_box, x0, x1, "LRP (FMM)")
 
     h, msg, is_success = sim_hyd.solve_head(k_field, x, y, dh=dh, rtol=1e-10, atol=1e-20, max_it=10000)
     if not is_success:
@@ -292,25 +345,17 @@ def solve_single_field(
     fp_dijkstra, _total_t_dij, _sd, _ed, _rmap_v = sim_path.dijkstra_2d_least_resistance(speed_fmm, source, target, average="arithmetic")
     _require_path_valid(sim_path, fp_dijkstra, domain_box, x0, x1, "FP (Dijkstra)")
 
-    source_mask = np.zeros_like(speed_fmm, dtype=bool)
-    target_mask = np.zeros_like(speed_fmm, dtype=bool)
-    source_mask[y0:y1, x0] = True
-    target_mask[:, x1] = True
-    source_mask = source_mask & traversable_mask
-    target_mask = target_mask & traversable_mask
-    if not np.any(source_mask) or not np.any(target_mask):
-        raise RuntimeError("No traversable source/target cells for FMM.")
-
-    t_min, _state = fast_marching_2d_regions(speed_fmm, source_mask, h=1.0, traversable_mask=traversable_mask)
-    path_ij, _chosen_target = extract_path_source_to_target(
-        t_min,
-        source_mask,
-        target_mask,
+    fp_fmm, t_min = _compute_fmm_path(
+        speed_fmm,
+        source_rows=source_rows,
+        target_rows=target_rows,
+        x0=x0,
+        x1=x1,
+        grid_spacing=1.0,
+        fast_marching_2d_regions=fast_marching_2d_regions,
+        extract_path_source_to_target=extract_path_source_to_target,
         traversable_mask=traversable_mask,
     )
-    if len(path_ij) < 2:
-        raise RuntimeError("FMM path extraction failed.")
-    fp_fmm = np.asarray(path_ij, dtype=float)[:, [1, 0]][::-1]
     _require_path_valid(sim_path, fp_fmm, domain_box, x0, x1, "FP (FMM)")
 
     n_particles = max(2, int(density_particle * abs(y1 - y0)))
@@ -358,6 +403,7 @@ def solve_single_field(
         fp_fmm=fp_fmm,
         fp_dijkstra=fp_dijkstra,
         lrp=lrp,
+        lrp_fmm=lrp_fmm,
         t_min=t_min,
         x=np.asarray(x, dtype=float),
         y=np.asarray(y, dtype=float),
@@ -397,6 +443,7 @@ def _plot_common_overlays(ax: Any, result: PathSolveResult, i_y: float) -> None:
         path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()],
     )
     ax.plot(result.lrp[:, 0] / i_y, result.lrp[:, 1] / i_y, color=COLORS["lrp"], linestyle=LINESTYLES["lrp"], linewidth=lw, label="LRP", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label="LRP (FMM)", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.set_title("")
     ax.set_xlabel(r"$x/I_Y$")
     ax.set_ylabel(r"$y/I_Y$")
@@ -592,7 +639,7 @@ def run_step5(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Stage 5: solve and visualize FP / FP(FMM) / FP(Dijkstra) / LRP for one logK field"
+        description="Stage 5: solve and visualize FP / FP(FMM) / FP(Dijkstra) / LRP / LRP(FMM) for one logK field"
     )
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--sweep", required=True, choices=["variance", "std"])

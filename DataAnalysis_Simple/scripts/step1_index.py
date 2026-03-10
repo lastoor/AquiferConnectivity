@@ -10,22 +10,25 @@ from pathlib import Path
 from typing import Any
 
 DISTANCE_TYPES = ("end_point", "hausdorff", "frechet")
-DISTANCE_PAIRS = ("fp_lrp", "fp_fpDijkstra", "fp_fpFMM")
+DISTANCE_PAIRS = ("fp_lrp", "fp_lrpFMM", "fp_fpDijkstra", "fp_fpFMM")
 DISTANCE_MODE_VALUES = ("load_from_main_output", "compute_from_paths")
 DISTANCE_FALLBACK_VALUES = ("compute_from_paths", "nan")
 DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
     "end_point": {
         "fp_lrp": "endpoint_dy_fp_vs_lrp",
+        "fp_lrpFMM": "endpoint_dy_fp_vs_lrp_fmm",
         "fp_fpDijkstra": "endpoint_dy_fp_vs_dijkstra",
         "fp_fpFMM": "endpoint_dy_fp_vs_fmm",
     },
     "hausdorff": {
         "fp_lrp": "hausdorff_fp_vs_lrp",
+        "fp_lrpFMM": "hausdorff_fp_vs_lrp_fmm",
         "fp_fpDijkstra": "hausdorff_fp_vs_dijkstra",
         "fp_fpFMM": "hausdorff_fp_vs_fmm",
     },
     "frechet": {
         "fp_lrp": "frechetDist_fp_lrp_m",
+        "fp_lrpFMM": "frechetDist_fp_lrpFMM_m",
         "fp_fpDijkstra": "frechetDist_fp_fpDijkstra_m",
         "fp_fpFMM": "frechetDist_fp_fpFMM_m",
     },
@@ -33,16 +36,19 @@ DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
 DISTANCE_MAIN_OUTPUT_KEY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
     "end_point": {
         "fp_lrp": ("endpoint_dy_fp_vs_lrp", "endPointDist_fp_lrp_m"),
+        "fp_lrpFMM": ("endpoint_dy_fp_vs_lrp_fmm", "endPointDist_fp_lrpFMM_m"),
         "fp_fpDijkstra": ("endpoint_dy_fp_vs_dijkstra", "endPointDist_fp_fpDijkstra_m"),
         "fp_fpFMM": ("endpoint_dy_fp_vs_fmm", "endPointDist_fp_fpFMM_m"),
     },
     "hausdorff": {
         "fp_lrp": ("hausdorff_fp_vs_lrp", "hausdorffDist_fp_lrp_m"),
+        "fp_lrpFMM": ("hausdorff_fp_vs_lrp_fmm", "hausdorffDist_fp_lrpFMM_m"),
         "fp_fpDijkstra": ("hausdorff_fp_vs_dijkstra", "hausdorffDist_fp_fpDijkstra_m"),
         "fp_fpFMM": ("hausdorff_fp_vs_fmm", "hausdorffDist_fp_fpFMM_m"),
     },
     "frechet": {
         "fp_lrp": ("frechetDist_fp_lrp_m",),
+        "fp_lrpFMM": ("frechetDist_fp_lrpFMM_m",),
         "fp_fpDijkstra": ("frechetDist_fp_fpDijkstra_m",),
         "fp_fpFMM": ("frechetDist_fp_fpFMM_m",),
     },
@@ -81,9 +87,11 @@ class VisualizationConfig:
     sections: list[str] = field(
         default_factory=lambda: [
             "times",
+            "times_box",
             "taylor",
             "scatter",
             "hausdorff",
+            "hausdorff_box",
             "frechet",
             "endpoint",
             "std_hausdorff",
@@ -124,6 +132,7 @@ class RunPaths:
     main_output_files: list[Path] = field(default_factory=list)
     fp_files: list[Path] = field(default_factory=list)
     lrp_files: list[Path] = field(default_factory=list)
+    lrp_fmm_files: list[Path] = field(default_factory=list)
     fp_dijkstra_files: list[Path] = field(default_factory=list)
     fp_fmm_files: list[Path] = field(default_factory=list)
     logk_files: list[Path] = field(default_factory=list)
@@ -210,9 +219,11 @@ def load_config(path: str | Path) -> VisualizationConfig:
         sections=[str(v) for v in raw.get("sections", [])]
         or [
             "times",
+            "times_box",
             "taylor",
             "scatter",
             "hausdorff",
+            "hausdorff_box",
             "frechet",
             "endpoint",
             "std_hausdorff",
@@ -235,6 +246,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
         distance_main_output_keys={
             "end_point": {
                 "fp_lrp": str(raw_keys.get("end_point", {}).get("fp_lrp", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_lrp"])),
+                "fp_lrpFMM": str(raw_keys.get("end_point", {}).get("fp_lrpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_lrpFMM"])),
                 "fp_fpDijkstra": str(
                     raw_keys.get("end_point", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_fpDijkstra"])
                 ),
@@ -242,6 +254,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
             },
             "hausdorff": {
                 "fp_lrp": str(raw_keys.get("hausdorff", {}).get("fp_lrp", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_lrp"])),
+                "fp_lrpFMM": str(raw_keys.get("hausdorff", {}).get("fp_lrpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_lrpFMM"])),
                 "fp_fpDijkstra": str(
                     raw_keys.get("hausdorff", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_fpDijkstra"])
                 ),
@@ -249,6 +262,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
             },
             "frechet": {
                 "fp_lrp": str(raw_keys.get("frechet", {}).get("fp_lrp", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_lrp"])),
+                "fp_lrpFMM": str(raw_keys.get("frechet", {}).get("fp_lrpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_lrpFMM"])),
                 "fp_fpDijkstra": str(
                     raw_keys.get("frechet", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fpDijkstra"])
                 ),
@@ -323,6 +337,7 @@ def _collect_run_paths(size_dir: Path, size_str: str) -> RunPaths:
         main_output_files=main_output_files,
         fp_files=sorted(path_dir.glob(f"fp_size{size_str}_mc*.npy")),
         lrp_files=sorted(path_dir.glob(f"lrp_size{size_str}_mc*.npy")),
+        lrp_fmm_files=sorted(path_dir.glob(f"lrp_fmm_size{size_str}_mc*.npy")),
         fp_dijkstra_files=sorted(path_dir.glob(f"fp_dijkstra_size{size_str}_mc*.npy")),
         fp_fmm_files=sorted(path_dir.glob(f"fp_fmm_size{size_str}_mc*.npy")),
         logk_files=sorted((size_dir / "logk_field").glob("logKField_*.npy")),
@@ -367,6 +382,7 @@ def runpaths_to_dict(rp: RunPaths) -> dict[str, Any]:
         "main_output_files": [str(p) for p in rp.main_output_files],
         "fp_files": [str(p) for p in rp.fp_files],
         "lrp_files": [str(p) for p in rp.lrp_files],
+        "lrp_fmm_files": [str(p) for p in rp.lrp_fmm_files],
         "fp_dijkstra_files": [str(p) for p in rp.fp_dijkstra_files],
         "fp_fmm_files": [str(p) for p in rp.fp_fmm_files],
         "logk_files": [str(p) for p in rp.logk_files],

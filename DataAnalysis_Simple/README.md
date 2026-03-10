@@ -9,7 +9,7 @@
 
 Additional standalone utility:
 
-- `scripts/step5_single_field_paths.py`: solve and plot `FP`, `FP (FMM)`, `FP (Dijkstra)`, and `LRP` for one selected logK realization.
+- `scripts/step5_single_field_paths.py`: solve and plot `FP`, `FP (FMM)`, `FP (Dijkstra)`, `LRP`, and `LRP (FMM)` for one selected logK realization.
 - `scripts/step6_single_field_arrival_hist.py`: generate one GRF logK field, solve flow/particle tracking, and compare empirical arrival-time CDF of all successful particles against analytical `_g_tau`.
 
 All implementation logic is inside the step scripts (no `visualization/` package).
@@ -22,7 +22,7 @@ All implementation logic is inside the step scripts (no `visualization/` package
 - `scripts/step3_stats.py`: prepare plot-ready arrays
 - `scripts/step4_plot.py`: render and save figures + manifest
 - `scripts/run_all.py`: one-shot runner for all four stages
-- `scripts/step5_single_field_paths.py`: single-realization path solving + overlay figures (`logK` and minimal arrival time)
+- `scripts/step5_single_field_paths.py`: single-realization path solving + overlay figures (`logK`, minimal arrival time, and speed/streamlines)
 - `scripts/step6_single_field_arrival_hist.py`: single-realization arrival-time CDF analysis (`status==0` particles) vs analytical `_g_tau`
 - `tests/`: focused tests for each stage and end-to-end smoke run
 
@@ -133,7 +133,7 @@ Outputs:
 Notes:
 
 - This script re-solves paths from a selected logK field and keeps the minimal-arrival-time and velocity fields in memory for plotting.
-- All Step 5 figures omit title text and include source/target lines plus FP/FP(FMM)/FP(Dijkstra)/LRP paths.
+- All Step 5 figures omit title text and include source/target lines plus FP/FP(FMM)/FP(Dijkstra)/LRP/LRP(FMM) paths.
 - Spatial axes are normalized as `x/I_Y` and `y/I_Y`.
 - Arrival-time background is normalized as `T_min/t_ref`, with `t_ref = I_Y / (k_g * dh)`.
 - Speed/streamline background uses dimensionless velocity magnitude `|v|/(k_g*dh)` and streamlines from `v/(k_g*dh)`.
@@ -177,9 +177,11 @@ Notes:
 Default `sections` now include:
 
 - `times`
+- `times_box`
 - `taylor`
 - `scatter`
 - `hausdorff`
+- `hausdorff_box`
 - `frechet`
 - `endpoint`
 - `std_hausdorff`
@@ -189,6 +191,11 @@ Default `sections` now include:
 - `wasserstein_len`: plots normalized Wasserstein-1 distance between path-length distributions (CDF proxy) for FP-LRP, FP-FMM, FP-Dijkstra
   - also writes separate path-length CDF figure(s) `run<id>_cdf_len_var<value>.png` for selected variance values
   - use `--plot-variances` (comma-separated) to choose variance values; default is the first available variance
+- `times`: keeps the summary/error-bar characteristic-time figure, including the analytical `t_min` overlay
+- `times_box`: writes a separate grouped box-plot figure of raw FP/LRP/LRP(FMM)/FP(FMM)/FP(Dijkstra) time samples across variances
+- `hausdorff`: keeps the summary/error-bar Hausdorff figure
+- `hausdorff_box`: writes a separate grouped box-plot figure of raw Hausdorff-distance samples across variances
+- `endpoint`: writes a grouped box-plot figure of raw endpoint-distance samples across variances
 - `scatter`: supports `--scatter-mode mean`, `--scatter-mode all_points`, or `--scatter-mode mean,all_points`
   - all-points mode writes `run<id>_scatter_var<value>.png` for selected `--plot-variances`
 
@@ -236,6 +243,7 @@ PYTHONPATH=./scripts python tests/compare_distance_by_shapely_with_custom.py \
 - Optional dependency: `shapely` for geometric distance calculations.
 - If `shapely` is missing, related metrics are safely returned as `NaN`.
 - `times` plot includes an analytical `t_min` overlay controlled by `analytical_percentile` (default `0.01`).
+- `times_box`, `hausdorff_box`, and `endpoint` are true sample-based box plots derived from Stage 3 cached raw samples.
 - Analytical solve failures are recorded as warnings in `<output_dir>/manifest.json`.
 - `wasserstein_len` is normalized by `I_Y` and computed from Stage 2 path-length sample arrays.
 - Separate CDF figures use empirical CDF of normalized path length (`\ell/I_Y`) for FP, LRP, FP(FMM), FP(Dijkstra).
