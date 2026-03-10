@@ -9,8 +9,25 @@ from visualization.types import PathSet, RunPaths
 
 
 def load_main_output(npz_path: Path) -> dict[str, Any]:
-    with np.load(npz_path) as data:
-        return {k: data[k].item() if np.asarray(data[k]).size == 1 else data[k] for k in data.files}
+    try:
+        return _load_main_output_impl(npz_path, allow_pickle=False)
+    except ValueError as exc:
+        if "Object arrays cannot be loaded when allow_pickle=False" not in str(exc):
+            raise
+        return _load_main_output_impl(npz_path, allow_pickle=True)
+
+
+def _normalize_npz_value(value: np.ndarray) -> Any:
+    arr = np.asarray(value)
+    if arr.size != 1:
+        return arr
+    scalar = arr.item()
+    return np.nan if scalar is None else scalar
+
+
+def _load_main_output_impl(npz_path: Path, *, allow_pickle: bool) -> dict[str, Any]:
+    with np.load(npz_path, allow_pickle=allow_pickle) as data:
+        return {k: _normalize_npz_value(data[k]) for k in data.files}
 
 
 def _safe_load(paths: list[Path], idx: int) -> np.ndarray | None:

@@ -68,7 +68,7 @@ class FontConfig:
 @dataclass(slots=True)
 class VisualizationConfig:
     data_root: Path
-    run_id: int
+    run_id: str
     length_scale: float
     dh: float
     field_size_ref: int
@@ -197,7 +197,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
 
     cfg = VisualizationConfig(
         data_root=_to_path(raw["data_root"]),
-        run_id=int(raw.get("run_id", 3)),
+        run_id=str(raw.get("run_id", 3)),
         length_scale=float(raw.get("length_scale", 0.05)),
         dh=float(raw.get("dh", 0.1)),
         field_size_ref=int(raw.get("field_size_ref", 200)),

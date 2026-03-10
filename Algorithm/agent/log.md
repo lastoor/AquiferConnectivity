@@ -16,3 +16,17 @@
 - Added CLI options to `./scripts/run_fmm.py`: `--fmm_velocity_layout`, `--fmm_face_mapping`, `--fmm_zero_policy`, `--fmm_min_speed`.
 - Extended schema v2 outputs with FMM diagnostics fields: layout/mapping/policy metadata and zero/nontraversable counts.
 - Added tests for FMM core and speed preparation in `./tests`.
+
+## 2026-03-10
+
+- Updated `./scripts/run_fmm.py` output schema from v2 to v3.
+- Added reproducible random seed controls:
+  - `--seed`
+  - `--seed_mode` (`strict_mc`, `global_stream`, `best_effort`)
+  - `--variance_seed_policy` (`same`, `offset`, `explicit`)
+  - `--variance_seed_offset`, `--variance_seed`, `--variance_rank`
+- Implemented deterministic per-MC/per-trial seeding in `strict_mc` mode for multiprocessing runs.
+- Added seed metadata to per-MC and aggregate outputs:
+  - `seed_base`, `seed_effective_run`, `seed_mode`
+  - `variance_seed_policy`, `variance_rank`, `variance_seed_override`
+  - `seed_mc`, `seed_trial`

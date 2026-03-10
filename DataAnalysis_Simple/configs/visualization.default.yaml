@@ -1,5 +1,5 @@
 data_root: /project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod
-run_id: 4
+run_id: 4_refined
 length_scale: 0.05
 dh: 0.1
 field_size_ref: 200
@@ -16,7 +16,7 @@ sections: [times, taylor, scatter, hausdorff, frechet, endpoint, std_hausdorff, 
 
 distance_mode:
   end_point: load_from_main_output
-  hausdorff: compute_from_paths
+  hausdorff: load_from_main_output #compute_from_paths
   frechet: compute_from_paths
 
 distance_enabled:

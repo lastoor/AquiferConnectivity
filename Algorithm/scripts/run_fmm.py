@@ -34,9 +34,9 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 2
+MC_SCHEMA_VERSION = 3
 
-# Flat output schema v2: deterministic and explicit for analysis pipelines.
+# Flat output schema v3: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
     "schema_version",
     "mc_index",
@@ -57,19 +57,62 @@ MC_FIELDS = [
     "endpoint_dy_fp_vs_lrp",
     "endpoint_dy_fp_vs_dijkstra",
     "endpoint_dy_fp_vs_fmm",
+    "endpoint_method",
+    "endpoint_x_ref",
+    "x_end_fp",
+    "x_end_lrp",
+    "x_end_fp_dijkstra",
+    "x_end_fp_fmm",
+    "y_end_fp",
+    "y_end_lrp",
+    "y_end_fp_dijkstra",
+    "y_end_fp_fmm",
+    "pt_velocity_layout",
     "fmm_velocity_layout",
     "fmm_face_mapping",
     "fmm_zero_policy",
     "fmm_min_speed",
     "fmm_zero_count",
     "fmm_nontraversable_count",
+    "seed_base",
+    "seed_effective_run",
+    "seed_mode",
+    "variance_seed_policy",
+    "variance_rank",
+    "variance_seed_override",
+    "seed_mc",
+    "seed_trial",
 ]
 
+OBJECT_FIELDS = {
+    "status_message",
+    "endpoint_method",
+    "pt_velocity_layout",
+    "fmm_velocity_layout",
+    "fmm_face_mapping",
+    "fmm_zero_policy",
+    "seed_mode",
+    "variance_seed_policy",
+}
 
-def init_worker(grf_gen):
+INT_FIELDS = {
+    "schema_version",
+    "mc_index",
+    "trial_used",
+    "status_code",
+}
+
+
+def init_worker(grf_gen, seed_mode: str = "strict_mc", effective_run_seed: int | None = None):
     """Initializer for simulation pool workers."""
     global global_grf_gen
     global_grf_gen = grf_gen
+    if effective_run_seed is None:
+        return
+    if seed_mode in {"global_stream", "best_effort"}:
+        # Scheduling-dependent mode: worker seed depends on worker PID.
+        worker_seed = derive_seed(int(effective_run_seed), int(os.getpid()))
+        np.random.seed(int(np.uint32(worker_seed & 0xFFFFFFFF)))
 
 
 def build_base_record(mc_index: int, trial_used: int | None = None) -> dict[str, Any]:
@@ -87,6 +130,9 @@ def build_base_record(mc_index: int, trial_used: int | None = None) -> dict[str,
 
 
 def save_mc_outputs(config_mc: dict[str, Any], mc_index: int, outputs: dict[str, Any]) -> None:
+    none_keys = [k for k, v in outputs.items() if v is None]
+    if none_keys:
+        raise ValueError(f"None values are not allowed in MC outputs: {none_keys}")
     np.savez(
         str(config_mc["path_size_mainOutput"] / f"mainOutput_size{config_mc['field_size_']}_mc{mc_index}.npz"),
         **outputs,
@@ -100,9 +146,45 @@ def save_path_outputs(config_mc: dict[str, Any], mc_index: int, lrp: np.ndarray,
     np.save(config_mc["path_size_path"] / f"fp_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_rk45)
 
 
-def generate_logk_field() -> tuple[np.ndarray | None, str]:
+def _uint64_to_u32_pair(value: int) -> tuple[int, int]:
+    v = int(np.uint64(value))
+    return int(v & 0xFFFFFFFF), int((v >> 32) & 0xFFFFFFFF)
+
+
+def derive_seed(base_seed: int, *components: int) -> int:
+    entropy: list[int] = []
+    entropy.extend(_uint64_to_u32_pair(base_seed))
+    for comp in components:
+        entropy.extend(_uint64_to_u32_pair(comp))
+    ss = np.random.SeedSequence(entropy=entropy)
+    state = ss.generate_state(2, dtype=np.uint32)
+    return int((np.uint64(state[0]) << np.uint64(32)) | np.uint64(state[1]))
+
+
+def none_to_nan(value: Any) -> Any:
+    return np.nan if value is None else value
+
+
+def resolve_effective_run_seed(args: argparse.Namespace) -> int | None:
+    if args.seed is None:
+        return None
+    if args.variance_seed_policy == "same":
+        return int(args.seed)
+    if args.variance_seed_policy == "offset":
+        return int(args.seed) + int(args.variance_rank) * int(args.variance_seed_offset)
+    if args.variance_seed_policy == "explicit":
+        if args.variance_seed is None:
+            raise ValueError("--variance_seed is required when --variance_seed_policy explicit")
+        return int(args.variance_seed)
+    raise ValueError(f"Unsupported variance seed policy: {args.variance_seed_policy}")
+
+
+def generate_logk_field(seed_trial: int | None = None) -> tuple[np.ndarray | None, str]:
     """Generate the logk field using the worker's GRF generator."""
     start_time_grf = time.time()
+    if seed_trial is not None:
+        # GRF generator in FlowSimulation uses global np.random APIs.
+        np.random.seed(int(np.uint32(seed_trial & 0xFFFFFFFF)))
     try:
         logk_field = global_grf_gen.sample()
     except Exception as exc:
@@ -113,6 +195,31 @@ def generate_logk_field() -> tuple[np.ndarray | None, str]:
     elapsed_time_grf = time.time() - start_time_grf
     msg = f"GRF field generated successfully after {np.round(elapsed_time_grf, 4)} seconds."
     return logk_field, msg
+
+
+def endpoint_y_at_x(path_xy: np.ndarray, x_ref: float) -> float:
+    """
+    Interpolate path y at a common x-reference.
+    Fallback to nearest-x sample when there is no crossing segment.
+    """
+    p = np.asarray(path_xy, dtype=float)
+    if p.ndim != 2 or p.shape[1] != 2 or p.shape[0] == 0:
+        return float("nan")
+    if p.shape[0] == 1:
+        return float(p[0, 1])
+
+    x = p[:, 0]
+    y = p[:, 1]
+    for i in range(p.shape[0] - 1):
+        x0 = x[i]
+        x1 = x[i + 1]
+        if (x0 <= x_ref <= x1) or (x1 <= x_ref <= x0):
+            t = (x_ref - x0) / (x1 - x0 + 1e-30)
+            t = min(max(t, 0.0), 1.0)
+            return float(y[i] + t * (y[i + 1] - y[i]))
+
+    idx = int(np.argmin(np.abs(x - x_ref)))
+    return float(y[idx])
 
 
 def make_config_for_size(config_base: dict[str, Any], idx_size: int) -> dict[str, Any]:
@@ -171,14 +278,41 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
     y0 = config_mc["source_vertex"][0][1]
     y1 = config_mc["source_vertex"][1][1]
     domain_box = (x0, x1, y0, y1)
+    source_rows = np.arange(y0, y1 + 1, dtype=int)
+    target_rows = np.arange(0, config_mc["ly"], dtype=int)
+    x_ref = float(x1)
+    run_seed = config_mc.get("seed_effective_run")
+    seed_mode = str(config_mc.get("seed_mode", "strict_mc"))
+    seed_mc: int | None = None
+    if run_seed is not None and seed_mode == "strict_mc":
+        seed_mc = derive_seed(int(run_seed), int(config_mc["field_size_"]), int(mc_index))
 
     for trial in range(num_trial):
         record = build_base_record(mc_index=mc_index, trial_used=trial)
+        seed_trial: int | None = None
+        if run_seed is not None and seed_mode == "strict_mc" and seed_mc is not None:
+            seed_trial = derive_seed(seed_mc, int(trial))
+        record.update(
+            {
+                "seed_base": none_to_nan(config_mc.get("seed_base", np.nan)),
+                "seed_effective_run": none_to_nan(config_mc.get("seed_effective_run", np.nan)),
+                "seed_mode": seed_mode,
+                "variance_seed_policy": config_mc.get("variance_seed_policy", "same"),
+                "variance_rank": none_to_nan(config_mc.get("variance_rank", np.nan)),
+                "variance_seed_override": none_to_nan(config_mc.get("variance_seed_override", np.nan)),
+                "seed_mc": seed_mc if seed_mc is not None else np.nan,
+                "seed_trial": seed_trial if seed_trial is not None else np.nan,
+            }
+        )
+        logger.info(
+            f"[MC {mc_index}] Seed context: seed_mc={record['seed_mc']}, "
+            f"seed_trial={record['seed_trial']}, mode={seed_mode}"
+        )
         logger.info(f"[MC {mc_index}] Trial {trial + 1}/{num_trial} starting.")
 
         try:
             # 1) GRF generation
-            logk_field, grf_msg = generate_logk_field()
+            logk_field, grf_msg = generate_logk_field(seed_trial=seed_trial)
             if logk_field is None:
                 record["status_code"] = 1
                 record["status_message"] = grf_msg
@@ -192,8 +326,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             k_field = np.exp(logk_field)
 
             # 2) Least-resistance path
-            source = [(y, x0) for y in range(y0, y1)]
-            target = [(y, x1) for y in range(0, config_mc["ly"] - 1)]
+            source = [(int(y), x0) for y in source_rows]
+            target = [(int(y), x1) for y in target_rows]
             lrp, total_R, _s_node, _e_node, _Rmap = sim_path.dijkstra_2d_least_resistance(
                 k_field, source, target, average="harmonic"
             )
@@ -218,17 +352,27 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 record["status_message"] = f"Head solver failed: {msg}"
                 logger.warning(f"[MC {mc_index}] Head not converged, retrying next trial. {msg}")
                 continue
-            vx, vy = sim_hyd.compute_velocity(
+            vx_fmm, vy_fmm = sim_hyd.compute_velocity(
                 k_field,
                 config_mc["x"],
                 config_mc["y"],
                 h,
                 output_location=config_mc["fmm_arg"]["velocity_layout"],
             )
+            if config_mc["pt_velocity_layout"] == config_mc["fmm_arg"]["velocity_layout"]:
+                vx_pt, vy_pt = vx_fmm, vy_fmm
+            else:
+                vx_pt, vy_pt = sim_hyd.compute_velocity(
+                    k_field,
+                    config_mc["x"],
+                    config_mc["y"],
+                    h,
+                    output_location=config_mc["pt_velocity_layout"],
+                )
 
             speed_fmm, traversable_mask, speed_diag = prepare_fmm_speed(
-                vx=vx,
-                vy=vy,
+                vx=vx_fmm,
+                vy=vy_fmm,
                 layout=config_mc["fmm_arg"]["velocity_layout"],
                 face_mapping=config_mc["fmm_arg"]["face_mapping"],
                 zero_policy=config_mc["fmm_arg"]["zero_policy"],
@@ -254,9 +398,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             # 3.2) FMM on speed
             n_y, n_x = speed_fmm.shape
             source_mask = np.zeros((n_y, n_x), dtype=bool)
-            source_mask[y0:y1, x0] = True
+            source_mask[source_rows, x0] = True
             target_mask = np.zeros((n_y, n_x), dtype=bool)
-            target_mask[:, x1] = True
+            target_mask[target_rows, x1] = True
 
             source_mask = source_mask & traversable_mask
             target_mask = target_mask & traversable_mask
@@ -294,18 +438,18 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             # 4) Particle tracking RK45 CPU
-            nP = int(config_mc["particleTracking_arg"]["density_particle"] * np.abs(y1 - y0))
+            nP = int(config_mc["particleTracking_arg"]["density_particle"] * max(1, source_rows.size))
             seeds_x = np.full(nP, x0, np.float32)
-            seeds_y = np.linspace(y0, y1, nP).astype(np.float32)
+            seeds_y = np.linspace(float(source_rows[0]), float(source_rows[-1]), nP, endpoint=True).astype(np.float32)
             args_particle_tracking = {
                 "x": config_mc["x"],
                 "y": config_mc["y"],
-                "vx": vx,
-                "vy": vy,
+                "vx": vx_pt,
+                "vy": vy_pt,
                 "seeds_x": seeds_x,
                 "seeds_y": seeds_y,
                 "right_x": x1,
-                "velocity_location": "face",
+                "velocity_location": config_mc["pt_velocity_layout"],
                 "eps_speed": config_mc["particleTracking_arg"]["eps_speed"],
                 "ds_min": config_mc["particleTracking_arg"]["ds_min"],
                 "ds_max": config_mc["particleTracking_arg"]["ds_max"],
@@ -329,7 +473,6 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
 
             res = sim_pt.fastest_trajectory(px, py, pt, L, st)
             fp_rk45 = np.vstack((res["x"], res["y"])).T
-            fp_rk45 = fp_rk45[fp_rk45[:, 0] <= config_mc["x_cp"]]
             if fp_rk45.size == 0 or not sim_path.is_path_valid(fp_rk45, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 7
                 record["status_message"] = "Invalid FP(RK45) geometry"
@@ -340,6 +483,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             hist_fp_lrp, _, _ = distance_distribution(fp_rk45, lrp, ds=1.0)
             hist_fp_dij, _, _ = distance_distribution(fp_rk45, fp_dijkstra, ds=1.0)
             hist_fp_fmm, _, _ = distance_distribution(fp_rk45, fp_fmm, ds=1.0)
+            y_end_fp = endpoint_y_at_x(fp_rk45, x_ref=x_ref)
+            y_end_lrp = endpoint_y_at_x(lrp, x_ref=x_ref)
+            y_end_fp_dij = endpoint_y_at_x(fp_dijkstra, x_ref=x_ref)
+            y_end_fp_fmm = endpoint_y_at_x(fp_fmm, x_ref=x_ref)
 
             record.update(
                 {
@@ -356,9 +503,20 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "hausdorff_fp_vs_lrp": float(np.max(hist_fp_lrp)),
                     "hausdorff_fp_vs_dijkstra": float(np.max(hist_fp_dij)),
                     "hausdorff_fp_vs_fmm": float(np.max(hist_fp_fmm)),
-                    "endpoint_dy_fp_vs_lrp": float(fp_rk45[-1, 1] - lrp[-1, 1]),
-                    "endpoint_dy_fp_vs_dijkstra": float(fp_rk45[-1, 1] - fp_dijkstra[-1, 1]),
-                    "endpoint_dy_fp_vs_fmm": float(fp_rk45[-1, 1] - fp_fmm[-1, 1]),
+                    "endpoint_method": "interp_at_xref",
+                    "endpoint_x_ref": float(x_ref),
+                    "x_end_fp": float(fp_rk45[-1, 0]),
+                    "x_end_lrp": float(lrp[-1, 0]),
+                    "x_end_fp_dijkstra": float(fp_dijkstra[-1, 0]),
+                    "x_end_fp_fmm": float(fp_fmm[-1, 0]),
+                    "y_end_fp": float(y_end_fp),
+                    "y_end_lrp": float(y_end_lrp),
+                    "y_end_fp_dijkstra": float(y_end_fp_dij),
+                    "y_end_fp_fmm": float(y_end_fp_fmm),
+                    "endpoint_dy_fp_vs_lrp": float(y_end_fp - y_end_lrp),
+                    "endpoint_dy_fp_vs_dijkstra": float(y_end_fp - y_end_fp_dij),
+                    "endpoint_dy_fp_vs_fmm": float(y_end_fp - y_end_fp_fmm),
+                    "pt_velocity_layout": config_mc["pt_velocity_layout"],
                     "fmm_velocity_layout": config_mc["fmm_arg"]["velocity_layout"],
                     "fmm_face_mapping": config_mc["fmm_arg"]["face_mapping"],
                     "fmm_zero_policy": config_mc["fmm_arg"]["zero_policy"],
@@ -387,6 +545,18 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             continue
 
     failed = build_base_record(mc_index=mc_index, trial_used=None)
+    failed.update(
+        {
+            "seed_base": none_to_nan(config_mc.get("seed_base", np.nan)),
+            "seed_effective_run": none_to_nan(config_mc.get("seed_effective_run", np.nan)),
+            "seed_mode": str(config_mc.get("seed_mode", "strict_mc")),
+            "variance_seed_policy": config_mc.get("variance_seed_policy", "same"),
+            "variance_rank": none_to_nan(config_mc.get("variance_rank", np.nan)),
+            "variance_seed_override": none_to_nan(config_mc.get("variance_seed_override", np.nan)),
+            "seed_mc": seed_mc if seed_mc is not None else np.nan,
+            "seed_trial": np.nan,
+        }
+    )
     failed["status_code"] = 9
     failed["status_message"] = f"All {num_trial} trials failed"
     save_mc_outputs(config_mc=config_mc, mc_index=mc_index, outputs=failed)
@@ -408,7 +578,11 @@ def run_field_size_simulation(idx_size: int, config_base: dict[str, Any]) -> dic
 
     num_mc_ = int(config["num_mc"][idx_size])
     num_process = min(num_mc_, len(os.sched_getaffinity(0)))
-    with mp.Pool(processes=num_process, initializer=init_worker, initargs=(grf_gen,)) as pool:
+    with mp.Pool(
+        processes=num_process,
+        initializer=init_worker,
+        initargs=(grf_gen, config.get("seed_mode", "strict_mc"), config.get("seed_effective_run")),
+    ) as pool:
         records = pool.starmap(run_unit_simulation, [(config, i) for i in range(num_mc_)])
 
     agg = {
@@ -417,12 +591,12 @@ def run_field_size_simulation(idx_size: int, config_base: dict[str, Any]) -> dic
     }
     for key in MC_FIELDS:
         values = [rec.get(key, np.nan) for rec in records]
-        if key == "status_message":
+        if key in OBJECT_FIELDS:
             agg[key] = np.asarray(values, dtype=object)
-        elif key in {"schema_version", "mc_index", "trial_used", "status_code"}:
+        elif key in INT_FIELDS:
             agg[key] = np.asarray(values, dtype=np.int32)
         else:
-            agg[key] = np.asarray(values, dtype=object if key in {"fmm_velocity_layout", "fmm_face_mapping", "fmm_zero_policy"} else float)
+            agg[key] = np.asarray(values, dtype=float)
 
     np.savez(str(config["path_size_mainOutput"] / f"mainOutput_size{field_size_}.npz"), **agg)
     logger.info(f"[SIZE {field_size_}] Main outputs saved.")
@@ -440,12 +614,52 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minpadding", type=int, default=0, help="Minimal padding for GRF generation.")
     parser.add_argument("--dh", type=float, default=0.01, help="Hydraulic head x-gradient.")
     parser.add_argument("--output_schema_version", type=int, default=MC_SCHEMA_VERSION, help="Output schema version.")
+    parser.add_argument("--seed", type=int, default=None, help="Base seed for deterministic Monte Carlo runs.")
+    parser.add_argument(
+        "--seed_mode",
+        type=str,
+        default="strict_mc",
+        choices=["strict_mc", "global_stream", "best_effort"],
+        help="Random seeding mode. strict_mc gives deterministic per-MC/per-trial seeds.",
+    )
+    parser.add_argument(
+        "--variance_seed_policy",
+        type=str,
+        default="same",
+        choices=["same", "offset", "explicit"],
+        help="How to derive run seed across variance sweeps.",
+    )
+    parser.add_argument(
+        "--variance_seed_offset",
+        type=int,
+        default=1000003,
+        help="Offset multiplier used by variance_seed_policy=offset.",
+    )
+    parser.add_argument(
+        "--variance_seed",
+        type=int,
+        default=None,
+        help="Explicit run seed used when variance_seed_policy=explicit.",
+    )
+    parser.add_argument(
+        "--variance_rank",
+        type=int,
+        default=0,
+        help="Variance index used when variance_seed_policy=offset.",
+    )
     parser.add_argument(
         "--fmm_velocity_layout",
         type=str,
         default="face",
         choices=["face", "cell"],
         help="Velocity layout for FMM speed preparation.",
+    )
+    parser.add_argument(
+        "--pt_velocity_layout",
+        type=str,
+        default="cell",
+        choices=["face", "cell"],
+        help="Velocity layout for particle tracking.",
     )
     parser.add_argument(
         "--fmm_face_mapping",
@@ -478,10 +692,17 @@ def main() -> None:
         raise ValueError(f"Only schema version {MC_SCHEMA_VERSION} is supported.")
     if len(args.num_mc) != len(args.field_size):
         raise ValueError("--num_mc and --field_size must have the same length.")
+    if args.seed is None and args.seed_mode != "strict_mc":
+        raise ValueError("--seed_mode global_stream/best_effort requires --seed.")
+    if args.variance_seed_policy == "explicit" and args.variance_seed is None and args.seed is not None:
+        raise ValueError("--variance_seed is required when --variance_seed_policy explicit with --seed.")
+
+    effective_run_seed = resolve_effective_run_seed(args)
 
     print("\nAll input parameters:")
     for arg, value in vars(args).items():
         print(f"{arg}: {value}")
+    print(f"effective_run_seed: {effective_run_seed}")
     print("\n")
 
     mp.set_start_method("spawn", force=True)
@@ -502,6 +723,12 @@ def main() -> None:
             "minpadding": args.minpadding,
         },
         "path_simulation": path_workdir,
+        "seed_base": args.seed,
+        "seed_effective_run": effective_run_seed,
+        "seed_mode": args.seed_mode,
+        "variance_seed_policy": args.variance_seed_policy,
+        "variance_rank": int(args.variance_rank) if args.seed is not None else np.nan,
+        "variance_seed_override": float(args.variance_seed) if args.variance_seed is not None else np.nan,
         "headSolver_arg": {
             "dh": args.dh,
             "rtol": 1e-10,
@@ -514,6 +741,7 @@ def main() -> None:
             "zero_policy": args.fmm_zero_policy,
             "min_speed": args.fmm_min_speed,
         },
+        "pt_velocity_layout": args.pt_velocity_layout,
         "particleTracking_arg": {
             "density_particle": 20,
             "eps_speed": 1e-30,
@@ -537,6 +765,15 @@ def main() -> None:
 
     logger = sim_utils.get_logger(path_logfile=str(config_base["path_mainlogfile"]))
     logger.info("[MAIN] Starting simulation.")
+    logger.info(
+        "[MAIN] Seed config: "
+        f"seed_base={config_base['seed_base']}, "
+        f"seed_effective_run={config_base['seed_effective_run']}, "
+        f"seed_mode={config_base['seed_mode']}, "
+        f"variance_seed_policy={config_base['variance_seed_policy']}, "
+        f"variance_rank={config_base['variance_rank']}, "
+        f"variance_seed_override={config_base['variance_seed_override']}"
+    )
 
     event_stop_gpuprofiler = threading.Event()
     thread_gpuprofiler = threading.Thread(

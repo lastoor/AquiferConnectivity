@@ -31,12 +31,12 @@ The wrapper script `./scripts/run_in_fmm_env.sh` injects both `./src` and `../..
 
 ## Output Schema
 
-`scripts/run_fmm.py` writes schema v2 `.npz` files:
+`scripts/run_fmm.py` writes schema v3 `.npz` files:
 
 - Per MC run: `mainOutput_size{field_size}_mc{mc_index}.npz`
 - Per size aggregate: `mainOutput_size{field_size}.npz`
 
-Core fields include status, lengths (`len_*`), travel times (`travel_time_*`), resistance, Hausdorff-like distances, and endpoint deltas.
+Core fields include status, lengths (`len_*`), travel times (`travel_time_*`), resistance, Hausdorff-like distances, endpoint deltas, FMM diagnostics, and seed metadata.
 
 ## FMM Velocity Options
 
@@ -66,3 +66,39 @@ Additional schema fields now include:
 
 - `fmm_velocity_layout`, `fmm_face_mapping`, `fmm_zero_policy`, `fmm_min_speed`
 - `fmm_zero_count`, `fmm_nontraversable_count`
+
+## Random Seed Control
+
+`scripts/run_fmm.py` supports deterministic seeding for Monte Carlo runs.
+
+Options:
+
+- `--seed`: base seed (if omitted, behavior remains non-deterministic).
+- `--seed_mode`: `strict_mc` (recommended), `global_stream`, or `best_effort`.
+- `--variance_seed_policy`: `same`, `offset`, or `explicit`.
+- `--variance_seed_offset`: offset multiplier used with `offset`.
+- `--variance_seed`: explicit run seed used with `explicit`.
+- `--variance_rank`: variance index used with `offset`.
+
+Recommended deterministic mode:
+
+```bash
+./scripts/run_in_fmm_env.sh python ./scripts/run_fmm.py \
+  --path_workdir ./output/run_seeded \
+  --num_mc 50 \
+  --field_size 200 \
+  --length_scale 0.05 \
+  --var 1.0 \
+  --seed 12345 \
+  --seed_mode strict_mc \
+  --variance_seed_policy same
+```
+
+Variance sweep behavior:
+
+- Same seeds for all variances:
+  - `--seed 12345 --variance_seed_policy same`
+- Different deterministic seeds by variance index:
+  - `--seed 12345 --variance_seed_policy offset --variance_rank <i>`
+- Fully explicit seed per variance run:
+  - `--seed 12345 --variance_seed_policy explicit --variance_seed <seed_i>`
