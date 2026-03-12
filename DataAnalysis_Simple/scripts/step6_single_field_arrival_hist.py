@@ -264,7 +264,7 @@ def simulate_single_field_arrivals(
     if not is_success:
         raise RuntimeError(f"Head solver failed: {msg}")
 
-    vx, vy = sim_hyd.compute_velocity(k_field, x, y, h, output_location="face")
+    vx, vy = sim_hyd.compute_velocity(k_field, x, y, h, output_location="cell")
 
     n_particles = max(2, int(density_particle * abs(y1 - y0)))
     seeds_x = np.full(n_particles, x0, np.float32)
@@ -277,7 +277,7 @@ def simulate_single_field_arrivals(
         "seeds_x": seeds_x,
         "seeds_y": seeds_y,
         "right_x": x1,
-        "velocity_location": "face",
+        "velocity_location": "cell",
         "eps_speed": eps_speed,
         "ds_min": ds_min,
         "ds_max": ds_max,
@@ -522,7 +522,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--minpadding", type=int, default=0, help="Minimal padding for GRF generation")
     parser.add_argument("--dh", type=float, default=None, help="Hydraulic head x-gradient; default cfg.dh")
     parser.add_argument("--k-g", type=float, default=None, help="Reference conductivity scale; default cfg.k_g")
-    parser.add_argument("--density-particle", type=int, default=4)
+    parser.add_argument("--density-particle", type=int, default=20)
     parser.add_argument("--n-mc", type=int, default=10, help="Number of Monte Carlo realizations")
     parser.add_argument("--seed-start", type=int, default=0, help="Start seed for MC sequence (seed_start + i)")
     parser.add_argument("--band-low", type=float, default=5.0, help="Lower percentile for MC CDF band")
