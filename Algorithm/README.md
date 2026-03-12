@@ -20,7 +20,7 @@ Example:
 
 FMM-specific code lives in `./src/fmm_core`:
 
-- `fmm.py`: travel-time solve (`fast_marching_2d_regions`) and path extraction.
+- `fmm.py`: travel-time solvers (`custom`, `scikit`) and path backtracking (`discrete`, `continuous`).
 - `metrics.py`: path comparison metrics (`distance_distribution`).
 
 ## Dependency on FlowSimulation
@@ -31,12 +31,37 @@ The wrapper script `./scripts/run_in_fmm_env.sh` injects both `./src` and `../..
 
 ## Output Schema
 
-`scripts/run_fmm.py` writes schema v3 `.npz` files:
+`scripts/run_fmm.py` writes schema v4 `.npz` files:
 
 - Per MC run: `mainOutput_size{field_size}_mc{mc_index}.npz`
 - Per size aggregate: `mainOutput_size{field_size}.npz`
 
 Core fields include status, lengths (`len_*`), travel times (`travel_time_*`), resistance, Hausdorff-like distances, endpoint deltas, FMM diagnostics, and seed metadata.
+
+## FMM Solver Options
+
+`scripts/run_fmm.py` supports selecting both the travel-time solver and the backtracking method for all FMM-based paths (`LRP(FMM)` and `FP(FMM)`):
+
+```bash
+./scripts/run_in_fmm_env.sh python ./scripts/run_fmm.py \
+  --path_workdir ./output/run_scikit_continuous \
+  --num_mc 10 \
+  --field_size 64 \
+  --length_scale 0.1 \
+  --std 1.0 \
+  --fmm_solver scikit \
+  --fmm_backtracking continuous
+```
+
+Options:
+
+- `--fmm_solver`: `scikit` or `custom`
+- `--fmm_backtracking`: `continuous` or `discrete`
+
+Defaults:
+
+- `--fmm_solver scikit`
+- `--fmm_backtracking continuous`
 
 ## FMM Velocity Options
 
@@ -64,7 +89,7 @@ Options:
 
 Additional schema fields now include:
 
-- `fmm_velocity_layout`, `fmm_face_mapping`, `fmm_zero_policy`, `fmm_min_speed`
+- `fmm_velocity_layout`, `fmm_face_mapping`, `fmm_solver`, `fmm_backtracking`, `fmm_zero_policy`, `fmm_min_speed`
 - `fmm_zero_count`, `fmm_nontraversable_count`
 
 ## Random Seed Control

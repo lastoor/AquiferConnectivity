@@ -30,3 +30,20 @@
   - `seed_base`, `seed_effective_run`, `seed_mode`
   - `variance_seed_policy`, `variance_rank`, `variance_seed_override`
   - `seed_mc`, `seed_trial`
+
+## 2026-03-11
+
+- Extended `./src/fmm_core/fmm.py` with symmetric solver/backtracking APIs:
+  - `solve_travel_time_custom`, `solve_travel_time_scikit`
+  - `backtrack_path_discrete`, `backtrack_path_continuous`
+- Kept legacy FMM function names as compatibility wrappers and re-exported the new APIs from `./src/fmm_core/__init__.py`.
+- Refactored `./scripts/run_fmm.py` to use shared FMM dispatch instead of a local hardcoded FMM solve/backtracking path.
+- Added CLI options to `./scripts/run_fmm.py`:
+  - `--fmm_solver` (`scikit`, `custom`), default `scikit`
+  - `--fmm_backtracking` (`continuous`, `discrete`), default `continuous`
+- Applied the selected solver/backtracking mode to both `LRP(FMM)` and `FP(FMM)`.
+- Extended per-MC and aggregate outputs with FMM configuration metadata:
+  - `fmm_solver`, `fmm_backtracking`
+- Added and updated tests for the renamed FMM APIs, solver/backtracking combinations, and `run_fmm.py` CLI coverage.
+- Updated `./README.md` with the new solver/backtracking options and corrected the documented output schema version to v4.
+- Updated `./agent/guide.md` to require schema-safe `.npz` outputs and explicitly forbid `NaN`/`None`/object sentinels in saved metadata fields.

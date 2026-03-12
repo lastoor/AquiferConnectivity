@@ -4,7 +4,7 @@ set -euo pipefail
 VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5") 
 # VAR=("0.1" "5")
 length_scale="0.05"
-run="5"
+run="6_face_custom_conti"
 dh="0.1"
 
 # Keep original workload profile
@@ -60,35 +60,6 @@ conda deactivate
 conda activate taichi_env
 which python
 
-info_file="\${output_dir}/run_info.txt"
-{
-  echo "created_at=\$(date --iso-8601=seconds)"
-  echo "job_id=\${SLURM_JOB_ID:-}"
-  echo "job_name=\${SLURM_JOB_NAME:-}"
-  echo "node_list=\${SLURM_NODELIST:-}"
-  echo "repo_root=${repo_root}"
-  echo "run_root=${run_root}"
-  echo "output_dir=\${output_dir}"
-  echo "var=${var}"
-  echo "length_scale=${length_scale}"
-  echo "run=${run}"
-  echo "dh=${dh}"
-  echo "num_mc=${num_mc}"
-  echo "field_size=${field_size}"
-  echo "time=${time}"
-  echo "mem_per_cpu=${mem_per_cpu}"
-  echo "cpus_per_task=${cpus_per_task}"
-  echo "account=${account}"
-  echo "partition=${partition}"
-  echo "seed=0"
-  echo "seed_mode=strict_mc"
-  echo "variance_seed_policy=same"
-  echo "fmm_velocity_layout=face"
-  echo "fmm_face_mapping=to_cell_avg"
-  echo "fmm_zero_policy=obstacle"
-  echo "fmm_min_speed=1e-12"
-} > "\${info_file}"
-
 ./scripts/run_in_fmm_env.sh python ./scripts/run_fmm.py \\
   --path_workdir "\${output_dir}" \\
   --num_mc ${num_mc} \\
@@ -100,6 +71,9 @@ info_file="\${output_dir}/run_info.txt"
   --seed 0 \\
   --seed_mode strict_mc \\
   --variance_seed_policy same \\
+  --fmm_solver custom \\
+  --fmm_backtracking continuous \\
+  --pt_velocity_layout face \\
   --fmm_velocity_layout face \\
   --fmm_face_mapping to_cell_avg \\
   --fmm_zero_policy obstacle \\

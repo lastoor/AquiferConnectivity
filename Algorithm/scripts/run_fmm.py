@@ -19,7 +19,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_ROOT))
 
-from fmm_core.fmm import extract_path_source_to_target, fast_marching_2d_regions
+from fmm_core import compute_fmm_path
 from fmm_core.metrics import distance_distribution
 from fmm_core.speed import prepare_fmm_speed
 from simulation import grf_generation as sim_grf
@@ -76,6 +76,8 @@ MC_FIELDS = [
     "pt_velocity_layout",
     "fmm_velocity_layout",
     "fmm_face_mapping",
+    "fmm_solver",
+    "fmm_backtracking",
     "fmm_zero_policy",
     "fmm_min_speed",
     "fmm_zero_count",
@@ -96,6 +98,8 @@ OBJECT_FIELDS = {
     "pt_velocity_layout",
     "fmm_velocity_layout",
     "fmm_face_mapping",
+    "fmm_solver",
+    "fmm_backtracking",
     "fmm_zero_policy",
     "seed_mode",
     "variance_seed_policy",
@@ -237,7 +241,7 @@ def endpoint_y_at_x(path_xy: np.ndarray, x_ref: float) -> float:
     return float(y[idx])
 
 
-def compute_fmm_path(
+def compute_fmm_path_regions(
     field: np.ndarray,
     *,
     source_rows: np.ndarray,
@@ -245,6 +249,8 @@ def compute_fmm_path(
     x0: int,
     x1: int,
     grid_spacing: float,
+    solver: str,
+    backtracking: str,
     traversable_mask: np.ndarray | None = None,
 ) -> tuple[np.ndarray | None, float | None, str | None]:
     n_y, n_x = field.shape
@@ -260,23 +266,18 @@ def compute_fmm_path(
     if not np.any(source_mask) or not np.any(target_mask):
         return None, None, "No traversable source/target after masking"
 
-    T, _state = fast_marching_2d_regions(
-        field,
-        source_mask,
-        h=grid_spacing,
-        traversable_mask=traversable_mask,
-    )
-    path_ij, chosen_target = extract_path_source_to_target(
-        T,
-        source_mask,
-        target_mask,
-        traversable_mask=traversable_mask,
-    )
-    if len(path_ij) < 2:
-        return None, None, "FMM path extraction failed"
-
-    path_xy = np.asarray(path_ij, dtype=float)[:, [1, 0]][::-1]
-    travel_value = float(T[chosen_target[0], chosen_target[1]])
+    try:
+        path_xy, travel_value, _chosen_target = compute_fmm_path(
+            field,
+            source_mask,
+            target_mask,
+            h=grid_spacing,
+            traversable_mask=traversable_mask,
+            solver=str(solver),
+            backtracking=str(backtracking),
+        )
+    except Exception as exc:
+        return None, None, str(exc)
     return path_xy, travel_value, None
 
 
@@ -358,6 +359,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 "variance_seed_policy": config_mc.get("variance_seed_policy", "same"),
                 "variance_rank": none_to_nan(config_mc.get("variance_rank", np.nan)),
                 "variance_seed_override": none_to_nan(config_mc.get("variance_seed_override", np.nan)),
+                "fmm_solver": config_mc["fmm_arg"]["solver"],
+                "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
                 "seed_mc": seed_mc if seed_mc is not None else np.nan,
                 "seed_trial": seed_trial if seed_trial is not None else np.nan,
             }
@@ -396,13 +399,15 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             k_traversable_mask = np.isfinite(k_field) & (k_field > 0.0)
-            lrp_fmm, total_R_fmm, lrp_fmm_error = compute_fmm_path(
+            lrp_fmm, total_R_fmm, lrp_fmm_error = compute_fmm_path_regions(
                 k_field,
                 source_rows=source_rows,
                 target_rows=target_rows,
                 x0=x0,
                 x1=x1,
                 grid_spacing=config_mc["dx"],
+                solver=config_mc["fmm_arg"]["solver"],
+                backtracking=config_mc["fmm_arg"]["backtracking"],
                 traversable_mask=k_traversable_mask,
             )
             if lrp_fmm is None:
@@ -475,13 +480,15 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             # 3.2) FMM on speed
-            fp_fmm, total_t_fmm, fp_fmm_error = compute_fmm_path(
+            fp_fmm, total_t_fmm, fp_fmm_error = compute_fmm_path_regions(
                 speed_fmm,
                 source_rows=source_rows,
                 target_rows=target_rows,
                 x0=x0,
                 x1=x1,
                 grid_spacing=config_mc["dx"],
+                solver=config_mc["fmm_arg"]["solver"],
+                backtracking=config_mc["fmm_arg"]["backtracking"],
                 traversable_mask=traversable_mask,
             )
             if fp_fmm is None:
@@ -585,6 +592,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "pt_velocity_layout": config_mc["pt_velocity_layout"],
                     "fmm_velocity_layout": config_mc["fmm_arg"]["velocity_layout"],
                     "fmm_face_mapping": config_mc["fmm_arg"]["face_mapping"],
+                    "fmm_solver": config_mc["fmm_arg"]["solver"],
+                    "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
                     "fmm_zero_policy": config_mc["fmm_arg"]["zero_policy"],
                     "fmm_min_speed": float(config_mc["fmm_arg"]["min_speed"]),
                     "fmm_zero_count": int(speed_diag["zero_or_bad_count"]),
@@ -620,6 +629,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "variance_seed_policy": config_mc.get("variance_seed_policy", "same"),
             "variance_rank": none_to_nan(config_mc.get("variance_rank", np.nan)),
             "variance_seed_override": none_to_nan(config_mc.get("variance_seed_override", np.nan)),
+            "fmm_solver": config_mc["fmm_arg"]["solver"],
+            "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
             "seed_mc": seed_mc if seed_mc is not None else np.nan,
             "seed_trial": np.nan,
         }
@@ -736,6 +747,20 @@ def parse_args() -> argparse.Namespace:
         help="Mapping from face-centered flux to FMM speed field.",
     )
     parser.add_argument(
+        "--fmm_solver",
+        type=str,
+        default="scikit",
+        choices=["custom", "scikit"],
+        help="Travel-time solver used for all FMM-based path extraction.",
+    )
+    parser.add_argument(
+        "--fmm_backtracking",
+        type=str,
+        default="continuous",
+        choices=["discrete", "continuous"],
+        help="Backtracking method used for all FMM-based path extraction.",
+    )
+    parser.add_argument(
         "--fmm_zero_policy",
         type=str,
         default="obstacle",
@@ -805,6 +830,8 @@ def main() -> None:
         "fmm_arg": {
             "velocity_layout": args.fmm_velocity_layout,
             "face_mapping": args.fmm_face_mapping,
+            "solver": args.fmm_solver,
+            "backtracking": args.fmm_backtracking,
             "zero_policy": args.fmm_zero_policy,
             "min_speed": args.fmm_min_speed,
         },
@@ -839,7 +866,9 @@ def main() -> None:
         f"seed_mode={config_base['seed_mode']}, "
         f"variance_seed_policy={config_base['variance_seed_policy']}, "
         f"variance_rank={config_base['variance_rank']}, "
-        f"variance_seed_override={config_base['variance_seed_override']}"
+        f"variance_seed_override={config_base['variance_seed_override']}, "
+        f"fmm_solver={config_base['fmm_arg']['solver']}, "
+        f"fmm_backtracking={config_base['fmm_arg']['backtracking']}"
     )
 
     event_stop_gpuprofiler = threading.Event()

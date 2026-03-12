@@ -43,6 +43,15 @@ When making repo changes, keep both documentation files up to date:
 
 For every non-trivial change, update `./agent/log.md` in the same edit set.
 
+## Saved NPZ Files
+
+Treat `.npz` artifacts as a stable typed interface.
+
+- Do not use `NaN`, `None`, or object-typed placeholders as sentinel values for saved metadata or status fields.
+- Encode missing or invalid states with explicit schema fields such as status codes, status messages, boolean flags, or typed enum/string values.
+- Keep saved arrays and scalars loadable with `np.load(..., allow_pickle=False)`.
+- If a numeric metric is genuinely undefined, prefer an explicit companion status field over relying on a sentinel embedded in the saved payload.
+
 ## Validation Commands
 
 Use these checks after major algorithm or interface changes:
