@@ -40,12 +40,12 @@ PAIR_TO_FIELDS = {
 }
 DISTANCE_TYPES = ("end_point", "hausdorff", "frechet")
 VARIANCE_METRIC_KEY_CANDIDATES: dict[str, tuple[str, ...]] = {
-    "len_fp": ("len_fp_rk45", "len_fp_m"),
+    "len_fp": ("len_fp", "len_fp_rk45", "len_fp_m"),
     "len_fp_dijkstra": ("len_fp_dijkstra", "len_fp_dijkstra_m"),
     "len_fp_fmm": ("len_fp_fmm", "len_fp_fmm_m"),
     "len_lrp": ("len_lrp", "len_lrp_m"),
     "len_lrp_fmm": ("len_lrp_fmm", "len_lrp_fmm_m"),
-    "travel_time_fp": ("travel_time_rk45", "fpt_m"),
+    "travel_time_fp": ("travel_time_fp", "travel_time_rk45", "fpt_m"),
     "travel_time_fp_dijkstra": ("travel_time_dijkstra", "fpt_dijkstra_m"),
     "travel_time_fp_fmm": ("travel_time_fmm", "fpt_fmm_m"),
     "resistance_lrp": ("resistance_lrp", "mhr_m"),

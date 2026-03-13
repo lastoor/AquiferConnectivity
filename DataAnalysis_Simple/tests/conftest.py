@@ -36,10 +36,12 @@ def _write_main_output(path: Path, scale: float, *, legacy: bool = False) -> Non
 
     np.savez(
         path,
+        len_fp=10.0 * scale,
         len_fp_rk45=10.0 * scale,
         len_fp_dijkstra=10.5 * scale,
         len_fp_fmm=9.8 * scale,
         len_lrp=9.6 * scale,
+        travel_time_fp=5.0 * scale,
         travel_time_rk45=5.0 * scale,
         travel_time_dijkstra=5.2 * scale,
         travel_time_fmm=4.9 * scale,

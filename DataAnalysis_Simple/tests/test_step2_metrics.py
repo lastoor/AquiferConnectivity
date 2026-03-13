@@ -118,7 +118,8 @@ def test_step2_metrics_accepts_legacy_files_with_new_config_keys(pipeline_fixtur
     with cache_file.open("rb") as f:
         payload = pickle.load(f)
     warnings = _collect_warnings(payload)
-    assert all("Missing mainOutput keys" not in msg for msg in warnings)
+    assert all("for len_fp" not in msg for msg in warnings)
+    assert all("for travel_time_fp" not in msg for msg in warnings)
     fpt_mean = payload["var_results"]["stats"]["var_0.1"]["times"]["fpt"][0][0]
     assert np.isfinite(float(fpt_mean))
 
@@ -127,13 +128,21 @@ def test_step2_metrics_accepts_new_files_with_legacy_config_keys(pipeline_fixtur
     cfg = step1.load_config(pipeline_fixture["cfg_path"])
     cfg.distance_main_output_keys["end_point"] = {
         "fp_lrp": "endPointDist_fp_lrp_m",
+        "fp_lrpFMM": "endPointDist_fp_lrpFMM_m",
         "fp_fpDijkstra": "endPointDist_fp_fpDijkstra_m",
         "fp_fpFMM": "endPointDist_fp_fpFMM_m",
     }
     cfg.distance_main_output_keys["hausdorff"] = {
         "fp_lrp": "hausdorffDist_fp_lrp_m",
+        "fp_lrpFMM": "hausdorffDist_fp_lrpFMM_m",
         "fp_fpDijkstra": "hausdorffDist_fp_fpDijkstra_m",
         "fp_fpFMM": "hausdorffDist_fp_fpFMM_m",
+    }
+    cfg.distance_main_output_keys["frechet"] = {
+        "fp_lrp": "frechetDist_fp_lrp_m",
+        "fp_lrpFMM": "frechetDist_fp_lrpFMM_m",
+        "fp_fpDijkstra": "frechetDist_fp_fpDijkstra_m",
+        "fp_fpFMM": "frechetDist_fp_fpFMM_m",
     }
     cfg.distance_mode["hausdorff"] = "load_from_main_output"
     step1.run_stage1(cfg, cache_dir=pipeline_fixture["cache_dir"])
@@ -149,4 +158,53 @@ def test_step2_metrics_accepts_new_files_with_legacy_config_keys(pipeline_fixtur
     with cache_file.open("rb") as f:
         payload = pickle.load(f)
     warnings = _collect_warnings(payload)
-    assert all("Missing mainOutput keys" not in msg for msg in warnings)
+    assert all("for len_fp" not in msg for msg in warnings)
+    assert all("for travel_time_fp" not in msg for msg in warnings)
+    fpt_mean = payload["var_results"]["stats"]["var_0.1"]["times"]["fpt"][0][0]
+    assert np.isfinite(float(fpt_mean))
+
+
+def test_load_main_output_value_prefers_solver_neutral_fp_keys() -> None:
+    output_data = {
+        "len_fp": 12.0,
+        "len_fp_rk45": 99.0,
+        "travel_time_fp": 7.0,
+        "travel_time_rk45": 77.0,
+    }
+
+    len_val, len_key = step2._load_main_output_value(output_data, step2.VARIANCE_METRIC_KEY_CANDIDATES["len_fp"])
+    time_val, time_key = step2._load_main_output_value(output_data, step2.VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fp"])
+
+    assert len_val == 12.0
+    assert len_key == "len_fp"
+    assert time_val == 7.0
+    assert time_key == "travel_time_fp"
+
+
+def test_load_main_output_value_falls_back_to_legacy_fp_keys() -> None:
+    output_data = {
+        "len_fp_rk45": 12.0,
+        "travel_time_rk45": 7.0,
+    }
+
+    len_val, len_key = step2._load_main_output_value(output_data, step2.VARIANCE_METRIC_KEY_CANDIDATES["len_fp"])
+    time_val, time_key = step2._load_main_output_value(output_data, step2.VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fp"])
+
+    assert len_val == 12.0
+    assert len_key == "len_fp_rk45"
+    assert time_val == 7.0
+    assert time_key == "travel_time_rk45"
+
+
+def test_load_main_output_value_returns_nan_when_fp_keys_missing() -> None:
+    output_data = {
+        "travel_time_dijkstra": 5.0,
+    }
+
+    len_val, len_key = step2._load_main_output_value(output_data, step2.VARIANCE_METRIC_KEY_CANDIDATES["len_fp"])
+    time_val, time_key = step2._load_main_output_value(output_data, step2.VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fp"])
+
+    assert np.isnan(len_val)
+    assert len_key is None
+    assert np.isnan(time_val)
+    assert time_key is None

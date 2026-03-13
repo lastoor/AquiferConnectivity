@@ -79,7 +79,14 @@ def compute_effective_length(field_size: float) -> float:
     return float(field_size_int - 2 * margin)
 
 
-def _g_tau(t: float, *, length: float, velocity: float, i_y: float, sigma_y_sq: float, euler_const: float) -> float:
+def _compute_x11(
+    t: float,
+    *,
+    velocity: float,
+    i_y: float,
+    sigma_y_sq: float,
+    euler_const: float,
+) -> float:
     tiny = np.finfo(float).tiny
     eps = np.finfo(float).eps
     t_prime = max((t * velocity) / i_y, eps)
@@ -87,7 +94,17 @@ def _g_tau(t: float, *, length: float, velocity: float, i_y: float, sigma_y_sq: 
     num = np.expm1(-t_prime) + t_prime * np.exp(-t_prime)
     term_bracket = expi(-t_prime) + num / (t_prime * t_prime)
     f_norm = 2.0 * t_prime - 3.0 * np.log(t_prime) + 1.5 - 3.0 * euler_const + 3.0 * term_bracket
-    x11 = max(sigma_y_sq * (i_y**2) * f_norm, tiny)
+    return float(max(sigma_y_sq * (i_y**2) * f_norm, tiny))
+
+
+def _g_tau(t: float, *, length: float, velocity: float, i_y: float, sigma_y_sq: float, euler_const: float) -> float:
+    x11 = _compute_x11(
+        t,
+        velocity=velocity,
+        i_y=i_y,
+        sigma_y_sq=sigma_y_sq,
+        euler_const=euler_const,
+    )
     x1 = velocity * t
     value = 0.5 * erfc((length - x1) / np.sqrt(2.0 * x11))
     return float(np.clip(value, 0.0, 1.0))

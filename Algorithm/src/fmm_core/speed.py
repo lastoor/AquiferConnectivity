@@ -5,8 +5,8 @@ from typing import Any
 import numpy as np
 
 
-def _face_to_cell_speed(vx: np.ndarray, vy: np.ndarray) -> np.ndarray:
-    """Convert per-cell face flux arrays (qxx, qyy) to a cell-centered speed proxy."""
+def _face_to_cell_speed_trimmed(vx: np.ndarray, vy: np.ndarray) -> np.ndarray:
+    """Convert trimmed per-cell face flux arrays to a cell-centered speed proxy."""
     qxx = np.abs(np.asarray(vx, dtype=float))
     qyy = np.abs(np.asarray(vy, dtype=float))
     if qxx.shape != qyy.shape:
@@ -27,10 +27,27 @@ def _face_to_cell_speed(vx: np.ndarray, vy: np.ndarray) -> np.ndarray:
     return np.sqrt(vx_cell * vx_cell + vy_cell * vy_cell)
 
 
+def _face_to_cell_speed_full(vx: np.ndarray, vy: np.ndarray) -> np.ndarray:
+    """Convert full staggered face flux arrays to a cell-centered speed proxy."""
+    vx_face = np.abs(np.asarray(vx, dtype=float))
+    vy_face = np.abs(np.asarray(vy, dtype=float))
+    if vx_face.ndim != 2 or vy_face.ndim != 2:
+        raise ValueError("full face velocity components must be 2D arrays")
+    if vx_face.shape[0] != vy_face.shape[0] - 1 or vx_face.shape[1] != vy_face.shape[1] + 1:
+        raise ValueError(
+            "full face velocity shapes must satisfy vx.shape == (ny, nx+1) and vy.shape == (ny+1, nx)"
+        )
+
+    vx_cell = 0.5 * (vx_face[:, :-1] + vx_face[:, 1:])
+    vy_cell = 0.5 * (vy_face[:-1, :] + vy_face[1:, :])
+    return np.sqrt(vx_cell * vx_cell + vy_cell * vy_cell)
+
+
 def prepare_fmm_speed(
     vx: np.ndarray,
     vy: np.ndarray,
     layout: str = "face",
+    face_output: str = "full",
     face_mapping: str = "to_cell_avg",
     zero_policy: str = "obstacle",
     min_speed: float = 1e-12,
@@ -49,6 +66,8 @@ def prepare_fmm_speed(
     """
     if layout not in {"face", "cell"}:
         raise ValueError("layout must be 'face' or 'cell'")
+    if face_output not in {"trimmed", "full"}:
+        raise ValueError("face_output must be 'trimmed' or 'full'")
     if face_mapping not in {"to_cell_avg", "direct"}:
         raise ValueError("face_mapping must be 'to_cell_avg' or 'direct'")
     if zero_policy not in {"obstacle", "clip", "error"}:
@@ -58,15 +77,22 @@ def prepare_fmm_speed(
 
     vx_arr = np.asarray(vx, dtype=float)
     vy_arr = np.asarray(vy, dtype=float)
-    if vx_arr.shape != vy_arr.shape:
-        raise ValueError("vx and vy must have the same shape")
 
     if layout == "cell":
+        if vx_arr.shape != vy_arr.shape:
+            raise ValueError("vx and vy must have the same shape")
         speed_raw = np.sqrt(vx_arr * vx_arr + vy_arr * vy_arr)
     else:
         if face_mapping == "to_cell_avg":
-            speed_raw = _face_to_cell_speed(vx_arr, vy_arr)
+            if face_output == "trimmed":
+                speed_raw = _face_to_cell_speed_trimmed(vx_arr, vy_arr)
+            else:
+                speed_raw = _face_to_cell_speed_full(vx_arr, vy_arr)
         else:
+            if face_output == "full":
+                raise ValueError("face_mapping='direct' is not supported with face_output='full'")
+            if vx_arr.shape != vy_arr.shape:
+                raise ValueError("trimmed face vx and vy must have the same shape")
             speed_raw = np.sqrt(vx_arr * vx_arr + vy_arr * vy_arr)
 
     finite_mask = np.isfinite(speed_raw)
@@ -76,6 +102,7 @@ def prepare_fmm_speed(
 
     diag = {
         "layout": layout,
+        "face_output": face_output,
         "face_mapping": face_mapping,
         "zero_policy": zero_policy,
         "min_speed": float(min_speed),
@@ -97,4 +124,3 @@ def prepare_fmm_speed(
     traversable_mask = valid_mask
     speed = np.where(valid_mask, speed_raw, min_speed)
     return speed, traversable_mask, diag
-

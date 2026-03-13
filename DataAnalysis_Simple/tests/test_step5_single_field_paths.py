@@ -14,6 +14,7 @@ def _mock_result() -> step5.PathSolveResult:
     fp_fmm = np.array([[0.0, 1.0], [2.0, 2.2], [4.0, 3.2]], dtype=float)
     fp_dijkstra = np.array([[0.0, 0.8], [2.0, 1.8], [4.0, 2.8]], dtype=float)
     lrp = np.array([[0.0, 0.2], [2.0, 1.7], [4.0, 2.7]], dtype=float)
+    lrp_fmm = np.array([[0.0, 0.4], [2.0, 1.9], [4.0, 2.9]], dtype=float)
     t_min = np.ones((8, 8), dtype=float)
     x = np.arange(0, 8, 1.0)
     y = np.arange(0, 8, 1.0)
@@ -26,6 +27,7 @@ def _mock_result() -> step5.PathSolveResult:
         fp_fmm=fp_fmm,
         fp_dijkstra=fp_dijkstra,
         lrp=lrp,
+        lrp_fmm=lrp_fmm,
         t_min=t_min,
         x=x,
         y=y,
@@ -59,6 +61,9 @@ def test_run_step5_saves_three_figures_with_mock_solver(pipeline_fixture, monkey
         mc_index=1,
         output_dir=tmp_path,
         dh=None,
+        solver="pollock",
+        velocity_location="face",
+        align_with_modflow_velocity=False,
         fmm_velocity_layout="face",
         fmm_face_mapping="to_cell_avg",
         fmm_zero_policy="obstacle",
@@ -81,6 +86,15 @@ def test_run_step5_saves_three_figures_with_mock_solver(pipeline_fixture, monkey
     assert logk_path.name.endswith("_logk_paths.png")
     assert tmin_path.name.endswith("_arrival_paths.png")
     assert stream_path.name.endswith("_speed_streamlines.png")
+
+
+def test_validate_particle_tracking_options_rejects_pollock_cell_mode() -> None:
+    try:
+        step5._validate_particle_tracking_options(solver="pollock", velocity_location="cell")
+    except ValueError as exc:
+        assert "Pollock solver requires" in str(exc)
+    else:
+        raise AssertionError("Expected Pollock validation to reject cell velocity mode")
 
 
 def test_plot_paths_over_field_returns_figure() -> None:

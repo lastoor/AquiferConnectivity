@@ -137,6 +137,8 @@ Notes:
 - Spatial axes are normalized as `x/I_Y` and `y/I_Y`.
 - Arrival-time background is normalized as `T_min/t_ref`, with `t_ref = I_Y / (k_g * dh)`.
 - Speed/streamline background uses dimensionless velocity magnitude `|v|/(k_g*dh)` and streamlines from `v/(k_g*dh)`.
+- Particle tracking now supports `--solver pollock` or `--solver rk45`; defaults mirror the Algorithm runner: `--solver pollock`, `--velocity-location face`, `--no-align-with-modflow-velocity`.
+- Pollock requires `--velocity-location face`; the plotted `FP` path remains solver-neutral and reflects the selected particle-tracking backend.
 - Solver imports require both `Algorithm/src` and the sibling `FlowSimulation` repo.
 - Override FlowSimulation path with `FLOWSIM_PATH=/path/to/FlowSimulation` if needed.
 
@@ -144,14 +146,26 @@ Notes:
 
 Use `step6_single_field_arrival_hist.py` to generate one GRF realization and compare
 the empirical CDF of particle arrival times (successful exits only, `status==0`) with
-analytical `_g_tau` from `step4_plot.py`.
+analytical `_g_tau` from `step4_plot.py` and a lognormal CDF approximation.
 
 ```bash
 PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
   --config configs/visualization.default.yaml \
   --field-size 200 \
-  --std 1.0 \
+  --var 5.0 \
+  --n-mc 10 \
   --seed 0 \
+  --density-particle 20 \
+  --refine-tau-grid \
+  --tau-split 10 \
+  --tau-grid-fine 1024 \
+  --tau-grid-coarse 256 \
+  --y-exp 0.3 \
+  --pdf-hist-bins 48 \
+  --save-pdf-plot \
+  --solver "pollock" \
+  --velocity-location "face" \
+  --align-with-modflow-velocity False \
   --save-npz \
   --save-json \
   --output-dir "$FIGURE_DIR"
@@ -160,8 +174,34 @@ PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
 Outputs:
 
 - `<output_dir>/run<id>_singlefield_std<std>_var<var>_size<size>_seed<seed>_arrival_cdf_vs_analytical.png`
+- Optional (when `--save-pdf-plot`): `<output_dir>/run<id>_singlefield_std<std>_var<var>_size<size>_seed<seed>_arrival_pdf_vs_analytical.png`
 - Optional (when `--save-npz`): `<output_dir>/run<id>_singlefield_std<std>_var<var>_size<size>_seed<seed>_arrival_times.npz`
 - Optional (when `--save-json`): `<output_dir>/run<id>_singlefield_std<std>_var<var>_size<size>_seed<seed>_arrival_summary.json`
+- Reloaded figure from saved NPZ: `<output_dir>/<saved_npz_stem>_reloaded.png`
+- Optional reload density figure (when `--save-pdf-plot`): `<output_dir>/<saved_npz_stem>_reloaded_pdf.png`
+
+Reload a saved Step 6 NPZ artifact and regenerate the comparison figure without rerunning GRF/flow/particle tracking:
+
+```bash
+PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
+  --load-npz "$FIGURE_DIR/run3_singlefield_std1_var1_size200_seed0_mc10_arrival_times.npz"
+```
+
+Optionally choose a different output directory or DPI for the regenerated figure:
+
+```bash
+PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
+  --load-npz "$FIGURE_DIR/run3_singlefield_std1_var1_size200_seed0_mc10_arrival_times.npz" \
+  --refine-tau-grid \
+  --tau-split 10 \
+  --tau-grid-fine 1024 \
+  --tau-grid-coarse 256 \
+  --y-exp 0.3 \
+  --pdf-hist-bins 48 \
+  --save-pdf-plot \
+  --output-dir "$FIGURE_DIR/reloaded" \
+  --figure-dpi 200
+```
 
 Notes:
 
@@ -169,7 +209,19 @@ Notes:
 - Hydraulic head and velocity are solved using the same solver stack as Step 5.
 - Arrival times use one terminal time per successful particle (`status==0`, final trajectory timestamp), not flattened per-step trajectory times.
 - Comparison is done in dimensionless time `tU/I_Y` (`U = k_g * dh`, `I_Y = length_scale * field_size`).
+- Step 6 uses the same particle-tracking CLI as Step 5: `--solver {pollock,rk45}`, `--velocity-location {face,cell}`, and `--align-with-modflow-velocity/--no-align-with-modflow-velocity`, with Pollock as the default.
+- The lognormal overlay uses dimensionless mean `L / I_Y` and variance `X_11(L / U) / I_Y^2`, converted to the standard lognormal parameters of `ln(tU/I_Y)`.
 - By default, Step 6 saves only the figure; use `--save-npz` and/or `--save-json` to persist data artifacts.
+- Use `--save-pdf-plot` to save an extra probability-density figure. It uses a normalized empirical histogram from `tau_samples`, MC histogram mean/band from `tau_samples_by_mc`, and analytical/lognormal density overlays recomputed from saved model metadata.
+- Use `--pdf-hist-bins` to control the number of histogram bins for the probability-density figure. Effective histogram bin edges are saved in the NPZ so reload mode can reproduce the same PDF estimate.
+- Use `--refine-tau-grid/--no-refine-tau-grid` to enable or disable the early-`tau` refinement.
+- When refinement is enabled, the analytical/lognormal comparison grid is nonuniform: dense below `--tau-split` (quadratically clustered toward `tau_lo`) and coarser above it, controlled by `--tau-grid-fine` and `--tau-grid-coarse`.
+- When refinement is disabled, Step 6 uses a uniform `tau_grid` across the full range with `tau_grid_fine + tau_grid_coarse - 1` total points.
+- `--y-exp` controls the optional y-axis function scale. `--y-exp 1.0` keeps a linear y-axis; values such as `0.3` or `0.5` expand detail near CDF `0`.
+- `--load-npz` switches Step 6 into visualization-only mode, so `--config`, `--std`, and `--var` are not required in that path.
+- In reload mode, the same tau-grid options recompute analytical/lognormal/MC curves from saved NPZ metadata when available.
+- In reload mode, the PDF figure is recalculated from saved samples and saved PDF histogram metadata when available.
+- Older NPZ artifacts still reload; if they do not contain enough metadata and no sibling `_arrival_summary.json` is available, Step 6 falls back to the saved curves and prints a notice.
 - Script requires the external `Algorithm/src` + `FlowSimulation` runtime stack; set `FLOWSIM_PATH` if needed.
 
 ## Figure Sections

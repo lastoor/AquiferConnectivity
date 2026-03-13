@@ -34,9 +34,9 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 4
+MC_SCHEMA_VERSION = 6
 
-# Flat output schema v3: deterministic and explicit for analysis pipelines.
+# Flat output schema v5: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
     "schema_version",
     "mc_index",
@@ -45,10 +45,10 @@ MC_FIELDS = [
     "status_message",
     "len_lrp",
     "len_lrp_fmm",
-    "len_fp_rk45",
+    "len_fp",
     "len_fp_dijkstra",
     "len_fp_fmm",
-    "travel_time_rk45",
+    "travel_time_fp",
     "travel_time_dijkstra",
     "travel_time_fmm",
     "resistance_lrp",
@@ -73,8 +73,11 @@ MC_FIELDS = [
     "y_end_lrp_fmm",
     "y_end_fp_dijkstra",
     "y_end_fp_fmm",
-    "pt_velocity_layout",
+    "pt_solver",
+    "pt_velocity_location",
+    "pt_align_with_modflow_velocity",
     "fmm_velocity_layout",
+    "fmm_face_output",
     "fmm_face_mapping",
     "fmm_solver",
     "fmm_backtracking",
@@ -95,8 +98,10 @@ MC_FIELDS = [
 OBJECT_FIELDS = {
     "status_message",
     "endpoint_method",
-    "pt_velocity_layout",
+    "pt_solver",
+    "pt_velocity_location",
     "fmm_velocity_layout",
+    "fmm_face_output",
     "fmm_face_mapping",
     "fmm_solver",
     "fmm_backtracking",
@@ -110,6 +115,10 @@ INT_FIELDS = {
     "mc_index",
     "trial_used",
     "status_code",
+}
+
+BOOL_FIELDS = {
+    "pt_align_with_modflow_velocity",
 }
 
 
@@ -156,13 +165,13 @@ def save_path_outputs(
     lrp_fmm: np.ndarray,
     fp_dijkstra: np.ndarray,
     fp_fmm: np.ndarray,
-    fp_rk45: np.ndarray,
+    fp: np.ndarray,
 ) -> None:
     np.save(config_mc["path_size_path"] / f"lrp_size{config_mc['field_size_']}_mc{mc_index}.npy", lrp)
     np.save(config_mc["path_size_path"] / f"lrp_fmm_size{config_mc['field_size_']}_mc{mc_index}.npy", lrp_fmm)
     np.save(config_mc["path_size_path"] / f"fp_dijkstra_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_dijkstra)
     np.save(config_mc["path_size_path"] / f"fp_fmm_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_fmm)
-    np.save(config_mc["path_size_path"] / f"fp_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_rk45)
+    np.save(config_mc["path_size_path"] / f"fp_size{config_mc['field_size_']}_mc{mc_index}.npy", fp)
 
 
 def _uint64_to_u32_pair(value: int) -> tuple[int, int]:
@@ -239,6 +248,108 @@ def endpoint_y_at_x(path_xy: np.ndarray, x_ref: float) -> float:
 
     idx = int(np.argmin(np.abs(x - x_ref)))
     return float(y[idx])
+
+
+def build_face_coordinates_from_centers(coord_centers: np.ndarray) -> np.ndarray:
+    """Construct face coordinates from 1D cell centers by midpoint extrapolation."""
+    coord_centers = np.asarray(coord_centers, dtype=float).ravel()
+    if coord_centers.size < 2:
+        raise ValueError("coord_centers must contain at least 2 values")
+    faces = np.empty(coord_centers.size + 1, dtype=float)
+    faces[1:-1] = 0.5 * (coord_centers[:-1] + coord_centers[1:])
+    faces[0] = coord_centers[0] - 0.5 * (coord_centers[1] - coord_centers[0])
+    faces[-1] = coord_centers[-1] + 0.5 * (coord_centers[-1] - coord_centers[-2])
+    return faces
+
+
+def run_particle_tracking(
+    *,
+    config_mc: dict[str, Any],
+    x0: int,
+    x1: int,
+    source_rows: np.ndarray,
+    k_field: np.ndarray,
+    h_field: np.ndarray,
+    logger: Any,
+) -> tuple[np.ndarray, dict[str, Any], dict[str, np.ndarray]]:
+    n_particles = int(config_mc["particleTracking_arg"]["density_particle"] * max(1, source_rows.size))
+    seeds_x = np.full(n_particles, x0, np.float32)
+    seeds_y = np.linspace(float(source_rows[0]), float(source_rows[-1]), n_particles, endpoint=True).astype(np.float32)
+
+    pt_cfg = config_mc["particleTracking_arg"]
+    pt_solver = str(pt_cfg["solver"])
+    velocity_location = str(pt_cfg["velocity_location"])
+    align_with_modflow = bool(pt_cfg["align_with_modflow_velocity"])
+
+    if pt_solver == "pollock":
+        x_faces = build_face_coordinates_from_centers(config_mc["x"]).astype(np.float32)
+        y_faces = build_face_coordinates_from_centers(config_mc["y"]).astype(np.float32)
+        vx_pt, vy_pt = sim_hyd.compute_velocity(
+            k_field,
+            config_mc["x"],
+            config_mc["y"],
+            h_field,
+            output_location="face",
+            align_with_modflow=align_with_modflow,
+            face_output="full",
+        )
+        args_particle_tracking = {
+            "x_faces": x_faces,
+            "y_faces": y_faces,
+            "vx": vx_pt,
+            "vy": vy_pt,
+            "seeds_x": seeds_x,
+            "seeds_y": seeds_y,
+            "right_x": x1,
+            "max_points": pt_cfg["max_points"],
+            "max_steps": pt_cfg["max_iters"],
+        }
+        px, py, pt, L, st = sim_pt.particle_tracking_pollock(args_particle_tracking)
+    elif pt_solver == "rk45":
+        vx_pt, vy_pt = sim_hyd.compute_velocity(
+            k_field,
+            config_mc["x"],
+            config_mc["y"],
+            h_field,
+            output_location=velocity_location,
+            align_with_modflow=align_with_modflow,
+        )
+        args_particle_tracking = {
+            "x": config_mc["x"],
+            "y": config_mc["y"],
+            "vx": vx_pt,
+            "vy": vy_pt,
+            "seeds_x": seeds_x,
+            "seeds_y": seeds_y,
+            "right_x": x1,
+            "velocity_location": velocity_location,
+            "eps_speed": pt_cfg["eps_speed"],
+            "ds_min": pt_cfg["ds_min"],
+            "ds_max": pt_cfg["ds_max"],
+            "tol": pt_cfg["tol"],
+            "y_policy": pt_cfg["y_policy"],
+            "max_points": pt_cfg["max_points"],
+            "max_iters": pt_cfg["max_iters"],
+            "threads_per_block": pt_cfg["threads_per_block"],
+            "dtype": np.float64,
+        }
+        px, py, pt, L, st = sim_pt.particle_tracking_cpu(args_particle_tracking)
+    else:
+        raise ValueError(f"Unsupported particle-tracking solver: {pt_solver}")
+
+    count = Counter(st.tolist())
+    frac_success = count.get(0, 0) / max(1, n_particles)
+    frac_bad = (count.get(1, 0) + count.get(4, 0)) / max(1, n_particles)
+    logger.info(
+        f"[PT] solver={pt_solver}, velocity_location={velocity_location}, "
+        f"align_with_modflow={align_with_modflow}, status_counts={dict(count)}"
+    )
+    if frac_success < 0.5 or frac_bad > 0.1:
+        raise ValueError(f"Invalid velocity field for tracking: {count}")
+
+    res = sim_pt.fastest_trajectory(px, py, pt, L, st)
+    fp = np.vstack((res["x"], res["y"])).T
+    return fp, res, {"vx": np.asarray(vx_pt), "vy": np.asarray(vy_pt)}
 
 
 def compute_fmm_path_regions(
@@ -361,6 +472,12 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 "variance_seed_override": none_to_nan(config_mc.get("variance_seed_override", np.nan)),
                 "fmm_solver": config_mc["fmm_arg"]["solver"],
                 "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
+                "fmm_face_output": config_mc["fmm_arg"]["face_output"],
+                "pt_solver": config_mc["particleTracking_arg"]["solver"],
+                "pt_velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
+                "pt_align_with_modflow_velocity": bool(
+                    config_mc["particleTracking_arg"]["align_with_modflow_velocity"]
+                ),
                 "seed_mc": seed_mc if seed_mc is not None else np.nan,
                 "seed_trial": seed_trial if seed_trial is not None else np.nan,
             }
@@ -436,28 +553,29 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 record["status_message"] = f"Head solver failed: {msg}"
                 logger.warning(f"[MC {mc_index}] Head not converged, retrying next trial. {msg}")
                 continue
-            vx_fmm, vy_fmm = sim_hyd.compute_velocity(
-                k_field,
-                config_mc["x"],
-                config_mc["y"],
-                h,
-                output_location=config_mc["fmm_arg"]["velocity_layout"],
-            )
-            if config_mc["pt_velocity_layout"] == config_mc["fmm_arg"]["velocity_layout"]:
-                vx_pt, vy_pt = vx_fmm, vy_fmm
-            else:
-                vx_pt, vy_pt = sim_hyd.compute_velocity(
+            if config_mc["fmm_arg"]["velocity_layout"] == "face":
+                vx_fmm, vy_fmm = sim_hyd.compute_velocity(
                     k_field,
                     config_mc["x"],
                     config_mc["y"],
                     h,
-                    output_location=config_mc["pt_velocity_layout"],
+                    output_location="face",
+                    face_output=config_mc["fmm_arg"]["face_output"],
+                )
+            else:
+                vx_fmm, vy_fmm = sim_hyd.compute_velocity(
+                    k_field,
+                    config_mc["x"],
+                    config_mc["y"],
+                    h,
+                    output_location="cell",
                 )
 
             speed_fmm, traversable_mask, speed_diag = prepare_fmm_speed(
                 vx=vx_fmm,
                 vy=vy_fmm,
                 layout=config_mc["fmm_arg"]["velocity_layout"],
+                face_output=config_mc["fmm_arg"]["face_output"],
                 face_mapping=config_mc["fmm_arg"]["face_mapping"],
                 zero_policy=config_mc["fmm_arg"]["zero_policy"],
                 min_speed=config_mc["fmm_arg"]["min_speed"],
@@ -465,7 +583,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             nontraversable_count = int((~traversable_mask).sum())
             logger.info(
                 f"[MC {mc_index}] FMM speed prep: layout={speed_diag['layout']}, "
-                f"face_mapping={speed_diag['face_mapping']}, zero_policy={speed_diag['zero_policy']}, "
+                f"face_output={speed_diag['face_output']}, face_mapping={speed_diag['face_mapping']}, "
+                f"zero_policy={speed_diag['zero_policy']}, "
                 f"zero_or_bad={speed_diag['zero_or_bad_count']}, nontraversable={nontraversable_count}"
             )
 
@@ -502,54 +621,37 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 logger.warning(f"[MC {mc_index}] Invalid FP (FMM), retrying next trial.")
                 continue
 
-            # 4) Particle tracking RK45 CPU
-            nP = int(config_mc["particleTracking_arg"]["density_particle"] * max(1, source_rows.size))
-            seeds_x = np.full(nP, x0, np.float32)
-            seeds_y = np.linspace(float(source_rows[0]), float(source_rows[-1]), nP, endpoint=True).astype(np.float32)
-            args_particle_tracking = {
-                "x": config_mc["x"],
-                "y": config_mc["y"],
-                "vx": vx_pt,
-                "vy": vy_pt,
-                "seeds_x": seeds_x,
-                "seeds_y": seeds_y,
-                "right_x": x1,
-                "velocity_location": config_mc["pt_velocity_layout"],
-                "eps_speed": config_mc["particleTracking_arg"]["eps_speed"],
-                "ds_min": config_mc["particleTracking_arg"]["ds_min"],
-                "ds_max": config_mc["particleTracking_arg"]["ds_max"],
-                "tol": config_mc["particleTracking_arg"]["tol"],
-                "y_policy": config_mc["particleTracking_arg"]["y_policy"],
-                "max_points": config_mc["particleTracking_arg"]["max_points"],
-                "max_iters": config_mc["particleTracking_arg"]["max_iters"],
-                "threads_per_block": config_mc["particleTracking_arg"]["threads_per_block"],
-                "dtype": np.float64,
-            }
-
-            px, py, pt, L, st = sim_pt.particle_tracking_cpu(args_particle_tracking)
-            count = Counter(st.tolist())
-            frac_success = count.get(0, 0) / max(1, nP)
-            frac_bad = (count.get(1, 0) + count.get(4, 0)) / max(1, nP)
-            if frac_success < 0.5 or frac_bad > 0.1:
+            # 4) Particle tracking
+            try:
+                fp, pt_res, _pt_velocity = run_particle_tracking(
+                    config_mc=config_mc,
+                    x0=x0,
+                    x1=x1,
+                    source_rows=source_rows,
+                    k_field=k_field,
+                    h_field=h,
+                    logger=logger,
+                )
+            except ValueError as exc:
                 record["status_code"] = 6
-                record["status_message"] = f"Invalid velocity field for tracking: {count}"
-                logger.warning(f"[MC {mc_index}] Invalid velocity field, retrying next trial. {count}")
+                record["status_message"] = str(exc)
+                logger.warning(f"[MC {mc_index}] Invalid velocity field, retrying next trial. {exc}")
                 continue
 
-            res = sim_pt.fastest_trajectory(px, py, pt, L, st)
-            fp_rk45 = np.vstack((res["x"], res["y"])).T
-            if fp_rk45.size == 0 or not sim_path.is_path_valid(fp_rk45, domain_box, len_min=np.abs(x1 - x0)):
+            if fp.size == 0 or not sim_path.is_path_valid(fp, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 7
-                record["status_message"] = "Invalid FP(RK45) geometry"
-                logger.warning(f"[MC {mc_index}] Invalid FP (RK45), retrying next trial.")
+                record["status_message"] = f"Invalid FP({config_mc['particleTracking_arg']['solver']}) geometry"
+                logger.warning(
+                    f"[MC {mc_index}] Invalid FP ({config_mc['particleTracking_arg']['solver']}), retrying next trial."
+                )
                 continue
 
             # 5) Metrics and persist
-            hist_fp_lrp, _, _ = distance_distribution(fp_rk45, lrp, ds=1.0)
-            hist_fp_lrp_fmm, _, _ = distance_distribution(fp_rk45, lrp_fmm, ds=1.0)
-            hist_fp_dij, _, _ = distance_distribution(fp_rk45, fp_dijkstra, ds=1.0)
-            hist_fp_fmm, _, _ = distance_distribution(fp_rk45, fp_fmm, ds=1.0)
-            y_end_fp = endpoint_y_at_x(fp_rk45, x_ref=x_ref)
+            hist_fp_lrp, _, _ = distance_distribution(fp, lrp, ds=1.0)
+            hist_fp_lrp_fmm, _, _ = distance_distribution(fp, lrp_fmm, ds=1.0)
+            hist_fp_dij, _, _ = distance_distribution(fp, fp_dijkstra, ds=1.0)
+            hist_fp_fmm, _, _ = distance_distribution(fp, fp_fmm, ds=1.0)
+            y_end_fp = endpoint_y_at_x(fp, x_ref=x_ref)
             y_end_lrp = endpoint_y_at_x(lrp, x_ref=x_ref)
             y_end_lrp_fmm = endpoint_y_at_x(lrp_fmm, x_ref=x_ref)
             y_end_fp_dij = endpoint_y_at_x(fp_dijkstra, x_ref=x_ref)
@@ -561,10 +663,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "status_message": "ok",
                     "len_lrp": float(sim_utils.euclidean_length(lrp)),
                     "len_lrp_fmm": float(sim_utils.euclidean_length(lrp_fmm)),
-                    "len_fp_rk45": float(sim_utils.euclidean_length(fp_rk45)),
+                    "len_fp": float(sim_utils.euclidean_length(fp)),
                     "len_fp_dijkstra": float(sim_utils.euclidean_length(fp_dijkstra)),
                     "len_fp_fmm": float(sim_utils.euclidean_length(fp_fmm)),
-                    "travel_time_rk45": float(res["travel_time"]),
+                    "travel_time_fp": float(pt_res["travel_time"]),
                     "travel_time_dijkstra": float(total_t_dijkstra),
                     "travel_time_fmm": float(total_t_fmm),
                     "resistance_lrp": float(total_R),
@@ -575,7 +677,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "hausdorff_fp_vs_fmm": float(np.max(hist_fp_fmm)),
                     "endpoint_method": "interp_at_xref",
                     "endpoint_x_ref": float(x_ref),
-                    "x_end_fp": float(fp_rk45[-1, 0]),
+                    "x_end_fp": float(fp[-1, 0]),
                     "x_end_lrp": float(lrp[-1, 0]),
                     "x_end_lrp_fmm": float(lrp_fmm[-1, 0]),
                     "x_end_fp_dijkstra": float(fp_dijkstra[-1, 0]),
@@ -589,8 +691,13 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "endpoint_dy_fp_vs_lrp_fmm": float(y_end_fp - y_end_lrp_fmm),
                     "endpoint_dy_fp_vs_dijkstra": float(y_end_fp - y_end_fp_dij),
                     "endpoint_dy_fp_vs_fmm": float(y_end_fp - y_end_fp_fmm),
-                    "pt_velocity_layout": config_mc["pt_velocity_layout"],
+                    "pt_solver": config_mc["particleTracking_arg"]["solver"],
+                    "pt_velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
+                    "pt_align_with_modflow_velocity": bool(
+                        config_mc["particleTracking_arg"]["align_with_modflow_velocity"]
+                    ),
                     "fmm_velocity_layout": config_mc["fmm_arg"]["velocity_layout"],
+                    "fmm_face_output": config_mc["fmm_arg"]["face_output"],
                     "fmm_face_mapping": config_mc["fmm_arg"]["face_mapping"],
                     "fmm_solver": config_mc["fmm_arg"]["solver"],
                     "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
@@ -609,7 +716,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 lrp_fmm=lrp_fmm,
                 fp_dijkstra=fp_dijkstra,
                 fp_fmm=fp_fmm,
-                fp_rk45=fp_rk45,
+                fp=fp,
             )
             logger.info(f"[MC {mc_index}] Trial {trial + 1} successful and outputs saved.")
             return record
@@ -631,6 +738,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "variance_seed_override": none_to_nan(config_mc.get("variance_seed_override", np.nan)),
             "fmm_solver": config_mc["fmm_arg"]["solver"],
             "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
+            "fmm_face_output": config_mc["fmm_arg"]["face_output"],
+            "pt_solver": config_mc["particleTracking_arg"]["solver"],
+            "pt_velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
+            "pt_align_with_modflow_velocity": bool(config_mc["particleTracking_arg"]["align_with_modflow_velocity"]),
             "seed_mc": seed_mc if seed_mc is not None else np.nan,
             "seed_trial": np.nan,
         }
@@ -673,6 +784,8 @@ def run_field_size_simulation(idx_size: int, config_base: dict[str, Any]) -> dic
             agg[key] = np.asarray(values, dtype=object)
         elif key in INT_FIELDS:
             agg[key] = np.asarray(values, dtype=np.int32)
+        elif key in BOOL_FIELDS:
+            agg[key] = np.asarray(values, dtype=bool)
         else:
             agg[key] = np.asarray(values, dtype=float)
 
@@ -733,11 +846,25 @@ def parse_args() -> argparse.Namespace:
         help="Velocity layout for FMM speed preparation.",
     )
     parser.add_argument(
-        "--pt_velocity_layout",
+        "--solver",
         type=str,
-        default="cell",
+        default="pollock",
+        choices=["pollock", "rk45"],
+        help="Particle-tracking solver used for fastest-path extraction.",
+    )
+    parser.add_argument(
+        "--velocity-location",
+        dest="velocity_location",
+        type=str,
+        default="face",
         choices=["face", "cell"],
-        help="Velocity layout for particle tracking.",
+        help="Velocity layout used for RK45 particle tracking. Pollock requires face velocities.",
+    )
+    parser.add_argument(
+        "--align-with-modflow-velocity",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether particle-tracking velocity output should match MODFLOW-style zeroed outer right/top faces.",
     )
     parser.add_argument(
         "--fmm_face_mapping",
@@ -745,6 +872,13 @@ def parse_args() -> argparse.Namespace:
         default="to_cell_avg",
         choices=["to_cell_avg", "direct"],
         help="Mapping from face-centered flux to FMM speed field.",
+    )
+    parser.add_argument(
+        "--fmm_face_output",
+        type=str,
+        default="full",
+        choices=["full", "trimmed"],
+        help="Face-field contract for FMM when --fmm_velocity_layout face.",
     )
     parser.add_argument(
         "--fmm_solver",
@@ -775,7 +909,12 @@ def parse_args() -> argparse.Namespace:
     )
     group.add_argument("--std", type=float, default=None, help="Standard deviation for GRF generation.")
     group.add_argument("--var", type=float, default=None, help="Variance for GRF generation.")
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.solver == "pollock" and args.velocity_location != "face":
+        parser.error("--solver pollock requires --velocity-location face")
+    if args.fmm_velocity_layout == "face" and args.fmm_face_output == "full" and args.fmm_face_mapping == "direct":
+        parser.error("--fmm_face_output full is not supported with --fmm_face_mapping direct")
+    return args
 
 
 def main() -> None:
@@ -829,14 +968,17 @@ def main() -> None:
         },
         "fmm_arg": {
             "velocity_layout": args.fmm_velocity_layout,
+            "face_output": args.fmm_face_output,
             "face_mapping": args.fmm_face_mapping,
             "solver": args.fmm_solver,
             "backtracking": args.fmm_backtracking,
             "zero_policy": args.fmm_zero_policy,
             "min_speed": args.fmm_min_speed,
         },
-        "pt_velocity_layout": args.pt_velocity_layout,
         "particleTracking_arg": {
+            "solver": args.solver,
+            "velocity_location": args.velocity_location,
+            "align_with_modflow_velocity": bool(args.align_with_modflow_velocity),
             "density_particle": 20,
             "eps_speed": 1e-30,
             "ds_min": 1e-20,
@@ -868,7 +1010,12 @@ def main() -> None:
         f"variance_rank={config_base['variance_rank']}, "
         f"variance_seed_override={config_base['variance_seed_override']}, "
         f"fmm_solver={config_base['fmm_arg']['solver']}, "
-        f"fmm_backtracking={config_base['fmm_arg']['backtracking']}"
+        f"fmm_backtracking={config_base['fmm_arg']['backtracking']}, "
+        f"fmm_face_output={config_base['fmm_arg']['face_output']}, "
+        f"pt_solver={config_base['particleTracking_arg']['solver']}, "
+        f"pt_velocity_location={config_base['particleTracking_arg']['velocity_location']}, "
+        "pt_align_with_modflow_velocity="
+        f"{config_base['particleTracking_arg']['align_with_modflow_velocity']}"
     )
 
     event_stop_gpuprofiler = threading.Event()

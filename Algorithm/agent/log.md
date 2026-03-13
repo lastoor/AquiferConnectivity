@@ -47,3 +47,21 @@
 - Added and updated tests for the renamed FMM APIs, solver/backtracking combinations, and `run_fmm.py` CLI coverage.
 - Updated `./README.md` with the new solver/backtracking options and corrected the documented output schema version to v4.
 - Updated `./agent/guide.md` to require schema-safe `.npz` outputs and explicitly forbid `NaN`/`None`/object sentinels in saved metadata fields.
+
+## 2026-03-12
+
+- Refactored `./scripts/run_fmm.py` fastest-path tracking to support both `Pollock` and `RK45` backends via:
+  - `--solver` (`pollock`, `rk45`)
+  - `--velocity-location` (`face`, `cell`)
+  - `--align-with-modflow-velocity` / `--no-align-with-modflow-velocity`
+- Switched the saved fastest-path outputs to solver-neutral field names:
+  - `len_fp`, `travel_time_fp`
+  - added metadata `pt_solver`, `pt_velocity_location`, `pt_align_with_modflow_velocity`
+- Updated `./scripts/run_fmm.py` output schema from v5 to v6.
+- Extended `./src/fmm_core/speed.py` and `./scripts/run_fmm.py` to support FMM face-centered inputs in two contracts:
+  - `--fmm_face_output full` (default): staggered physical faces
+  - `--fmm_face_output trimmed`: per-cell right/top faces
+- Implemented symmetric adjacent-face averaging for `full` face inputs under `to_cell_avg`.
+- Added validation to reject `--fmm_face_output full --fmm_face_mapping direct`.
+- Updated `./tests/test_speed_prep.py`, `./tests/test_run_fmm_integration.py`, and `./tests/run_fmm_compare.py` for the new Pollock and FMM face-output behavior.
+- Updated `./README.md` to document the new solver options, FMM face-output mode, and schema v6 fields.

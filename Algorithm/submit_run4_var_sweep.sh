@@ -2,9 +2,9 @@
 set -euo pipefail
 
 VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5") 
-# VAR=("0.1" "5")
+# VAR=("0")
 length_scale="0.05"
-run="6_face_custom_conti"
+run="7_face_pollock_custom_conti"
 dh="0.1"
 
 # Keep original workload profile
@@ -71,10 +71,13 @@ which python
   --seed 0 \\
   --seed_mode strict_mc \\
   --variance_seed_policy same \\
+  --solver pollock \\
+  --velocity-location face \\
+  --no-align-with-modflow-velocity \\
   --fmm_solver custom \\
   --fmm_backtracking continuous \\
-  --pt_velocity_layout face \\
   --fmm_velocity_layout face \\
+  --fmm_face_output full \\
   --fmm_face_mapping to_cell_avg \\
   --fmm_zero_policy obstacle \\
   --fmm_min_speed 1e-12

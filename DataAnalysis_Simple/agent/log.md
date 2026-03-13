@@ -345,3 +345,83 @@
   - Lightweight runtime sanity check for `_g_tau` and `compute_analytical_tmin_curve` via `PYTHONPATH=./scripts python - <<'PY' ...`
 - Limitations/follow-up:
   - `pytest` is not installed in the current shell environment, so updated tests were compile-checked but not executed with `pytest`.
+
+## 2026-03-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Added Step 6 reload/visualization support so saved arrival-time NPZ artifacts can be loaded and replotted without rerunning simulation, added a round-trip Step 6 test, and updated README usage for the new `--load-npz` workflow.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `tests/test_step6_single_field_arrival_hist.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
+  - Attempted `pytest tests/test_step6_single_field_arrival_hist.py` (`pytest: command not found`)
+  - Attempted `python -m pytest tests/test_step6_single_field_arrival_hist.py` (`No module named pytest`)
+- Limitations/follow-up:
+  - Full automated test execution still requires `pytest` to be installed in the active environment.
+
+## 2026-03-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Updated Step 6 to use a nonuniform tau grid with denser sampling before `tau=10` by default, added CLI controls for tau-grid density and y-axis exponent scaling (`--y-exp`), extended Step 6 tests, and refreshed README documentation.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `tests/test_step6_single_field_arrival_hist.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
+- Limitations/follow-up:
+  - Full automated test execution still requires `pytest` to be installed in the active environment.
+
+## 2026-03-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Added a Step 6 CLI toggle to enable or disable early-`tau` grid refinement (`--refine-tau-grid/--no-refine-tau-grid`), updated tests for refined vs uniform grid construction, and refreshed README usage.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `tests/test_step6_single_field_arrival_hist.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
+- Limitations/follow-up:
+  - Full automated test execution still requires `pytest` to be installed in the active environment.
+
+## 2026-03-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Extended Step 6 reload mode so `--load-npz` can recompute analytical/lognormal/MC curves on a new tau grid using the same refinement options as the compute path, persisted the required reload metadata in NPZ/JSON outputs, added backward-compatible fallback via sibling summary JSON or saved curves, and expanded Step 6 tests accordingly.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `tests/test_step6_single_field_arrival_hist.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
+- Limitations/follow-up:
+  - Full automated test execution still requires `pytest` to be installed in the active environment.
+
+## 2026-03-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Added an opt-in extra Step 6 probability-density figure (`--save-pdf-plot`) for both compute and reload modes, using a normalized empirical histogram plus density curves derived numerically from the analytical/lognormal/MC CDFs; updated tests, README, and CLI output accordingly.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `tests/test_step6_single_field_arrival_hist.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
+- Limitations/follow-up:
+  - Full automated test execution still requires `pytest` to be installed in the active environment.
+
+## 2026-03-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Reworked the Step 6 probability-density figure to recalculate densities from saved raw samples and model metadata instead of differentiating saved CDF arrays, added saved histogram metadata (`--pdf-hist-bins` + effective bin edges) for reproducible reload-mode PDF regeneration, and updated tests/README accordingly.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `tests/test_step6_single_field_arrival_hist.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
+- Limitations/follow-up:
+  - Full automated test execution still requires `pytest` to be installed in the active environment.

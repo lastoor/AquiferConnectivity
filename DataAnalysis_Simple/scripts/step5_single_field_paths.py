@@ -227,6 +227,26 @@ def _build_domain(field_size: int) -> dict[str, Any]:
     }
 
 
+def build_face_coordinates_from_centers(coord_centers: np.ndarray) -> np.ndarray:
+    coord_centers = np.asarray(coord_centers, dtype=float).ravel()
+    if coord_centers.size < 2:
+        raise ValueError("coord_centers must contain at least 2 values")
+    faces = np.empty(coord_centers.size + 1, dtype=float)
+    faces[1:-1] = 0.5 * (coord_centers[:-1] + coord_centers[1:])
+    faces[0] = coord_centers[0] - 0.5 * (coord_centers[1] - coord_centers[0])
+    faces[-1] = coord_centers[-1] + 0.5 * (coord_centers[-1] - coord_centers[-2])
+    return faces
+
+
+def _validate_particle_tracking_options(*, solver: str, velocity_location: str) -> None:
+    if solver not in {"pollock", "rk45"}:
+        raise ValueError(f"Unsupported particle-tracking solver: {solver}")
+    if velocity_location not in {"face", "cell"}:
+        raise ValueError(f"Unsupported velocity_location={velocity_location}; expected 'face' or 'cell'.")
+    if solver == "pollock" and velocity_location != "face":
+        raise ValueError("Pollock solver requires velocity_location='face'.")
+
+
 def _require_path_valid(sim_path: Any, path: np.ndarray, domain_box: tuple[int, int, int, int], x0: int, x1: int, name: str) -> None:
     if path.size == 0 or not sim_path.is_path_valid(path, domain_box, len_min=abs(x1 - x0)):
         raise RuntimeError(f"Invalid {name} geometry.")
@@ -269,11 +289,111 @@ def _compute_fmm_path(
     return path_xy, t_field
 
 
+def _run_particle_tracking(
+    *,
+    sim_hyd: Any,
+    sim_pt: Any,
+    k_field: np.ndarray,
+    h_field: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    x0: int,
+    x1: int,
+    y0: int,
+    y1: int,
+    solver: str,
+    velocity_location: str,
+    align_with_modflow_velocity: bool,
+    density_particle: int,
+    eps_speed: float,
+    ds_min: float,
+    ds_max: float,
+    tol: float,
+    y_policy: str,
+    max_points: int,
+    max_iters: int,
+    rk45_min_success_frac: float,
+    rk45_max_bad_frac: float,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location)
+    n_particles = max(2, int(density_particle * abs(y1 - y0)))
+    seeds_x = np.full(n_particles, x0, np.float32)
+    seeds_y = np.linspace(y0, y1, n_particles).astype(np.float32)
+
+    if solver == "pollock":
+        vx, vy = sim_hyd.compute_velocity(
+            k_field,
+            x,
+            y,
+            h_field,
+            output_location="face",
+            align_with_modflow=align_with_modflow_velocity,
+            face_output="full",
+        )
+        track_args = {
+            "x_faces": build_face_coordinates_from_centers(x).astype(np.float32),
+            "y_faces": build_face_coordinates_from_centers(y).astype(np.float32),
+            "vx": vx,
+            "vy": vy,
+            "seeds_x": seeds_x,
+            "seeds_y": seeds_y,
+            "right_x": x1,
+            "max_points": max_points,
+            "max_steps": max_iters,
+        }
+        px, py, pt, length_arr, status_arr = sim_pt.particle_tracking_pollock(track_args)
+    else:
+        vx, vy = sim_hyd.compute_velocity(
+            k_field,
+            x,
+            y,
+            h_field,
+            output_location=velocity_location,
+            align_with_modflow=align_with_modflow_velocity,
+        )
+        track_args = {
+            "x": x,
+            "y": y,
+            "vx": vx,
+            "vy": vy,
+            "seeds_x": seeds_x,
+            "seeds_y": seeds_y,
+            "right_x": x1,
+            "velocity_location": velocity_location,
+            "eps_speed": eps_speed,
+            "ds_min": ds_min,
+            "ds_max": ds_max,
+            "tol": tol,
+            "y_policy": y_policy,
+            "max_points": max_points,
+            "max_iters": max_iters,
+            "threads_per_block": 256,
+            "dtype": np.float64,
+        }
+        px, py, pt, length_arr, status_arr = sim_pt.particle_tracking_cpu(track_args)
+
+    count = Counter(status_arr.tolist())
+    frac_success = count.get(0, 0) / max(1, n_particles)
+    frac_bad = (count.get(1, 0) + count.get(4, 0)) / max(1, n_particles)
+    if frac_success < rk45_min_success_frac or frac_bad > rk45_max_bad_frac:
+        raise RuntimeError(
+            "Invalid velocity field for tracking. "
+            f"status={dict(count)}, success_frac={frac_success:.3f}, bad_frac={frac_bad:.3f}"
+        )
+
+    result = sim_pt.fastest_trajectory(px, py, pt, length_arr, status_arr)
+    fp = np.vstack((result["x"], result["y"])).T
+    return fp, np.asarray(vx, dtype=float), np.asarray(vy, dtype=float)
+
+
 def solve_single_field(
     logk_field: np.ndarray,
     *,
     field_size: int,
     dh: float,
+    solver: str,
+    velocity_location: str,
+    align_with_modflow_velocity: bool,
     fmm_velocity_layout: str,
     fmm_face_mapping: str,
     fmm_zero_policy: str,
@@ -299,6 +419,7 @@ def solve_single_field(
 
     if logk_field.shape != (field_size, field_size):
         raise ValueError(f"logK shape {logk_field.shape} does not match requested field-size={field_size}.")
+    _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location)
 
     k_field = np.exp(logk_field)
     domain = _build_domain(field_size)
@@ -332,10 +453,10 @@ def solve_single_field(
     if not is_success:
         raise RuntimeError(f"Head solver failed: {msg}")
 
-    vx, vy = sim_hyd.compute_velocity(k_field, x, y, h, output_location=fmm_velocity_layout)
+    vx_fmm, vy_fmm = sim_hyd.compute_velocity(k_field, x, y, h, output_location=fmm_velocity_layout)
     speed_fmm, traversable_mask, _speed_diag = prepare_fmm_speed(
-        vx=vx,
-        vy=vy,
+        vx=vx_fmm,
+        vy=vy_fmm,
         layout=fmm_velocity_layout,
         face_mapping=fmm_face_mapping,
         zero_policy=fmm_zero_policy,
@@ -358,40 +479,31 @@ def solve_single_field(
     )
     _require_path_valid(sim_path, fp_fmm, domain_box, x0, x1, "FP (FMM)")
 
-    n_particles = max(2, int(density_particle * abs(y1 - y0)))
-    seeds_x = np.full(n_particles, x0, np.float32)
-    seeds_y = np.linspace(y0, y1, n_particles).astype(np.float32)
-    track_args = {
-        "x": x,
-        "y": y,
-        "vx": vx,
-        "vy": vy,
-        "seeds_x": seeds_x,
-        "seeds_y": seeds_y,
-        "right_x": x1,
-        "velocity_location": "face",
-        "eps_speed": eps_speed,
-        "ds_min": ds_min,
-        "ds_max": ds_max,
-        "tol": tol,
-        "y_policy": y_policy,
-        "max_points": max_points,
-        "max_iters": max_iters,
-        "threads_per_block": 256,
-        "dtype": np.float64,
-    }
-    px, py, pt, length_arr, status_arr = sim_pt.particle_tracking_cpu(track_args)
-    count = Counter(status_arr.tolist())
-    frac_success = count.get(0, 0) / max(1, n_particles)
-    frac_bad = (count.get(1, 0) + count.get(4, 0)) / max(1, n_particles)
-    if frac_success < rk45_min_success_frac or frac_bad > rk45_max_bad_frac:
-        raise RuntimeError(
-            "Invalid velocity field for tracking. "
-            f"status={dict(count)}, success_frac={frac_success:.3f}, bad_frac={frac_bad:.3f}"
-        )
-
-    result = sim_pt.fastest_trajectory(px, py, pt, length_arr, status_arr)
-    fp = np.vstack((result["x"], result["y"])).T
+    fp, vx_pt, vy_pt = _run_particle_tracking(
+        sim_hyd=sim_hyd,
+        sim_pt=sim_pt,
+        k_field=k_field,
+        h_field=h,
+        x=x,
+        y=y,
+        x0=x0,
+        x1=x1,
+        y0=y0,
+        y1=y1,
+        solver=solver,
+        velocity_location=velocity_location,
+        align_with_modflow_velocity=align_with_modflow_velocity,
+        density_particle=density_particle,
+        eps_speed=eps_speed,
+        ds_min=ds_min,
+        ds_max=ds_max,
+        tol=tol,
+        y_policy=y_policy,
+        max_points=max_points,
+        max_iters=max_iters,
+        rk45_min_success_frac=rk45_min_success_frac,
+        rk45_max_bad_frac=rk45_max_bad_frac,
+    )
     fp = fp[fp[:, 0] <= x1]
     _require_path_valid(sim_path, fp, domain_box, x0, x1, "FP")
 
@@ -407,8 +519,8 @@ def solve_single_field(
         t_min=t_min,
         x=np.asarray(x, dtype=float),
         y=np.asarray(y, dtype=float),
-        vx=np.asarray(vx, dtype=float),
-        vy=np.asarray(vy, dtype=float),
+        vx=vx_pt,
+        vy=vy_pt,
         source_xy=source_xy,
         target_xy=target_xy,
     )
@@ -544,6 +656,9 @@ def run_step5(
     mc_index: int,
     output_dir: Path | None,
     dh: float | None,
+    solver: str,
+    velocity_location: str,
+    align_with_modflow_velocity: bool,
     fmm_velocity_layout: str,
     fmm_face_mapping: str,
     fmm_zero_policy: str,
@@ -567,6 +682,9 @@ def run_step5(
         logk_field,
         field_size=field_size,
         dh=dh_eff,
+        solver=solver,
+        velocity_location=velocity_location,
+        align_with_modflow_velocity=align_with_modflow_velocity,
         fmm_velocity_layout=fmm_velocity_layout,
         fmm_face_mapping=fmm_face_mapping,
         fmm_zero_policy=fmm_zero_policy,
@@ -649,6 +767,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=None)
 
     parser.add_argument("--dh", type=float, default=None)
+    parser.add_argument("--solver", choices=["pollock", "rk45"], default="pollock")
+    parser.add_argument("--velocity-location", choices=["face", "cell"], default="face")
+    parser.add_argument(
+        "--align-with-modflow-velocity",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Whether to align face velocities with MODFLOW convention for particle tracking.",
+    )
     parser.add_argument("--fmm-velocity-layout", choices=["face", "cell"], default="face")
     parser.add_argument("--fmm-face-mapping", choices=["to_cell_avg", "direct"], default="to_cell_avg")
     parser.add_argument("--fmm-zero-policy", choices=["obstacle", "clip", "error"], default="obstacle")
@@ -664,7 +790,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iters", type=int, default=1000000)
     parser.add_argument("--rk45-min-success-frac", type=float, default=0.5)
     parser.add_argument("--rk45-max-bad-frac", type=float, default=0.1)
-    return parser.parse_args()
+    args = parser.parse_args()
+    _validate_particle_tracking_options(solver=args.solver, velocity_location=args.velocity_location)
+    return args
 
 
 def main() -> int:
@@ -678,6 +806,9 @@ def main() -> int:
         mc_index=args.mc_index,
         output_dir=args.output_dir,
         dh=args.dh,
+        solver=args.solver,
+        velocity_location=args.velocity_location,
+        align_with_modflow_velocity=args.align_with_modflow_velocity,
         fmm_velocity_layout=args.fmm_velocity_layout,
         fmm_face_mapping=args.fmm_face_mapping,
         fmm_zero_policy=args.fmm_zero_policy,
