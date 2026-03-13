@@ -65,3 +65,32 @@
 - Added validation to reject `--fmm_face_output full --fmm_face_mapping direct`.
 - Updated `./tests/test_speed_prep.py`, `./tests/test_run_fmm_integration.py`, and `./tests/run_fmm_compare.py` for the new Pollock and FMM face-output behavior.
 - Updated `./README.md` to document the new solver options, FMM face-output mode, and schema v6 fields.
+
+## 2026-03-13
+
+- Updated `./scripts/run_fmm.py` from schema v6 to v8:
+  - switched fastest-path extraction to `simulation.particle_tracking.particle_tracking_summary(...)`
+  - added `pt_backend` metadata
+  - added exact particle-count metadata `pt_num_particles`
+  - added `--num_particles` exact-count override for fastest-path tracking
+- Split CPU and GPU entrypoints:
+  - `./scripts/run_fmm.py` is the CPU-oriented runner and rejects `--backend gpu`
+  - added `./scripts/run_fmm_gpu_worker.py` for `--backend gpu`
+- Added a dedicated GPU Slurm submission script:
+  - `./submit_run4_var_sweep_gpu.sh`
+  - requests one GPU and uses `--num_particles 1000000`
+- Implemented a single dedicated GPU worker in `./scripts/run_fmm_gpu_worker.py` with:
+  - bounded task queue
+  - compact `seed_spec` payloads instead of serialized seed arrays
+  - shared-memory transfer for `vx`, `vy`, `x_faces`, and `y_faces`
+  - exact winner replay in Pollock GPU arrival mode
+- Attempted true fused multi-task GPU batching, then stepped back after exposing a Taichi lifecycle issue (`FieldsBuilder finalized`) in FlowSimulation’s Pollock GPU tracker.
+- Reworked the GPU-worker execution model to the current stable form:
+  - one persistent GPU worker process
+  - one GPU task at a time
+  - one persistent Pollock GPU tracker reused across repeated tasks with the same grid and exact particle count
+  - explicit rejection when later tasks require a different tracker shape/capacity in the same worker process
+- Verified the new CPU/GPU runner split and GPU-worker tests in `taichi_env`:
+  - CLI guard checks for CPU-vs-GPU entrypoints
+  - `tests/test_run_fmm_gpu_worker.py`
+  - relevant `tests/test_run_fmm_integration.py` and `tests/test_import_contract.py` slices

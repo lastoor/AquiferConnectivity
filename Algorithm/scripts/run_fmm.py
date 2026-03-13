@@ -34,9 +34,9 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 6
+MC_SCHEMA_VERSION = 8
 
-# Flat output schema v5: deterministic and explicit for analysis pipelines.
+# Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
     "schema_version",
     "mc_index",
@@ -74,6 +74,8 @@ MC_FIELDS = [
     "y_end_fp_dijkstra",
     "y_end_fp_fmm",
     "pt_solver",
+    "pt_backend",
+    "pt_num_particles",
     "pt_velocity_location",
     "pt_align_with_modflow_velocity",
     "fmm_velocity_layout",
@@ -99,6 +101,7 @@ OBJECT_FIELDS = {
     "status_message",
     "endpoint_method",
     "pt_solver",
+    "pt_backend",
     "pt_velocity_location",
     "fmm_velocity_layout",
     "fmm_face_output",
@@ -115,6 +118,7 @@ INT_FIELDS = {
     "mc_index",
     "trial_used",
     "status_code",
+    "pt_num_particles",
 }
 
 BOOL_FIELDS = {
@@ -262,6 +266,14 @@ def build_face_coordinates_from_centers(coord_centers: np.ndarray) -> np.ndarray
     return faces
 
 
+def resolve_particle_count(config_mc: dict[str, Any], source_rows: np.ndarray) -> int:
+    pt_cfg = config_mc["particleTracking_arg"]
+    num_particles = pt_cfg.get("num_particles")
+    if num_particles is not None:
+        return max(2, int(num_particles))
+    return max(2, int(pt_cfg["density_particle"] * max(1, source_rows.size)))
+
+
 def run_particle_tracking(
     *,
     config_mc: dict[str, Any],
@@ -272,14 +284,32 @@ def run_particle_tracking(
     h_field: np.ndarray,
     logger: Any,
 ) -> tuple[np.ndarray, dict[str, Any], dict[str, np.ndarray]]:
-    n_particles = int(config_mc["particleTracking_arg"]["density_particle"] * max(1, source_rows.size))
+    n_particles = resolve_particle_count(config_mc, source_rows)
     seeds_x = np.full(n_particles, x0, np.float32)
     seeds_y = np.linspace(float(source_rows[0]), float(source_rows[-1]), n_particles, endpoint=True).astype(np.float32)
 
     pt_cfg = config_mc["particleTracking_arg"]
     pt_solver = str(pt_cfg["solver"])
+    requested_backend = str(pt_cfg.get("backend", "auto"))
     velocity_location = str(pt_cfg["velocity_location"])
     align_with_modflow = bool(pt_cfg["align_with_modflow_velocity"])
+
+    summary_params: dict[str, Any] = {
+        "backend": "cpu" if requested_backend == "auto" and pt_solver == "rk45" else requested_backend,
+        "method": pt_solver,
+        "tracking_mode": "arrival",
+        "stop_mode": "first",
+        "arrival_fraction": 1.0,
+        "save_trajectories": False,
+        "return_fastest": True,
+        "seeds_x": seeds_x,
+        "seeds_y": seeds_y,
+        "right_x": x1,
+        "max_points": pt_cfg["max_points"],
+        "max_iters": pt_cfg["max_iters"],
+        "threads_per_block": pt_cfg["threads_per_block"],
+        "dtype": np.float64,
+    }
 
     if pt_solver == "pollock":
         x_faces = build_face_coordinates_from_centers(config_mc["x"]).astype(np.float32)
@@ -293,18 +323,15 @@ def run_particle_tracking(
             align_with_modflow=align_with_modflow,
             face_output="full",
         )
-        args_particle_tracking = {
-            "x_faces": x_faces,
-            "y_faces": y_faces,
-            "vx": vx_pt,
-            "vy": vy_pt,
-            "seeds_x": seeds_x,
-            "seeds_y": seeds_y,
-            "right_x": x1,
-            "max_points": pt_cfg["max_points"],
-            "max_steps": pt_cfg["max_iters"],
-        }
-        px, py, pt, L, st = sim_pt.particle_tracking_pollock(args_particle_tracking)
+        summary_params.update(
+            {
+                "x_faces": x_faces,
+                "y_faces": y_faces,
+                "vx": vx_pt,
+                "vy": vy_pt,
+                "max_steps": pt_cfg["max_iters"],
+            }
+        )
     elif pt_solver == "rk45":
         vx_pt, vy_pt = sim_hyd.compute_velocity(
             k_field,
@@ -314,41 +341,63 @@ def run_particle_tracking(
             output_location=velocity_location,
             align_with_modflow=align_with_modflow,
         )
-        args_particle_tracking = {
-            "x": config_mc["x"],
-            "y": config_mc["y"],
-            "vx": vx_pt,
-            "vy": vy_pt,
-            "seeds_x": seeds_x,
-            "seeds_y": seeds_y,
-            "right_x": x1,
-            "velocity_location": velocity_location,
-            "eps_speed": pt_cfg["eps_speed"],
-            "ds_min": pt_cfg["ds_min"],
-            "ds_max": pt_cfg["ds_max"],
-            "tol": pt_cfg["tol"],
-            "y_policy": pt_cfg["y_policy"],
-            "max_points": pt_cfg["max_points"],
-            "max_iters": pt_cfg["max_iters"],
-            "threads_per_block": pt_cfg["threads_per_block"],
-            "dtype": np.float64,
-        }
-        px, py, pt, L, st = sim_pt.particle_tracking_cpu(args_particle_tracking)
+        summary_params.update(
+            {
+                "x": config_mc["x"],
+                "y": config_mc["y"],
+                "vx": vx_pt,
+                "vy": vy_pt,
+                "velocity_location": velocity_location,
+                "eps_speed": pt_cfg["eps_speed"],
+                "ds_min": pt_cfg["ds_min"],
+                "ds_max": pt_cfg["ds_max"],
+                "tol": pt_cfg["tol"],
+                "y_policy": pt_cfg["y_policy"],
+            }
+        )
     else:
         raise ValueError(f"Unsupported particle-tracking solver: {pt_solver}")
 
+    backend_attempts = [summary_params["backend"]]
+    if pt_solver == "pollock" and requested_backend == "auto":
+        backend_attempts = ["gpu", "cpu"]
+
+    summary: dict[str, Any] | None = None
+    errors: list[str] = []
+    for backend in backend_attempts:
+        summary_params["backend"] = backend
+        try:
+            summary = sim_pt.particle_tracking_summary(summary_params)
+            break
+        except Exception as exc:
+            errors.append(f"{backend}: {exc}")
+            logger.warning(
+                f"[PT] method={pt_solver}, requested_backend={requested_backend}, backend={backend} failed: {exc}"
+            )
+    if summary is None:
+        raise ValueError(
+            "Particle tracking summary failed for all backends: " + "; ".join(errors)
+        )
+
+    st = np.asarray(summary["status"])
     count = Counter(st.tolist())
     frac_success = count.get(0, 0) / max(1, n_particles)
     frac_bad = (count.get(1, 0) + count.get(4, 0)) / max(1, n_particles)
     logger.info(
-        f"[PT] solver={pt_solver}, velocity_location={velocity_location}, "
-        f"align_with_modflow={align_with_modflow}, status_counts={dict(count)}"
+        f"[PT] solver={pt_solver}, requested_backend={requested_backend}, "
+        f"used_backend={summary.get('backend', summary_params['backend'])}, "
+        f"velocity_location={velocity_location}, align_with_modflow={align_with_modflow}, "
+        f"status_counts={dict(count)}"
     )
     if frac_success < 0.5 or frac_bad > 0.1:
         raise ValueError(f"Invalid velocity field for tracking: {count}")
 
-    res = sim_pt.fastest_trajectory(px, py, pt, L, st)
+    res = summary.get("fastest")
+    if res is None:
+        raise ValueError("Particle tracking summary did not return the fastest trajectory.")
     fp = np.vstack((res["x"], res["y"])).T
+    res = dict(res)
+    res["backend"] = summary.get("backend", summary_params["backend"])
     return fp, res, {"vx": np.asarray(vx_pt), "vy": np.asarray(vy_pt)}
 
 
@@ -474,6 +523,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
                 "fmm_face_output": config_mc["fmm_arg"]["face_output"],
                 "pt_solver": config_mc["particleTracking_arg"]["solver"],
+                "pt_backend": config_mc["particleTracking_arg"].get("backend", "auto"),
+                "pt_num_particles": int(resolve_particle_count(config_mc, source_rows)),
                 "pt_velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
                 "pt_align_with_modflow_velocity": bool(
                     config_mc["particleTracking_arg"]["align_with_modflow_velocity"]
@@ -692,6 +743,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "endpoint_dy_fp_vs_dijkstra": float(y_end_fp - y_end_fp_dij),
                     "endpoint_dy_fp_vs_fmm": float(y_end_fp - y_end_fp_fmm),
                     "pt_solver": config_mc["particleTracking_arg"]["solver"],
+                    "pt_backend": pt_res["backend"],
+                    "pt_num_particles": int(resolve_particle_count(config_mc, source_rows)),
                     "pt_velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
                     "pt_align_with_modflow_velocity": bool(
                         config_mc["particleTracking_arg"]["align_with_modflow_velocity"]
@@ -740,6 +793,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
             "fmm_face_output": config_mc["fmm_arg"]["face_output"],
             "pt_solver": config_mc["particleTracking_arg"]["solver"],
+            "pt_backend": config_mc["particleTracking_arg"].get("backend", "auto"),
+            "pt_num_particles": int(resolve_particle_count(config_mc, source_rows)),
             "pt_velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
             "pt_align_with_modflow_velocity": bool(config_mc["particleTracking_arg"]["align_with_modflow_velocity"]),
             "seed_mc": seed_mc if seed_mc is not None else np.nan,
@@ -853,6 +908,19 @@ def parse_args() -> argparse.Namespace:
         help="Particle-tracking solver used for fastest-path extraction.",
     )
     parser.add_argument(
+        "--backend",
+        type=str,
+        default="cpu",
+        choices=["cpu", "gpu"],
+        help="Particle-tracking backend. GPU runs are handled by scripts/run_fmm_gpu_worker.py.",
+    )
+    parser.add_argument(
+        "--num_particles",
+        type=int,
+        default=None,
+        help="Exact particle count override for fastest-path tracking. If unset, density-based seeding is used.",
+    )
+    parser.add_argument(
         "--velocity-location",
         dest="velocity_location",
         type=str,
@@ -912,6 +980,8 @@ def parse_args() -> argparse.Namespace:
     args = parser.parse_args()
     if args.solver == "pollock" and args.velocity_location != "face":
         parser.error("--solver pollock requires --velocity-location face")
+    if args.backend == "gpu":
+        parser.error("--backend gpu is supported via scripts/run_fmm_gpu_worker.py; use that entrypoint instead")
     if args.fmm_velocity_layout == "face" and args.fmm_face_output == "full" and args.fmm_face_mapping == "direct":
         parser.error("--fmm_face_output full is not supported with --fmm_face_mapping direct")
     return args
@@ -977,6 +1047,8 @@ def main() -> None:
         },
         "particleTracking_arg": {
             "solver": args.solver,
+            "backend": args.backend,
+            "num_particles": args.num_particles,
             "velocity_location": args.velocity_location,
             "align_with_modflow_velocity": bool(args.align_with_modflow_velocity),
             "density_particle": 20,
@@ -1013,6 +1085,7 @@ def main() -> None:
         f"fmm_backtracking={config_base['fmm_arg']['backtracking']}, "
         f"fmm_face_output={config_base['fmm_arg']['face_output']}, "
         f"pt_solver={config_base['particleTracking_arg']['solver']}, "
+        f"pt_backend={config_base['particleTracking_arg']['backend']}, "
         f"pt_velocity_location={config_base['particleTracking_arg']['velocity_location']}, "
         "pt_align_with_modflow_velocity="
         f"{config_base['particleTracking_arg']['align_with_modflow_velocity']}"
