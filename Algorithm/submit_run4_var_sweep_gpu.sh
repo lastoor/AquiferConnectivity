@@ -1,10 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# VAR=("0" "0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
-VAR=("2.5")
+VAR=("0" "0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
 length_scale="0.05"
-run="8_pollock_gpu_1e6"
+run="8_pollock_gpu_1e6_discrete"
 dh="0.1"
 
 num_mc="1000"
@@ -12,7 +11,7 @@ field_size="200"
 num_particles="1000000"
 cpu_workers="6"
 
-time="5:00:00"
+time="00:30:00"
 mem_per_cpu="2GB"
 cpus_per_task="8"
 gpus_per_task="1"
@@ -76,7 +75,7 @@ which python
   --velocity-location face \\
   --no-align-with-modflow-velocity \\
   --fmm_solver custom \\
-  --fmm_backtracking continuous \\
+  --fmm_backtracking discrete \\
   --fmm_velocity_layout face \\
   --fmm_face_output full \\
   --fmm_face_mapping to_cell_avg \\

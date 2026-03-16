@@ -90,11 +90,25 @@ def test_run_step5_saves_three_figures_with_mock_solver(pipeline_fixture, monkey
 
 def test_validate_particle_tracking_options_rejects_pollock_cell_mode() -> None:
     try:
-        step5._validate_particle_tracking_options(solver="pollock", velocity_location="cell")
+        step5._validate_particle_tracking_options(solver="pollock", velocity_location="cell", backend="cpu")
     except ValueError as exc:
         assert "Pollock solver requires" in str(exc)
     else:
         raise AssertionError("Expected Pollock validation to reject cell velocity mode")
+
+
+def test_validate_particle_tracking_options_rejects_rk45_gpu_mode() -> None:
+    try:
+        step5._validate_particle_tracking_options(solver="rk45", velocity_location="cell", backend="gpu")
+    except ValueError as exc:
+        assert "GPU backend" in str(exc)
+    else:
+        raise AssertionError("Expected RK45 validation to reject GPU backend")
+
+
+def test_resolve_particle_count_prefers_exact_override() -> None:
+    count = step5._resolve_particle_count(num_particles=1000, density_particle=20, y0=10, y1=50)
+    assert count == 1000
 
 
 def test_plot_paths_over_field_returns_figure() -> None:

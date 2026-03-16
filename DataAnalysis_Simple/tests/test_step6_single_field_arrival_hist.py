@@ -27,20 +27,20 @@ def test_empirical_cdf_sorts_and_normalizes() -> None:
     assert np.allclose(y, np.array([1 / 3, 2 / 3, 1.0], dtype=float))
 
 
-def test_extract_success_arrival_times_uses_terminal_time_per_particle() -> None:
-    pt = np.asarray(
-        [
-            [0.0, 0.4, 1.2, 9.9],
-            [0.0, 0.5, 2.0, 8.8],
-            [0.0, 0.6, 3.3, 7.7],
-        ],
-        dtype=float,
-    )
-    length_arr = np.asarray([3, 2, 4], dtype=np.int32)
+def test_extract_success_arrival_times_uses_successful_travel_times() -> None:
+    travel_times = np.asarray([1.2, 2.0, 7.7], dtype=float)
     status_arr = np.asarray([0, 1, 0], dtype=np.int32)
-    arr = step6._extract_success_arrival_times(pt, length_arr, status_arr)
-    # success particles are 0 and 2; terminal times are pt[0,2]=1.2 and pt[2,3]=7.7
+    arr = step6._extract_success_arrival_times(travel_times, status_arr)
     assert np.allclose(arr, np.asarray([1.2, 7.7], dtype=float))
+
+
+def test_validate_particle_tracking_options_rejects_rk45_gpu_mode() -> None:
+    try:
+        step6._validate_particle_tracking_options(solver="rk45", velocity_location="cell", backend="gpu")
+    except ValueError as exc:
+        assert "GPU backend" in str(exc)
+    else:
+        raise AssertionError("Expected RK45 validation to reject GPU backend")
 
 
 def test_plot_arrival_cdf_comparison_returns_figure() -> None:

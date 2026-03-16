@@ -633,7 +633,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fmm_face_mapping", type=str, default="to_cell_avg", choices=["to_cell_avg", "direct"])
     parser.add_argument("--fmm_face_output", type=str, default="full", choices=["full", "trimmed"])
     parser.add_argument("--fmm_solver", type=str, default="scikit", choices=["custom", "scikit"])
-    parser.add_argument("--fmm_backtracking", type=str, default="continuous", choices=["discrete", "continuous"])
+    parser.add_argument("--fmm_backtracking", type=str, default="discrete", choices=["discrete", "continuous"])
     parser.add_argument("--fmm_zero_policy", type=str, default="obstacle", choices=["obstacle", "clip", "error"])
     parser.add_argument("--fmm_min_speed", type=float, default=1e-12)
     parser.add_argument("--cpu_workers", type=int, default=None, help="CPU worker count for preprocessing/finalization.")
