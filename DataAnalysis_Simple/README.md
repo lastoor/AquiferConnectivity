@@ -148,6 +148,12 @@ Use `step6_single_field_arrival_hist.py` to generate one GRF realization and com
 the empirical CDF of particle arrival times (successful exits only, `status==0`) with
 analytical `_g_tau` from `step4_plot.py` and a lognormal CDF approximation.
 
+The Step 6 geometry is now explicit:
+
+- analytical transport length is derived from `target_x - source_x`
+- source seeds use the half-open span `[source_y_start, source_y_end)`
+- target y bounds are accepted and saved, but are currently metadata only; arrival stopping still uses `target_x`
+
 ```bash
 PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
   --config configs/visualization.default.yaml \
@@ -156,6 +162,10 @@ PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
   --n-mc 10 \
   --seed 0 \
   --density-particle 20 \
+  --source-x 19 \
+  --target-x 179 \
+  --source-y-start 19 \
+  --source-y-end 179 \
   --refine-tau-grid \
   --tau-split 10 \
   --tau-grid-fine 1024 \
@@ -210,6 +220,9 @@ Notes:
 - Arrival times use one terminal time per successful particle (`status==0`, final trajectory timestamp), not flattened per-step trajectory times.
 - Comparison is done in dimensionless time `tU/I_Y` (`U = k_g * dh`, `I_Y = length_scale * field_size`).
 - Step 6 uses the same particle-tracking CLI as Step 5: `--solver {pollock,rk45}`, `--velocity-location {face,cell}`, and `--align-with-modflow-velocity/--no-align-with-modflow-velocity`, with Pollock as the default.
+- `--source-x` and `--target-x` control the horizontal transport distance used both by particle tracking and by the analytical/lognormal overlays.
+- `--source-y-start` and `--source-y-end` define a half-open source span `[start, end)` used consistently for particle-count resolution and seed placement.
+- `--target-y-start` and `--target-y-end` are currently persisted as metadata only; Step 6 arrival tracking still stops on `target_x`.
 - The lognormal overlay uses dimensionless mean `L / I_Y` and variance `X_11(L / U) / I_Y^2`, converted to the standard lognormal parameters of `ln(tU/I_Y)`.
 - By default, Step 6 saves only the figure; use `--save-npz` and/or `--save-json` to persist data artifacts.
 - Use `--save-pdf-plot` to save an extra probability-density figure. It uses a normalized empirical histogram from `tau_samples`, MC histogram mean/band from `tau_samples_by_mc`, and analytical/lognormal density overlays recomputed from saved model metadata.

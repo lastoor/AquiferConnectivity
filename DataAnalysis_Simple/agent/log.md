@@ -374,6 +374,19 @@
 - Limitations/follow-up:
   - Full automated test execution still requires `pytest` to be installed in the active environment.
 
+## 2026-03-14
+- Agent/tool: Codex (GPT-5)
+- Summary: Cleaned up Step 6 geometry consistency so analytical length now follows `target_x - source_x`, source seed placement honors the half-open source span, forward transport is validated, target-y controls are documented as metadata-only, and the submit/doc surfaces were updated to match.
+- Files changed:
+  - `scripts/step6_single_field_arrival_hist.py`
+  - `submit_step6_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step6_single_field_arrival_hist.py`
+- Limitations/follow-up:
+  - Full runtime verification with custom geometry settings has not been run end-to-end in this environment.
+
 ## 2026-03-12
 - Agent/tool: Codex (GPT-5)
 - Summary: Added a Step 6 CLI toggle to enable or disable early-`tau` grid refinement (`--refine-tau-grid/--no-refine-tau-grid`), updated tests for refined vs uniform grid construction, and refreshed README usage.

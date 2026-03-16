@@ -3,9 +3,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import multiprocessing as mp
 import os
+import queue
+import time
 import sys
+import uuid
 from collections import Counter
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -40,8 +45,16 @@ class ArrivalSavedData:
     cdf_mc_band_low: np.ndarray | None
     cdf_mc_band_high: np.ndarray | None
     pt_solver: str | None
+    pt_backend: str | None
     pt_velocity_location: str | None
     pt_align_with_modflow_velocity: bool | None
+    pt_num_particles: int | None
+    source_x: int | None
+    target_x: int | None
+    source_y_start: int | None
+    source_y_end: int | None
+    target_y_start: int | None
+    target_y_end: int | None
     seeds_used: np.ndarray | None
     n_success_by_mc: np.ndarray | None
     tau_samples_by_mc: list[np.ndarray] | None
@@ -84,6 +97,34 @@ class ReloadPdfData:
     note: str | None
 
 
+@dataclass(slots=True)
+class ArrivalGeometry:
+    x: np.ndarray
+    y: np.ndarray
+    source_x: int
+    target_x: int
+    source_y_start: int
+    source_y_end: int
+    target_y_start: int
+    target_y_end: int
+
+    @property
+    def source_y_start_inclusive(self) -> int:
+        return int(self.source_y_start)
+
+    @property
+    def source_y_end_exclusive(self) -> int:
+        return int(self.source_y_end)
+
+    @property
+    def source_span(self) -> int:
+        return int(self.source_y_end - self.source_y_start)
+
+    @property
+    def transport_length(self) -> int:
+        return int(self.target_x - self.source_x)
+
+
 def _add_search_path(path: Path) -> None:
     path_str = str(path)
     if path_str not in sys.path:
@@ -124,19 +165,83 @@ def _import_solver_modules() -> dict[str, Any]:
     }
 
 
-def _build_domain(field_size: int) -> dict[str, Any]:
-    x0 = field_size // 20 - 1
-    x1 = field_size - field_size // 20 - 1
-    y0 = field_size // 20 - 1
-    y1 = field_size - field_size // 20 - 1
-    return {
-        "x": np.arange(0, field_size, 1.0),
-        "y": np.arange(0, field_size, 1.0),
-        "x0": x0,
-        "x1": x1,
-        "y0": y0,
-        "y1": y1,
-    }
+def _default_arrival_geometry(field_size: int) -> ArrivalGeometry:
+    source_x = field_size // 10 - 1
+    target_x = field_size - field_size // 10 - 1
+    source_y_start = field_size // 10 - 1
+    source_y_end = field_size - field_size // 10 - 1
+    target_y_start = 0
+    target_y_end = field_size - 1
+    return ArrivalGeometry(
+        x=np.arange(0, field_size, 1.0),
+        y=np.arange(0, field_size, 1.0),
+        source_x=int(source_x),
+        target_x=int(target_x),
+        source_y_start=int(source_y_start),
+        source_y_end=int(source_y_end),
+        target_y_start=int(target_y_start),
+        target_y_end=int(target_y_end),
+    )
+
+
+def _validate_line_span(*, field_size: int, start: int, end: int, label: str) -> None:
+    if start < 0 or start >= field_size:
+        raise ValueError(f"{label}_start must be within [0, {field_size - 1}], got {start}.")
+    if end <= 0 or end > field_size:
+        raise ValueError(f"{label}_end must be within [1, {field_size}], got {end}.")
+    if start >= end:
+        raise ValueError(f"{label}_start must be < {label}_end, got {start} >= {end}.")
+
+
+def _validate_axis_index(*, field_size: int, value: int, label: str) -> None:
+    if value < 0 or value >= field_size:
+        raise ValueError(f"{label} must be within [0, {field_size - 1}], got {value}.")
+
+
+def _resolve_arrival_geometry(
+    *,
+    field_size: int,
+    source_x: int | None = None,
+    target_x: int | None = None,
+    source_y_start: int | None = None,
+    source_y_end: int | None = None,
+    target_y_start: int | None = None,
+    target_y_end: int | None = None,
+) -> ArrivalGeometry:
+    geometry = _default_arrival_geometry(field_size)
+    if source_x is not None:
+        geometry.source_x = int(source_x)
+    if target_x is not None:
+        geometry.target_x = int(target_x)
+    if source_y_start is not None:
+        geometry.source_y_start = int(source_y_start)
+    if source_y_end is not None:
+        geometry.source_y_end = int(source_y_end)
+    if target_y_start is not None:
+        geometry.target_y_start = int(target_y_start)
+    if target_y_end is not None:
+        geometry.target_y_end = int(target_y_end)
+
+    _validate_axis_index(field_size=field_size, value=geometry.source_x, label="source_x")
+    _validate_axis_index(field_size=field_size, value=geometry.target_x, label="target_x")
+    _validate_line_span(
+        field_size=field_size,
+        start=geometry.source_y_start,
+        end=geometry.source_y_end,
+        label="source_y",
+    )
+    _validate_line_span(
+        field_size=field_size,
+        start=geometry.target_y_start,
+        end=geometry.target_y_end,
+        label="target_y",
+    )
+    if geometry.target_x <= geometry.source_x:
+        raise ValueError(
+            f"target_x must be greater than source_x for forward transport, got "
+            f"source_x={geometry.source_x}, target_x={geometry.target_x}."
+        )
+    return geometry
 
 
 def _build_face_coordinates_from_centers(coord_centers: np.ndarray) -> np.ndarray:
@@ -150,17 +255,379 @@ def _build_face_coordinates_from_centers(coord_centers: np.ndarray) -> np.ndarra
     return faces
 
 
+MAX_BATCH_SIZE = 32
+MAX_BATCH_WAIT_MS = 5
+GPU_SUBMIT_TIMEOUT_SEC = 60.0
+GPU_RESULT_POLL_SEC = 0.001
+
+global_queue_gpu: Any = None
+global_result_dict: Any = None
+global_pollock_tracker: Any = None
+global_pollock_tracker_signature: tuple[Any, ...] | None = None
+sim_pt_pollock_gpu: Any = None
+sim_pt_utils: Any = None
+
+
+def _resolve_particle_count(
+    *,
+    num_particles: int | None,
+    density_particle: int,
+    source_y_start: int,
+    source_y_end: int,
+) -> int:
+    if num_particles is not None:
+        return max(2, int(num_particles))
+    return max(2, int(density_particle * max(1, source_y_end - source_y_start)))
+
+
+def _build_source_seed_coordinates(
+    *,
+    source_x: float,
+    source_y_start: float,
+    source_y_end: float,
+    n_particles: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    n_particles = max(2, int(n_particles))
+    seeds_x = np.full(n_particles, source_x, dtype=np.float32)
+    y_stop = np.nextafter(np.float32(source_y_end), np.float32(source_y_start))
+    seeds_y = np.linspace(source_y_start, y_stop, n_particles, endpoint=True).astype(np.float32)
+    return seeds_x, seeds_y
+
+
 def _value_slug(value: float) -> str:
     return str(f"{float(value):g}").replace("-", "m").replace(".", "p")
 
 
-def _validate_particle_tracking_options(*, solver: str, velocity_location: str) -> None:
+def _prepare_payload_for_ipc(payload: dict[str, Any]) -> tuple[dict[str, Any], list[Any]]:
+    # Step 6 has a single main process feeding a single GPU worker, so queueing
+    # arrays directly is simpler and avoids shared-memory lifecycle leaks.
+    return dict(payload), []
+
+
+def _cleanup_shared_memory(handles: list[Any]) -> None:
+    del handles
+
+
+def _materialize_payload_arrays(payload: dict[str, Any]) -> dict[str, Any]:
+    return dict(payload)
+
+
+def _build_seed_arrays(payload: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    spec = dict(payload["seed_spec"])
+    n_particles = max(2, int(spec["n_particles"]))
+    source_x = float(spec["source_x"])
+    source_y_start = float(spec["source_y_start"])
+    source_y_end = float(spec["source_y_end"])
+    return _build_source_seed_coordinates(
+        source_x=source_x,
+        source_y_start=source_y_start,
+        source_y_end=source_y_end,
+        n_particles=n_particles,
+    )
+
+
+def _payload_batch_key(func_name: str, payload: dict[str, Any]) -> tuple[Any, ...]:
+    def _shape_for(key: str) -> tuple[int, ...]:
+        if key in payload:
+            return tuple(np.asarray(payload[key]).shape)
+        return ()
+
+    return (
+        str(func_name),
+        str(payload.get("method", "")),
+        str(payload.get("backend", "")),
+        str(payload.get("tracking_mode", "")),
+        str(payload.get("stop_mode", "")),
+        _shape_for("x_faces"),
+        _shape_for("y_faces"),
+        _shape_for("vx"),
+        _shape_for("vy"),
+        int(payload.get("seed_spec", {}).get("n_particles", 0)),
+        float(payload.get("right_x", 0.0)),
+        int(payload.get("max_points", 0)),
+        int(payload.get("max_steps", payload.get("max_iters", 0))),
+    )
+
+
+def gpu_call(func_name: str, payload: dict[str, Any], timeout_sec: float = 7200.0) -> dict[str, Any]:
+    if global_queue_gpu is None or global_result_dict is None:
+        raise RuntimeError("GPU queue/result globals are not initialized.")
+
+    payload_ipc, shm_handles = _prepare_payload_for_ipc(payload)
+    task_id = uuid.uuid4().hex
+    task = {
+        "id": task_id,
+        "func": func_name,
+        "payload": payload_ipc,
+        "batch_key": _payload_batch_key(func_name, payload_ipc),
+        "submitted_at": time.monotonic(),
+    }
+    try:
+        global_queue_gpu.put(task, timeout=GPU_SUBMIT_TIMEOUT_SEC)
+    except queue.Full as exc:
+        _cleanup_shared_memory(shm_handles)
+        raise TimeoutError(f"GPU task queue is full after waiting {GPU_SUBMIT_TIMEOUT_SEC} seconds.") from exc
+
+    t0 = time.monotonic()
+    try:
+        while True:
+            result = global_result_dict.pop(task_id, None)
+            if result is not None:
+                if not result.get("ok", False):
+                    raise RuntimeError(result.get("error", "unknown GPU worker error"))
+                return result["result"]
+            if (time.monotonic() - t0) > timeout_sec:
+                raise TimeoutError(f"GPU task timeout for {func_name} after {timeout_sec} seconds")
+            time.sleep(GPU_RESULT_POLL_SEC)
+    finally:
+        _cleanup_shared_memory(shm_handles)
+
+
+def _pollock_tracker_signature(
+    x_faces: np.ndarray,
+    y_faces: np.ndarray,
+    vx: np.ndarray,
+    vy: np.ndarray,
+    n_particles: int,
+) -> tuple[Any, ...]:
+    return (
+        tuple(x_faces.shape),
+        tuple(y_faces.shape),
+        tuple(vx.shape),
+        tuple(vy.shape),
+        str(x_faces.dtype),
+        str(y_faces.dtype),
+        str(vx.dtype),
+        str(vy.dtype),
+        int(n_particles),
+    )
+
+
+def _run_pollock_gpu_summary_single(payload: dict[str, Any]) -> dict[str, Any]:
+    global global_pollock_tracker
+    global global_pollock_tracker_signature
+    global sim_pt_pollock_gpu
+    global sim_pt_utils
+
+    payload_local = _materialize_payload_arrays(payload)
+    if str(payload_local.get("tracking_mode", "arrival")) != "arrival":
+        raise ValueError("Persistent GPU Pollock currently supports tracking_mode='arrival' only.")
+    if bool(payload_local.get("save_trajectories", False)):
+        raise ValueError("Persistent GPU Pollock currently requires save_trajectories=False.")
+    if str(payload_local.get("method", "")) != "pollock" or str(payload_local.get("backend", "")) != "gpu":
+        raise ValueError("Persistent GPU execution only supports method='pollock', backend='gpu'.")
+
+    x_faces = np.asarray(payload_local["x_faces"], dtype=np.float32)
+    y_faces = np.asarray(payload_local["y_faces"], dtype=np.float32)
+    vx = np.asarray(payload_local["vx"], dtype=np.float32)
+    vy = np.asarray(payload_local["vy"], dtype=np.float32)
+    seeds_x, seeds_y = _build_seed_arrays(payload_local)
+    right_x = np.float32(payload_local.get("right_x", x_faces[-1]))
+    max_points = int(payload_local.get("max_points", 2000))
+    max_steps = int(payload_local.get("max_steps", payload_local.get("max_iters", max_points)))
+
+    tracker_sig = _pollock_tracker_signature(x_faces, y_faces, vx, vy, int(seeds_x.size))
+    sim_pt_pollock_gpu._ensure_ti_init()
+    if global_pollock_tracker is None:
+        PollockTracking2D = sim_pt_pollock_gpu._make_pollock_tracker()
+        global_pollock_tracker = PollockTracking2D(
+            x_faces,
+            y_faces,
+            vx,
+            vy,
+            seeds_x,
+            seeds_y,
+            right_x,
+            max_steps,
+        )
+        global_pollock_tracker_signature = tracker_sig
+    elif global_pollock_tracker_signature != tracker_sig:
+        raise RuntimeError(
+            "Persistent GPU Pollock worker already materialized a tracker for a different "
+            "grid/particle shape. Use one field size and exact particle count per worker process."
+        )
+    else:
+        tracker = global_pollock_tracker
+        tracker.x_faces.from_numpy(x_faces)
+        tracker.y_faces.from_numpy(y_faces)
+        tracker.vx_faces.from_numpy(vx)
+        tracker.vy_faces.from_numpy(vy)
+        tracker.seed_x.from_numpy(seeds_x)
+        tracker.seed_y.from_numpy(seeds_y)
+        tracker._seeds_x = seeds_x.copy()
+        tracker._seeds_y = seeds_y.copy()
+        tracker._x_faces_np = x_faces
+        tracker._y_faces_np = y_faces
+        tracker._vx_faces_np = vx
+        tracker._vy_faces_np = vy
+        tracker.max_steps = int(max_steps)
+        tracker.right_x = np.float32(right_x)
+
+    tracker = global_pollock_tracker
+    raw_travel_times, status = tracker.run()
+    travel_times = np.where(status == sim_pt_pollock_gpu.STATUS_SUCCESS, raw_travel_times, np.nan).astype(np.float32)
+    stop_mode = str(payload_local.get("stop_mode", "first"))
+    arrival_fraction = float(payload_local.get("arrival_fraction", 1.0))
+    return_fastest = bool(payload_local.get("return_fastest", stop_mode == "first"))
+    summary = sim_pt_utils.summarize_arrivals(
+        travel_times,
+        status,
+        stop_mode=stop_mode,
+        arrival_fraction=arrival_fraction,
+    )
+    summary.update(
+        {
+            "backend": "gpu",
+            "method": "pollock",
+            "tracking_mode": "arrival",
+            "stop_mode": stop_mode,
+            "save_trajectories": False,
+            "return_fastest": return_fastest,
+            "status": np.asarray(status, dtype=np.int32),
+            "lengths": None,
+        }
+    )
+    if return_fastest and summary["n_arrived"] > 0:
+        fastest_id = sim_pt_utils.fastest_particle_id(travel_times)
+        traj = tracker.replay_selected(np.array([fastest_id], dtype=np.int32), right_x, max_points, max_steps)[0]
+        traj["particle_id"] = int(fastest_id)
+        summary["fastest"] = sim_pt_utils.build_fastest_result_from_trajectory(
+            fastest_id,
+            float(travel_times[fastest_id]),
+            traj,
+        )
+    return summary
+
+
+def _run_single_gpu_payload(func_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    if func_name != "particle_tracking_summary":
+        raise ValueError(f"Unsupported GPU function: {func_name}")
+    return _run_pollock_gpu_summary_single(payload)
+
+
+def _store_error_results(result_dict: Any, tasks: list[dict[str, Any]], message: str) -> None:
+    for task in tasks:
+        result_dict[task["id"]] = {"ok": False, "result": None, "error": message}
+
+
+def _execute_batch(batch: list[dict[str, Any]], result_dict: Any) -> None:
+    outputs: list[dict[str, Any]] = []
+    try:
+        for task in batch:
+            outputs.append(_run_single_gpu_payload(str(task["func"]), task["payload"]))
+    except Exception as exc:
+        _store_error_results(result_dict, batch, str(exc))
+        return
+    for task, output in zip(batch, outputs):
+        result_dict[task["id"]] = {"ok": True, "result": output, "error": ""}
+
+
+def gpu_worker(queue_gpu: Any, result_dict: Any) -> None:
+    global sim_pt_pollock_gpu
+    global sim_pt_utils
+
+    _import_solver_modules()
+    from simulation.particle_tracking import pollock_gpu as _sim_pt_pollock_gpu
+    from simulation.particle_tracking import utils as _sim_pt_utils
+
+    sim_pt_pollock_gpu = _sim_pt_pollock_gpu
+    sim_pt_utils = _sim_pt_utils
+
+    pending: deque[dict[str, Any]] = deque()
+    shutdown_requested = False
+
+    while True:
+        if pending:
+            first_task = pending.popleft()
+        else:
+            try:
+                first_task = queue_gpu.get(timeout=0.5)
+            except queue.Empty:
+                if shutdown_requested:
+                    break
+                continue
+
+        if first_task is None:
+            shutdown_requested = True
+            if not pending:
+                break
+            continue
+
+        batch = [first_task]
+        batch_key = first_task["batch_key"]
+        deadline = time.monotonic() + (MAX_BATCH_WAIT_MS / 1000.0)
+
+        while len(batch) < MAX_BATCH_SIZE:
+            timeout = deadline - time.monotonic()
+            if timeout <= 0:
+                break
+            if pending:
+                candidate = pending.popleft()
+            else:
+                try:
+                    candidate = queue_gpu.get(timeout=timeout)
+                except queue.Empty:
+                    break
+            if candidate is None:
+                shutdown_requested = True
+                continue
+            if candidate["batch_key"] == batch_key:
+                batch.append(candidate)
+            else:
+                pending.append(candidate)
+
+        _execute_batch(batch, result_dict)
+        if shutdown_requested and not pending:
+            break
+
+    while pending:
+        task = pending.popleft()
+        if task is not None:
+            _store_error_results(result_dict, [task], "GPU worker shut down before task execution.")
+
+
+class PollockGpuWorker:
+    def __init__(self) -> None:
+        self._manager = mp.Manager()
+        self._queue = self._manager.Queue(maxsize=MAX_BATCH_SIZE)
+        self._result_dict = self._manager.dict()
+        self._process = mp.Process(target=gpu_worker, args=(self._queue, self._result_dict), daemon=True)
+
+    def __enter__(self) -> "PollockGpuWorker":
+        global global_queue_gpu
+        global global_result_dict
+        self._process.start()
+        global_queue_gpu = self._queue
+        global_result_dict = self._result_dict
+        return self
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
+        global global_queue_gpu
+        global global_result_dict
+        try:
+            self._queue.put(None, timeout=1.0)
+        except Exception:
+            pass
+        self._process.join(timeout=5.0)
+        if self._process.is_alive():
+            self._process.terminate()
+            self._process.join(timeout=5.0)
+        self._manager.shutdown()
+        global_queue_gpu = None
+        global_result_dict = None
+
+
+def _validate_particle_tracking_options(*, solver: str, velocity_location: str, backend: str = "cpu") -> None:
     if solver not in {"pollock", "rk45"}:
         raise ValueError(f"Unsupported particle-tracking solver: {solver}")
     if velocity_location not in {"face", "cell"}:
         raise ValueError(f"Unsupported velocity_location={velocity_location}; expected 'face' or 'cell'.")
+    if backend not in {"cpu", "gpu"}:
+        raise ValueError(f"Unsupported backend={backend}; expected 'cpu' or 'gpu'.")
     if solver == "pollock" and velocity_location != "face":
         raise ValueError("Pollock solver requires velocity_location='face'.")
+    if solver != "pollock" and backend == "gpu":
+        raise ValueError("GPU backend is currently supported only with solver='pollock'.")
 
 
 def _compute_std_and_var(*, std: float | None, var: float | None) -> tuple[float, float]:
@@ -188,17 +655,14 @@ def _empirical_cdf(samples: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return x, y
 
 
-def _extract_success_arrival_times(pt: np.ndarray, length_arr: np.ndarray, status_arr: np.ndarray) -> np.ndarray:
-    pt = np.asarray(pt, dtype=float)
-    length_arr = np.asarray(length_arr, dtype=np.int32)
+def _extract_success_arrival_times(travel_times: np.ndarray, status_arr: np.ndarray) -> np.ndarray:
+    travel_times = np.asarray(travel_times, dtype=float)
     status_arr = np.asarray(status_arr, dtype=np.int32)
-    valid = (status_arr == 0) & (length_arr > 0)
+    valid = (status_arr == 0) & np.isfinite(travel_times) & (travel_times >= 0.0)
     idx = np.where(valid)[0]
     if idx.size == 0:
         return np.asarray([], dtype=float)
-    arrival_times = pt[idx, length_arr[idx] - 1]
-    arrival_times = np.asarray(arrival_times, dtype=float)
-    return arrival_times[np.isfinite(arrival_times) & (arrival_times >= 0.0)]
+    return travel_times[idx]
 
 
 def _analytical_cdf_on_tau_grid(
@@ -587,8 +1051,16 @@ def load_arrival_npz(npz_path: Path) -> ArrivalSavedData:
             cdf_mc_band_low=_optional_np_array(payload, "cdf_mc_band_low"),
             cdf_mc_band_high=_optional_np_array(payload, "cdf_mc_band_high"),
             pt_solver=_optional_scalar_string(payload, "pt_solver"),
+            pt_backend=_optional_scalar_string(payload, "pt_backend"),
             pt_velocity_location=_optional_scalar_string(payload, "pt_velocity_location"),
             pt_align_with_modflow_velocity=_optional_scalar_bool(payload, "pt_align_with_modflow_velocity"),
+            pt_num_particles=_optional_scalar_int(payload, "pt_num_particles"),
+            source_x=_optional_scalar_int(payload, "source_x"),
+            target_x=_optional_scalar_int(payload, "target_x"),
+            source_y_start=_optional_scalar_int(payload, "source_y_start"),
+            source_y_end=_optional_scalar_int(payload, "source_y_end"),
+            target_y_start=_optional_scalar_int(payload, "target_y_start"),
+            target_y_end=_optional_scalar_int(payload, "target_y_end"),
             seeds_used=_optional_np_array(payload, "seeds_used"),
             n_success_by_mc=_optional_np_array(payload, "n_success_by_mc"),
             tau_samples_by_mc=tau_samples_by_mc,
@@ -615,8 +1087,15 @@ def _title_from_saved_data(saved: ArrivalSavedData) -> str:
     parts = [f"Arrival CDF (reloaded), $n_{{\\mathrm{{success}}}}={n_success}$, MC={mc_count}"]
     if saved.pt_solver is not None:
         parts.append(f"solver={saved.pt_solver}")
+    if saved.pt_backend is not None:
+        parts.append(f"backend={saved.pt_backend}")
     if saved.pt_velocity_location is not None:
         parts.append(f"velocity={saved.pt_velocity_location}")
+    if saved.pt_num_particles is not None:
+        parts.append(f"particles={saved.pt_num_particles}")
+    if saved.source_x is not None and saved.target_x is not None:
+        parts.append(f"source_x={saved.source_x}")
+        parts.append(f"target_x={saved.target_x}")
     return ", ".join(parts)
 
 
@@ -884,9 +1363,12 @@ def simulate_single_field_arrivals(
     minpadding: int,
     dh: float,
     solver: str,
+    backend: str = "cpu",
     velocity_location: str,
     align_with_modflow_velocity: bool,
     density_particle: int,
+    num_particles: int | None = None,
+    geometry: ArrivalGeometry,
     eps_speed: float,
     ds_min: float,
     ds_max: float,
@@ -897,8 +1379,9 @@ def simulate_single_field_arrivals(
     rk45_min_success_frac: float,
     rk45_max_bad_frac: float,
     seed: int,
+    gpu_worker_ctx: PollockGpuWorker | None = None,
 ) -> ArrivalSimulationResult:
-    _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location)
+    _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location, backend=backend)
     modules = _import_solver_modules()
     sim_grf = modules["sim_grf"]
     sim_hyd = modules["sim_hyd"]
@@ -912,21 +1395,39 @@ def simulate_single_field_arrivals(
     logk_field = np.asarray(grf_gen.sample(), dtype=float)
     k_field = np.exp(logk_field)
 
-    domain = _build_domain(field_size)
-    x = domain["x"]
-    y = domain["y"]
-    x0 = int(domain["x0"])
-    x1 = int(domain["x1"])
-    y0 = int(domain["y0"])
-    y1 = int(domain["y1"])
+    x = geometry.x
+    y = geometry.y
 
     h, msg, is_success = sim_hyd.solve_head(k_field, x, y, dh=dh, rtol=1e-10, atol=1e-20, max_it=10000)
     if not is_success:
         raise RuntimeError(f"Head solver failed: {msg}")
 
-    n_particles = max(2, int(density_particle * abs(y1 - y0)))
-    seeds_x = np.full(n_particles, x0, np.float32)
-    seeds_y = np.linspace(y0, y1, n_particles).astype(np.float32)
+    n_particles = _resolve_particle_count(
+        num_particles=num_particles,
+        density_particle=density_particle,
+        source_y_start=geometry.source_y_start,
+        source_y_end=geometry.source_y_end,
+    )
+    seeds_x, seeds_y = _build_source_seed_coordinates(
+        source_x=float(geometry.source_x),
+        source_y_start=float(geometry.source_y_start),
+        source_y_end=float(geometry.source_y_end),
+        n_particles=n_particles,
+    )
+    summary_params: dict[str, Any] = {
+        "backend": backend,
+        "method": solver,
+        "tracking_mode": "arrival",
+        "stop_mode": "full_btc",
+        "arrival_fraction": 1.0,
+        "save_trajectories": False,
+        "return_fastest": False,
+        "right_x": geometry.target_x,
+        "max_points": max_points,
+        "max_iters": max_iters,
+        "threads_per_block": 256,
+        "dtype": np.float64,
+    }
     if solver == "pollock":
         vx, vy = sim_hyd.compute_velocity(
             k_field,
@@ -937,18 +1438,29 @@ def simulate_single_field_arrivals(
             align_with_modflow=align_with_modflow_velocity,
             face_output="full",
         )
-        track_args = {
-            "x_faces": _build_face_coordinates_from_centers(x).astype(np.float32),
-            "y_faces": _build_face_coordinates_from_centers(y).astype(np.float32),
-            "vx": vx,
-            "vy": vy,
-            "seeds_x": seeds_x,
-            "seeds_y": seeds_y,
-            "right_x": x1,
-            "max_points": max_points,
-            "max_steps": max_iters,
-        }
-        _px, _py, pt, length_arr, status_arr = sim_pt.particle_tracking_pollock(track_args)
+        summary_params.update(
+            {
+                "x_faces": _build_face_coordinates_from_centers(x).astype(np.float32),
+                "y_faces": _build_face_coordinates_from_centers(y).astype(np.float32),
+                "vx": vx,
+                "vy": vy,
+                "max_steps": max_iters,
+            }
+        )
+        if backend == "gpu":
+            if gpu_worker_ctx is None:
+                raise RuntimeError("GPU Pollock step6 requires an active PollockGpuWorker.")
+            summary_params["seed_spec"] = {
+                "n_particles": int(n_particles),
+                "source_x": float(geometry.source_x),
+                "source_y_start": float(geometry.source_y_start),
+                "source_y_end": float(geometry.source_y_end),
+            }
+            summary = gpu_call("particle_tracking_summary", summary_params)
+        else:
+            summary_params["seeds_x"] = seeds_x
+            summary_params["seeds_y"] = seeds_y
+            summary = sim_pt.particle_tracking_summary(summary_params)
     else:
         vx, vy = sim_hyd.compute_velocity(
             k_field,
@@ -958,26 +1470,24 @@ def simulate_single_field_arrivals(
             output_location=velocity_location,
             align_with_modflow=align_with_modflow_velocity,
         )
-        track_args = {
-            "x": x,
-            "y": y,
-            "vx": vx,
-            "vy": vy,
-            "seeds_x": seeds_x,
-            "seeds_y": seeds_y,
-            "right_x": x1,
-            "velocity_location": velocity_location,
-            "eps_speed": eps_speed,
-            "ds_min": ds_min,
-            "ds_max": ds_max,
-            "tol": tol,
-            "y_policy": y_policy,
-            "max_points": max_points,
-            "max_iters": max_iters,
-            "threads_per_block": 256,
-            "dtype": np.float64,
-        }
-        _px, _py, pt, length_arr, status_arr = sim_pt.particle_tracking_cpu(track_args)
+        summary_params.update(
+            {
+                "x": x,
+                "y": y,
+                "vx": vx,
+                "vy": vy,
+                "seeds_x": seeds_x,
+                "seeds_y": seeds_y,
+                "velocity_location": velocity_location,
+                "eps_speed": eps_speed,
+                "ds_min": ds_min,
+                "ds_max": ds_max,
+                "tol": tol,
+                "y_policy": y_policy,
+            }
+        )
+        summary = sim_pt.particle_tracking_summary(summary_params)
+    status_arr = np.asarray(summary["status"], dtype=np.int32)
     status_counter = Counter(status_arr.tolist())
     frac_success = status_counter.get(0, 0) / max(1, n_particles)
     frac_bad = (status_counter.get(1, 0) + status_counter.get(4, 0)) / max(1, n_particles)
@@ -987,7 +1497,7 @@ def simulate_single_field_arrivals(
             f"status={dict(status_counter)}, success_frac={frac_success:.3f}, bad_frac={frac_bad:.3f}"
         )
 
-    arrival_times = _extract_success_arrival_times(pt, length_arr, status_arr)
+    arrival_times = _extract_success_arrival_times(np.asarray(summary["travel_times"], dtype=float), status_arr)
     if arrival_times.size == 0:
         raise RuntimeError("No successful particle arrivals (status=0) with finite non-negative arrival times.")
 
@@ -1012,9 +1522,17 @@ def run_step6(
     dh: float | None,
     k_g: float | None,
     solver: str,
+    backend: str = "cpu",
     velocity_location: str,
     align_with_modflow_velocity: bool,
     density_particle: int,
+    num_particles: int | None = None,
+    source_x: int | None,
+    target_x: int | None,
+    source_y_start: int | None,
+    source_y_end: int | None,
+    target_y_start: int | None,
+    target_y_end: int | None,
     eps_speed: float,
     ds_min: float,
     ds_max: float,
@@ -1040,9 +1558,18 @@ def run_step6(
     save_npz: bool,
     save_json: bool,
 ) -> tuple[Path, Path | None, Path | None, Path | None]:
-    _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location)
+    _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location, backend=backend)
     field_size_eff = int(cfg.field_size_ref if field_size is None else field_size)
     length_scale_eff = float(cfg.length_scale if length_scale is None else length_scale)
+    geometry = _resolve_arrival_geometry(
+        field_size=field_size_eff,
+        source_x=source_x,
+        target_x=target_x,
+        source_y_start=source_y_start,
+        source_y_end=source_y_end,
+        target_y_start=target_y_start,
+        target_y_end=target_y_end,
+    )
     std_eff, var_eff = _compute_std_and_var(std=std, var=var)
     dh_eff = float(cfg.dh if dh is None else dh)
     k_g_eff = float(cfg.k_g if k_g is None else k_g)
@@ -1074,7 +1601,7 @@ def run_step6(
     )
 
     i_y = float(length_scale_eff * field_size_eff)
-    length = float(field_size_eff - 2 * (field_size_eff // 20))
+    length = float(geometry.transport_length)
     seeds_used: list[int] = []
     tau_by_mc: list[np.ndarray] = []
     n_particles_by_mc: list[int] = []
@@ -1083,40 +1610,55 @@ def run_step6(
     bad_fraction_by_mc: list[float] = []
     status_counts_by_mc: list[dict[str, int]] = []
 
-    for j in range(n_mc):
-        seed = int(seed_start + j)
-        simulation = simulate_single_field_arrivals(
-            field_size=field_size_eff,
-            length_scale=length_scale_eff,
-            std=std_eff,
-            minpadding=minpadding,
-            dh=dh_eff,
-            solver=solver,
-            velocity_location=velocity_location,
-            align_with_modflow_velocity=align_with_modflow_velocity,
-            density_particle=density_particle,
-            eps_speed=eps_speed,
-            ds_min=ds_min,
-            ds_max=ds_max,
-            tol=tol,
-            y_policy=y_policy,
-            max_points=max_points,
-            max_iters=max_iters,
-            rk45_min_success_frac=rk45_min_success_frac,
-            rk45_max_bad_frac=rk45_max_bad_frac,
-            seed=seed,
-        )
-        tau_samples_mc = np.asarray(simulation.arrival_times, dtype=float) * velocity / i_y
-        tau_samples_mc = tau_samples_mc[np.isfinite(tau_samples_mc) & (tau_samples_mc >= 0.0)]
-        if tau_samples_mc.size == 0:
-            continue
-        seeds_used.append(seed)
-        tau_by_mc.append(tau_samples_mc)
-        n_particles_by_mc.append(int(simulation.n_particles))
-        n_success_by_mc.append(int(len(tau_samples_mc)))
-        success_fraction_by_mc.append(float(simulation.success_fraction))
-        bad_fraction_by_mc.append(float(simulation.bad_fraction))
-        status_counts_by_mc.append({str(k): int(v) for k, v in simulation.status_counts.items()})
+    worker_cm: Any = PollockGpuWorker() if solver == "pollock" and backend == "gpu" else None
+    if worker_cm is None:
+        worker_ctx = None
+        manager = None
+    else:
+        manager = worker_cm
+        worker_ctx = manager.__enter__()
+    try:
+        for j in range(n_mc):
+            seed = int(seed_start + j)
+            simulation = simulate_single_field_arrivals(
+                field_size=field_size_eff,
+                length_scale=length_scale_eff,
+                std=std_eff,
+                minpadding=minpadding,
+                dh=dh_eff,
+                solver=solver,
+                backend=backend,
+                velocity_location=velocity_location,
+                align_with_modflow_velocity=align_with_modflow_velocity,
+                density_particle=density_particle,
+                num_particles=num_particles,
+                geometry=geometry,
+                eps_speed=eps_speed,
+                ds_min=ds_min,
+                ds_max=ds_max,
+                tol=tol,
+                y_policy=y_policy,
+                max_points=max_points,
+                max_iters=max_iters,
+                rk45_min_success_frac=rk45_min_success_frac,
+                rk45_max_bad_frac=rk45_max_bad_frac,
+                seed=seed,
+                gpu_worker_ctx=worker_ctx,
+            )
+            tau_samples_mc = np.asarray(simulation.arrival_times, dtype=float) * velocity / i_y
+            tau_samples_mc = tau_samples_mc[np.isfinite(tau_samples_mc) & (tau_samples_mc >= 0.0)]
+            if tau_samples_mc.size == 0:
+                continue
+            seeds_used.append(seed)
+            tau_by_mc.append(tau_samples_mc)
+            n_particles_by_mc.append(int(simulation.n_particles))
+            n_success_by_mc.append(int(len(tau_samples_mc)))
+            success_fraction_by_mc.append(float(simulation.success_fraction))
+            bad_fraction_by_mc.append(float(simulation.bad_fraction))
+            status_counts_by_mc.append({str(k): int(v) for k, v in simulation.status_counts.items()})
+    finally:
+        if manager is not None:
+            manager.__exit__(None, None, None)
 
     if not tau_by_mc:
         raise RuntimeError("No valid successful particle arrivals across all Monte Carlo realizations.")
@@ -1197,8 +1739,23 @@ def run_step6(
         "pdf_hist_range_low": float(pdf_bin_edges[0]),
         "pdf_hist_range_high": float(pdf_bin_edges[-1]),
         "pt_solver": str(solver),
+        "pt_backend": str(backend),
         "pt_velocity_location": str(velocity_location),
         "pt_align_with_modflow_velocity": bool(align_with_modflow_velocity),
+        "pt_num_particles": int(
+            _resolve_particle_count(
+                num_particles=num_particles,
+                density_particle=density_particle,
+                source_y_start=geometry.source_y_start,
+                source_y_end=geometry.source_y_end,
+            )
+        ),
+        "source_x": int(geometry.source_x),
+        "target_x": int(geometry.target_x),
+        "source_y_start": int(geometry.source_y_start),
+        "source_y_end": int(geometry.source_y_end),
+        "target_y_start": int(geometry.target_y_start),
+        "target_y_end": int(geometry.target_y_end),
         "seed_start": int(seed_start),
         "n_mc_requested": int(n_mc),
         "n_mc_used": int(len(tau_by_mc)),
@@ -1282,8 +1839,25 @@ def run_step6(
             pdf_hist_range_high=np.asarray(float(pdf_bin_edges[-1])),
             pdf_hist_bin_edges=np.asarray(pdf_bin_edges, dtype=float),
             pt_solver=np.asarray(str(solver)),
+            pt_backend=np.asarray(str(backend)),
             pt_velocity_location=np.asarray(str(velocity_location)),
             pt_align_with_modflow_velocity=np.asarray(bool(align_with_modflow_velocity)),
+            pt_num_particles=np.asarray(
+                int(
+                    _resolve_particle_count(
+                        num_particles=num_particles,
+                        density_particle=density_particle,
+                        source_y_start=geometry.source_y_start,
+                        source_y_end=geometry.source_y_end,
+                    )
+                )
+            ),
+            source_x=np.asarray(int(geometry.source_x)),
+            target_x=np.asarray(int(geometry.target_x)),
+            source_y_start=np.asarray(int(geometry.source_y_start)),
+            source_y_end=np.asarray(int(geometry.source_y_end)),
+            target_y_start=np.asarray(int(geometry.target_y_start)),
+            target_y_end=np.asarray(int(geometry.target_y_end)),
             seeds_used=np.asarray(seeds_used, dtype=np.int32),
             n_success_by_mc=np.asarray(n_success_by_mc, dtype=np.int32),
             tau_samples_by_mc=np.asarray(tau_by_mc, dtype=object),
@@ -1313,6 +1887,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dh", type=float, default=None, help="Hydraulic head x-gradient; default cfg.dh")
     parser.add_argument("--k-g", type=float, default=None, help="Reference conductivity scale; default cfg.k_g")
     parser.add_argument("--solver", choices=["pollock", "rk45"], default="pollock")
+    parser.add_argument("--backend", choices=["cpu", "gpu"], default="cpu")
     parser.add_argument("--velocity-location", choices=["face", "cell"], default="face")
     parser.add_argument(
         "--align-with-modflow-velocity",
@@ -1321,6 +1896,13 @@ def parse_args() -> argparse.Namespace:
         help="Whether to align face velocities with MODFLOW convention for particle tracking.",
     )
     parser.add_argument("--density-particle", type=int, default=20)
+    parser.add_argument("--num-particles", type=int, default=None)
+    parser.add_argument("--source-x", type=int, default=None, help="Source-line x index; default uses the current inset location.")
+    parser.add_argument("--target-x", type=int, default=None, help="Target-line x index; default uses the current inset location.")
+    parser.add_argument("--source-y-start", type=int, default=None, help="Inclusive source-line start y index; default uses the current trimmed band.")
+    parser.add_argument("--source-y-end", type=int, default=None, help="Exclusive source-line end y index; default uses the current trimmed band.")
+    parser.add_argument("--target-y-start", type=int, default=None, help="Inclusive target-line start y index; saved as metadata only; default uses the current outlet span.")
+    parser.add_argument("--target-y-end", type=int, default=None, help="Exclusive target-line end y index; saved as metadata only; default uses the current outlet span.")
     parser.add_argument("--n-mc", type=int, default=10, help="Number of Monte Carlo realizations")
     parser.add_argument("--seed-start", type=int, default=0, help="Start seed for MC sequence (seed_start + i)")
     parser.add_argument("--band-low", type=float, default=5.0, help="Lower percentile for MC CDF band")
@@ -1372,7 +1954,11 @@ def parse_args() -> argparse.Namespace:
             parser.error("--config is required unless --load-npz is used.")
         if args.std is None and args.var is None:
             parser.error("One of --std or --var is required unless --load-npz is used.")
-        _validate_particle_tracking_options(solver=args.solver, velocity_location=args.velocity_location)
+        _validate_particle_tracking_options(
+            solver=args.solver,
+            velocity_location=args.velocity_location,
+            backend=args.backend,
+        )
     return args
 
 
@@ -1412,9 +1998,17 @@ def main() -> int:
         dh=args.dh,
         k_g=args.k_g,
         solver=args.solver,
+        backend=args.backend,
         velocity_location=args.velocity_location,
         align_with_modflow_velocity=args.align_with_modflow_velocity,
         density_particle=args.density_particle,
+        num_particles=args.num_particles,
+        source_x=args.source_x,
+        target_x=args.target_x,
+        source_y_start=args.source_y_start,
+        source_y_end=args.source_y_end,
+        target_y_start=args.target_y_start,
+        target_y_end=args.target_y_end,
         eps_speed=args.eps_speed,
         ds_min=args.ds_min,
         ds_max=args.ds_max,
