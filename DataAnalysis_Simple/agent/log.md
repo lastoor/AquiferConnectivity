@@ -387,6 +387,35 @@
 - Limitations/follow-up:
   - Full runtime verification with custom geometry settings has not been run end-to-end in this environment.
 
+## 2026-03-16
+- Agent/tool: Codex (GPT-5)
+- Summary: Integrated the new linearized Eikonal solver into Step 5 as an optional `FP^i` workflow from `LRP (FMM)` toward `FP (FMM)`, removed Dijkstra paths from the main Step 5 visual overlays, added a combined linearized-progression figure, updated Step 5 tests, and refreshed README documentation.
+- Files changed:
+  - `scripts/fp_and_lrp/linear_eikonal_solver.py`
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/fp_and_lrp/linear_eikonal_solver.py scripts/step5_single_field_paths.py tests/test_step5_single_field_paths.py`
+- Limitations/follow-up:
+  - Full Step 5 runtime verification with the linearized `FP^i` workflow has not been run end-to-end in this environment.
+
+## 2026-03-16
+- Agent/tool: Codex (GPT-5)
+- Summary: Added `--check-path-geometry/--no-check-path-geometry` to Step 5, wired it through the GPU submit script, and documented the bypass for exploratory linearized `FP^i` runs that fail the current geometry validator.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `submit_step5_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step5_single_field_paths.py tests/test_step5_single_field_paths.py`
+  - `bash -n submit_step5_gpu.sh`
+- Limitations/follow-up:
+  - Disabling geometry checks allows invalid paths to propagate into plots without additional safeguards.
+
 ## 2026-03-12
 - Agent/tool: Codex (GPT-5)
 - Summary: Added a Step 6 CLI toggle to enable or disable early-`tau` grid refinement (`--refine-tau-grid/--no-refine-tau-grid`), updated tests for refined vs uniform grid construction, and refreshed README usage.
@@ -399,6 +428,35 @@
   - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
 - Limitations/follow-up:
   - Full automated test execution still requires `pytest` to be installed in the active environment.
+
+## 2026-03-16
+- Agent/tool: Codex (GPT-5)
+- Summary: Refactored Step 5 to use one shared source/target geometry across particle tracking, `LRP (FMM)`, `FP (FMM)`, and linearized `FP^i`; added Step 5 geometry CLI overrides (`--source-x`, `--target-x`, `--source-y-start`, `--source-y-end`, `--target-y-start`, `--target-y-end`); aligned particle seeding to half-open source-span semantics; and updated the Step 5 submit script, tests, and README accordingly.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `submit_step5_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step5_single_field_paths.py tests/test_step5_single_field_paths.py`
+- Limitations/follow-up:
+  - Step 5 particle tracking still stops on `right_x` and does not enforce a target y-band in the underlying tracker; the default shared target semantics therefore use the full right boundary to stay consistent with the available particle-tracking API.
+
+## 2026-03-16
+- Agent/tool: Codex (GPT-5)
+- Summary: Added Step 5 `--linearized-scheme` support with `linearized` and `full_eikonal` modes, documented the scheme-specific meaning of `--linearized-damping` (`alpha`) and the controls ignored by `full_eikonal`, and updated the Step 5 submit script to forward the scheme selection and print it in job logs.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `submit_step5_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step5_single_field_paths.py tests/test_step5_single_field_paths.py scripts/fp_and_lrp/linear_eikonal_solver.py`
+  - `bash -n submit_step5_gpu.sh`
+- Limitations/follow-up:
+  - Full end-to-end Step 5 runs with `--linearized-scheme full_eikonal` were not executed in this environment.
 
 ## 2026-03-12
 - Agent/tool: Codex (GPT-5)
@@ -425,6 +483,23 @@
   - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
 - Limitations/follow-up:
   - Full automated test execution still requires `pytest` to be installed in the active environment.
+
+## 2026-03-17
+- Agent/tool: Codex (GPT-5)
+- Summary: Reworked Step 5 curvature diagnostics to use a shared spline-geometry module with explicit interpolation vs approximation modes, added spline-path overlays and split curvature-balance panels, introduced optional Gaussian field smoothing for normal-derivative diagnostics, made curvature/normals/normal-derivative sampling spline-consistent, expanded the residual panel with multiple LRP balance combinations, updated the GPU submit script to forward the new curvature controls, and fixed two numerical issues: linearized FP discrete backtracking now ranks neighbors by travel-time drop per unit distance and the raw curvature fallback now uses the full parametric denominator.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `scripts/fp_and_lrp/curvature.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `submit_step5_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step5_single_field_paths.py scripts/fp_and_lrp/curvature.py tests/test_step5_single_field_paths.py`
+  - `bash -n submit_step5_gpu.sh`
+- Limitations/follow-up:
+  - `pytest` is not installed in this environment, so the new Step 5 regression tests were not executed here.
+  - Full end-to-end Step 5 figure generation was not rerun after the latest curvature/residual updates.
 
 ## 2026-03-12
 - Agent/tool: Codex (GPT-5)

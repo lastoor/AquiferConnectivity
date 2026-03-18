@@ -9,7 +9,7 @@
 
 Additional standalone utility:
 
-- `scripts/step5_single_field_paths.py`: solve and plot `FP`, `FP (FMM)`, `FP (Dijkstra)`, `LRP`, and `LRP (FMM)` for one selected logK realization.
+- `scripts/step5_single_field_paths.py`: solve and plot particle-tracking `FP`, `FP (FMM)`, `LRP (FMM)`, and optional linearized `FP^i` paths for one selected logK realization.
 - `scripts/step6_single_field_arrival_hist.py`: generate one GRF logK field, solve flow/particle tracking, and compare empirical arrival-time CDF of all successful particles against analytical `_g_tau`.
 
 All implementation logic is inside the step scripts (no `visualization/` package).
@@ -121,6 +121,10 @@ PYTHONPATH=./scripts python scripts/step5_single_field_paths.py \
   --value 0.1 \
   --field-size 200 \
   --mc-index 0 \
+  --linearized-fp \
+  --linearized-scheme linearized \
+  --linearized-outer-max 20 \
+  --linearized-damping 0.8 \
   --output-dir "$FIGURE_DIR"
 ```
 
@@ -129,17 +133,38 @@ Outputs:
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_logk_paths.png`
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_arrival_paths.png`
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_speed_streamlines.png`
+- `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_curvature_balance.png`
+- Optional (when `--linearized-fp`): `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_linearized_fp_progression.png`
 
 Notes:
 
 - This script re-solves paths from a selected logK field and keeps the minimal-arrival-time and velocity fields in memory for plotting.
-- All Step 5 figures omit title text and include source/target lines plus FP/FP(FMM)/FP(Dijkstra)/LRP/LRP(FMM) paths.
+- Step 5 now uses FMM on slowness fields directly:
+  unperturbed `LRP (FMM)` uses `1 / (K * |dh|)`, while `FP (FMM)` uses `1 / (K * |grad h|)`.
+- Step 5 source/target geometry is now shared across particle tracking, `LRP (FMM)`, `FP (FMM)`, and linearized `FP^i`.
+  Source seeds use the half-open span `[source_y_start, source_y_end)`, and the default target is the full right boundary `[target_y_start, target_y_end) = [0, field_size)`.
+- All Step 5 figures omit title text and include source/target lines plus particle-tracking `FP`, `FP (FMM)`, and `LRP (FMM)`. Dijkstra-based `FP`/`LRP` overlays are no longer shown in the main figures.
+- `--linearized-fp` enables the iterative linearized-Eikonal sequence `FP^i`, starting from `LRP (FMM)` and progressively approaching `FP (FMM)` under the full slowness field.
+- `--linearized-scheme linearized` uses the current iterative linearized solver from `scripts/fp_and_lrp/linear_eikonal_solver.py`.
+- `--linearized-scheme full_eikonal` instead solves the full Eikonal equation by FMM on intermediate slowness fields between the unperturbed and true slowness; `--linearized-outer-max` is the number of intermediate FMM steps.
+- The linearized progression figure overlays all `FP^i` paths together, with `LRP (FMM)`, `FP (FMM)`, and particle-tracking `FP` retained as references.
+- For `--linearized-scheme linearized`, the solver is controlled by `--linearized-outer-max`, `--linearized-inner-max-sweeps`, `--linearized-inner-tol`, `--linearized-eikonal-tol`, `--linearized-damping`, `--linearized-max-deltat`, `--linearized-monotone-residual/--no-linearized-monotone-residual`, and `--linearized-verbose`.
+- `--linearized-damping` is the initial update factor `alpha` for the `linearized` scheme; with `--linearized-monotone-residual`, the solver may still reduce `alpha` internally by halving it during residual backtracking.
+- For `--linearized-scheme full_eikonal`, the linearized-only controls `--linearized-inner-max-sweeps`, `--linearized-inner-tol`, `--linearized-eikonal-tol`, `--linearized-damping`, `--linearized-max-deltat`, and `--linearized-monotone-residual` are ignored.
+- Use `--no-check-path-geometry` to disable all Step 5 path-geometry validation when exploratory linearized `FP^i` paths fail the current geometry checks.
+- Override shared Step 5 geometry with `--source-x`, `--target-x`, `--source-y-start`, `--source-y-end`, `--target-y-start`, and `--target-y-end`.
+- Curvature diagnostics now support explicit spline geometry modes with `--curvature-spline-mode {interpolation,approximation}` plus `--curvature-spline-smooth` and `--curvature-spline-degree`.
+- Normal-derivative diagnostics can be smoothed independently with `--curvature-field-smooth-method {none,gaussian}` and `--curvature-field-smooth-sigma`.
+- Step 5 now evaluates curvature, normals, and normal-derivative terms on the same spline curve, and the residual panel includes FP `\kappa+\partial_N \ln|v|` together with multiple LRP comparisons (`\kappa+\partial_N \ln K`, `\kappa+\partial_N \ln|v|`, and `\kappa+\partial_N \ln K+\partial_N \ln|\nabla h|`).
+- The local linearized-FP backtracking now ranks neighbors by travel-time drop per unit step length, reducing diagonal bias in the discrete descent path.
 - Spatial axes are normalized as `x/I_Y` and `y/I_Y`.
 - Arrival-time background is normalized as `T_min/t_ref`, with `t_ref = I_Y / (k_g * dh)`.
 - Speed/streamline background uses dimensionless velocity magnitude `|v|/(k_g*dh)` and streamlines from `v/(k_g*dh)`.
 - Particle tracking now supports `--solver pollock` or `--solver rk45`; defaults mirror the Algorithm runner: `--solver pollock`, `--velocity-location face`, `--no-align-with-modflow-velocity`.
-- Pollock requires `--velocity-location face`; the plotted `FP` path remains solver-neutral and reflects the selected particle-tracking backend.
+- Pollock requires `--velocity-location face`; the plotted particle-tracking `FP` remains solver-neutral and reflects the selected particle-tracking backend.
+- Step 5 FMM backtracking still defaults to `--fmm-backtracking discrete`.
 - Solver imports require both `Algorithm/src` and the sibling `FlowSimulation` repo.
+- The linearized Eikonal iteration additionally loads `scripts/fp_and_lrp/linear_eikonal_solver.py`.
 - Override FlowSimulation path with `FLOWSIM_PATH=/path/to/FlowSimulation` if needed.
 
 ## Single-Field Arrival-Time CDF vs Analytical

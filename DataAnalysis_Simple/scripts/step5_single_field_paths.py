@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
 import sys
@@ -15,7 +16,7 @@ import numpy as np
 import cmcrameri.cm as cmc
 from matplotlib.colors import to_rgba
 import matplotlib.patheffects as pe
-from scipy.signal import savgol_filter
+from scipy.ndimage import gaussian_filter
 
 import step1_index as step1
 import step2_metrics as step2
@@ -54,13 +55,56 @@ class SelectedRun:
 
 
 @dataclass(slots=True)
+class Step5Geometry:
+    x: np.ndarray
+    y: np.ndarray
+    source_x: int
+    target_x: int
+    source_y_start: int
+    source_y_end: int
+    target_y_start: int
+    target_y_end: int
+
+    @property
+    def domain_box(self) -> tuple[int, int, int, int]:
+        return (
+            int(self.source_x),
+            int(self.target_x),
+            int(min(self.source_y_start, self.target_y_start)),
+            int(max(self.source_y_end, self.target_y_end)),
+        )
+
+    @property
+    def source_rows(self) -> np.ndarray:
+        return np.arange(self.source_y_start, self.source_y_end, dtype=int)
+
+    @property
+    def target_rows(self) -> np.ndarray:
+        return np.arange(self.target_y_start, self.target_y_end, dtype=int)
+
+    @property
+    def source_xy(self) -> np.ndarray:
+        rows = self.source_rows.astype(float)
+        return np.column_stack([np.full(rows.size, self.source_x, dtype=float), rows])
+
+    @property
+    def target_xy(self) -> np.ndarray:
+        rows = self.target_rows.astype(float)
+        return np.column_stack([np.full(rows.size, self.target_x, dtype=float), rows])
+
+
+@dataclass(slots=True)
 class PathSolveResult:
     fp: np.ndarray
     fp_fmm: np.ndarray
-    fp_dijkstra: np.ndarray
-    lrp: np.ndarray
     lrp_fmm: np.ndarray
     t_min: np.ndarray
+    linearized_fp_paths: list[np.ndarray] | None
+    linearized_fp_indices: list[int] | None
+    linearized_fp_final: np.ndarray | None
+    linearized_fp_history: list[dict[str, float]] | None
+    linearized_fp_failed_indices: list[int] | None
+    linearized_fp_converged: bool | None
     h: np.ndarray
     x: np.ndarray
     y: np.ndarray
@@ -74,19 +118,102 @@ class PathSolveResult:
 class PathBalanceDiagnostics:
     label: str
     points: np.ndarray
+    spline_points: np.ndarray
     s: np.ndarray
     s_norm: np.ndarray
     tangent: np.ndarray
     normal: np.ndarray
     curvature: np.ndarray
     curvature_raw: np.ndarray
-    curvature_savgol: np.ndarray
+    curvature_spline: np.ndarray
     curvature_circle: np.ndarray
     curvature_method: str
+    curvature_spline_mode: str
     dlogk_dn: np.ndarray
     dloggradh_dn: np.ndarray
     dlogv_dn: np.ndarray
     residual: np.ndarray
+
+
+@dataclass(slots=True)
+class LinearizedFpSeries:
+    travel_time_fields: list[np.ndarray]
+    paths: list[np.ndarray]
+    path_indices: list[int]
+    history: list[dict[str, float]]
+    failed_path_indices: list[int]
+    converged: bool
+
+
+def _validate_index_span(*, field_size: int, start: int, end: int, label: str) -> None:
+    if not (0 <= int(start) < int(end) <= int(field_size)):
+        raise ValueError(f"Invalid {label} span [{start}, {end}); expected 0 <= start < end <= {field_size}.")
+
+
+def _default_geometry(field_size: int) -> Step5Geometry:
+    source_x = field_size // 20 - 1
+    target_x = field_size - field_size // 20 - 1
+    source_y_start = field_size // 20 - 1
+    source_y_end = field_size - field_size // 20 - 1
+    target_y_start = 0
+    target_y_end = field_size
+    return Step5Geometry(
+        x=np.arange(0, field_size, 1.0),
+        y=np.arange(0, field_size, 1.0),
+        source_x=int(source_x),
+        target_x=int(target_x),
+        source_y_start=int(source_y_start),
+        source_y_end=int(source_y_end),
+        target_y_start=int(target_y_start),
+        target_y_end=int(target_y_end),
+    )
+
+
+def _resolve_geometry(
+    *,
+    field_size: int,
+    source_x: int | None = None,
+    target_x: int | None = None,
+    source_y_start: int | None = None,
+    source_y_end: int | None = None,
+    target_y_start: int | None = None,
+    target_y_end: int | None = None,
+) -> Step5Geometry:
+    geometry = _default_geometry(field_size)
+    if source_x is not None:
+        geometry.source_x = int(source_x)
+    if target_x is not None:
+        geometry.target_x = int(target_x)
+    if source_y_start is not None:
+        geometry.source_y_start = int(source_y_start)
+    if source_y_end is not None:
+        geometry.source_y_end = int(source_y_end)
+    if target_y_start is not None:
+        geometry.target_y_start = int(target_y_start)
+    if target_y_end is not None:
+        geometry.target_y_end = int(target_y_end)
+
+    if not (0 <= geometry.source_x < field_size):
+        raise ValueError(f"Invalid source_x={geometry.source_x}; expected 0 <= source_x < {field_size}.")
+    if not (0 <= geometry.target_x < field_size):
+        raise ValueError(f"Invalid target_x={geometry.target_x}; expected 0 <= target_x < {field_size}.")
+    if geometry.target_x <= geometry.source_x:
+        raise ValueError(
+            f"Invalid source/target ordering: source_x={geometry.source_x}, target_x={geometry.target_x}; expected target_x > source_x."
+        )
+    _validate_index_span(
+        field_size=field_size,
+        start=geometry.source_y_start,
+        end=geometry.source_y_end,
+        label="source_y",
+    )
+    _validate_index_span(
+        field_size=field_size,
+        start=geometry.target_y_start,
+        end=geometry.target_y_end,
+        label="target_y",
+    )
+    return geometry
 
 
 def _sweep_token(sweep: str) -> str:
@@ -210,7 +337,6 @@ def _import_solver_modules() -> dict[str, Any]:
 
     try:
         from fmm_core.fmm import extract_path_continuous, extract_path_source_to_target, fast_marching_2d_regions
-        from fmm_core.speed import prepare_fmm_speed
         from simulation import hydraulic as sim_hyd
         from simulation import particle_tracking as sim_pt
         from simulation import path_finding as sim_path
@@ -224,29 +350,40 @@ def _import_solver_modules() -> dict[str, Any]:
         "extract_path_continuous": extract_path_continuous,
         "extract_path_source_to_target": extract_path_source_to_target,
         "fast_marching_2d_regions": fast_marching_2d_regions,
-        "prepare_fmm_speed": prepare_fmm_speed,
         "sim_hyd": sim_hyd,
         "sim_pt": sim_pt,
         "sim_path": sim_path,
     }
 
 
-def _build_domain(field_size: int) -> dict[str, Any]:
-    x0 = field_size // 20 - 1
-    x1 = field_size - field_size // 20 - 1
-    y0 = field_size // 20 - 1
-    y1 = field_size - field_size // 20 - 1
-    return {
-        "x": np.arange(0, field_size, 1.0),
-        "y": np.arange(0, field_size, 1.0),
-        "x0": x0,
-        "x1": x1,
-        "y0": y0,
-        "y1": y1,
-        "domain_box": (x0, x1, y0, y1),
-        "source": [(yy, x0) for yy in range(y0, y1)],
-        "target": [(yy, x1) for yy in range(0, field_size - 1)],
-    }
+def _import_linear_eikonal_solver() -> Any:
+    solver_path = Path(__file__).resolve().parent / "fp_and_lrp" / "linear_eikonal_solver.py"
+    if not solver_path.is_file():
+        raise RuntimeError(f"Linear Eikonal solver file does not exist: {solver_path}")
+
+    module_name = "step5_linear_eikonal_solver"
+    spec = importlib.util.spec_from_file_location(module_name, solver_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load module spec for {solver_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _import_curvature_module() -> Any:
+    module_path = Path(__file__).resolve().parent / "fp_and_lrp" / "curvature.py"
+    if not module_path.is_file():
+        raise RuntimeError(f"Curvature module file does not exist: {module_path}")
+
+    module_name = "step5_curvature_module"
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Failed to load module spec for {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 
 def build_face_coordinates_from_centers(coord_centers: np.ndarray) -> np.ndarray:
@@ -264,6 +401,10 @@ def _resolve_particle_count(*, num_particles: int | None, density_particle: int,
     if num_particles is not None:
         return max(2, int(num_particles))
     return max(2, int(density_particle * abs(y1 - y0)))
+
+
+def _build_particle_seed_y(*, y_start: int, y_end: int, num_particles: int) -> np.ndarray:
+    return np.linspace(float(y_start), float(y_end), int(num_particles), endpoint=False, dtype=np.float32)
 
 
 def _validate_particle_tracking_options(*, solver: str, velocity_location: str, backend: str = "cpu") -> None:
@@ -284,34 +425,57 @@ def _require_path_valid(sim_path: Any, path: np.ndarray, domain_box: tuple[int, 
         raise RuntimeError(f"Invalid {name} geometry.")
 
 
-def _compute_fmm_path(
-    field: np.ndarray,
+def _maybe_require_path_valid(
+    sim_path: Any,
+    path: np.ndarray,
+    domain_box: tuple[int, int, int, int],
+    x0: int,
+    x1: int,
+    name: str,
     *,
+    check_path_geometry: bool,
+) -> None:
+    if not check_path_geometry:
+        return
+    _require_path_valid(sim_path, path, domain_box, x0, x1, name)
+
+
+def _build_source_target_masks(
+    *,
+    field_shape: tuple[int, int],
     source_rows: np.ndarray,
     target_rows: np.ndarray,
     x0: int,
     x1: int,
-    grid_spacing: float,
-    fast_marching_2d_regions: Any,
-    extract_path_source_to_target: Any,
-    extract_path_continuous: Any,
-    backtracking: str = "discrete",
-    continuous_step_size: float = 0.5,
     traversable_mask: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray]:
-    n_y, n_x = field.shape
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    n_y, n_x = field_shape
     source_mask = np.zeros((n_y, n_x), dtype=bool)
     target_mask = np.zeros((n_y, n_x), dtype=bool)
     source_mask[source_rows, x0] = True
     target_mask[target_rows, x1] = True
     if traversable_mask is None:
-        traversable_mask = np.isfinite(field) & (field > 0.0)
+        traversable_mask = np.ones((n_y, n_x), dtype=bool)
+    else:
+        traversable_mask = np.asarray(traversable_mask, dtype=bool)
+        if traversable_mask.shape != (n_y, n_x):
+            raise ValueError(f"Traversable-mask shape {traversable_mask.shape} does not match field shape {(n_y, n_x)}.")
     source_mask = source_mask & traversable_mask
     target_mask = target_mask & traversable_mask
-    if not np.any(source_mask) or not np.any(target_mask):
-        raise RuntimeError("No traversable source/target cells for FMM.")
+    return source_mask, target_mask, traversable_mask
 
-    t_field, _state = fast_marching_2d_regions(field, source_mask, h=grid_spacing, traversable_mask=traversable_mask)
+
+def _extract_fmm_path_from_t_field(
+    t_field: np.ndarray,
+    *,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    extract_path_source_to_target: Any,
+    extract_path_continuous: Any,
+    backtracking: str,
+    continuous_step_size: float,
+    traversable_mask: np.ndarray,
+) -> np.ndarray:
     if backtracking == "continuous":
         path_ij, _chosen_target = extract_path_continuous(
             t_field,
@@ -333,7 +497,153 @@ def _compute_fmm_path(
         )
     if len(path_ij) < 2:
         raise RuntimeError("FMM path extraction failed.")
-    path_xy = np.asarray(path_ij, dtype=float)[:, [1, 0]][::-1]
+    return np.asarray(path_ij, dtype=float)[:, [1, 0]][::-1]
+
+
+def _extract_linearized_path_from_start_cell(
+    t_arr: np.ndarray,
+    *,
+    start_cell: tuple[int, int],
+    source_mask: np.ndarray,
+    traversable_mask: np.ndarray,
+) -> np.ndarray:
+    current = tuple(int(v) for v in start_cell)
+    path_ij: list[tuple[int, int]] = [current]
+    visited = {current}
+    ny, nx = t_arr.shape
+    max_steps = max(2, 4 * ny * nx)
+    decrease_tol = 1e-12
+    neighbors = [
+        (-1, -1), (-1, 0), (-1, 1),
+        (0, -1),           (0, 1),
+        (1, -1),  (1, 0),  (1, 1),
+    ]
+
+    for _step in range(max_steps):
+        if source_mask[current]:
+            path_xy = np.asarray(path_ij, dtype=float)[:, [1, 0]][::-1]
+            if len(path_xy) < 2:
+                raise RuntimeError("Linearized FP path extraction failed: degenerate source-target path.")
+            return path_xy
+
+        curr_i, curr_j = current
+        curr_t = float(t_arr[curr_i, curr_j])
+        best_next: tuple[int, int] | None = None
+        best_t = curr_t
+        best_drop_rate = -np.inf
+        for di, dj in neighbors:
+            ni = curr_i + di
+            nj = curr_j + dj
+            if not (0 <= ni < ny and 0 <= nj < nx):
+                continue
+            if not traversable_mask[ni, nj]:
+                continue
+            next_t = float(t_arr[ni, nj])
+            if not np.isfinite(next_t):
+                continue
+            step_dist = float(np.hypot(di, dj))
+            drop = curr_t - next_t
+            if drop <= decrease_tol:
+                continue
+            drop_rate = drop / step_dist
+            if drop_rate > best_drop_rate or (abs(drop_rate - best_drop_rate) <= decrease_tol and next_t < best_t):
+                best_next = (ni, nj)
+                best_t = next_t
+                best_drop_rate = drop_rate
+
+        if best_next is None:
+            raise RuntimeError(
+                f"Linearized FP path extraction failed: no descending neighbor from cell {current} with T={curr_t:.6e}."
+            )
+        if best_next in visited:
+            raise RuntimeError(f"Linearized FP path extraction failed: detected descent loop at cell {best_next}.")
+
+        current = best_next
+        visited.add(current)
+        path_ij.append(current)
+
+    raise RuntimeError("Linearized FP path extraction failed: exceeded maximum descent steps.")
+
+
+def _extract_linearized_path_from_t_field(
+    t_field: np.ndarray,
+    *,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    traversable_mask: np.ndarray,
+) -> np.ndarray:
+    t_arr = np.asarray(t_field, dtype=float)
+    source_mask = np.asarray(source_mask, dtype=bool)
+    target_mask = np.asarray(target_mask, dtype=bool)
+    traversable_mask = np.asarray(traversable_mask, dtype=bool)
+    if t_arr.shape != source_mask.shape or t_arr.shape != target_mask.shape or t_arr.shape != traversable_mask.shape:
+        raise ValueError("Linearized path extraction expects matching field and mask shapes.")
+
+    valid_target_mask = target_mask & traversable_mask & np.isfinite(t_arr)
+    if not np.any(valid_target_mask):
+        raise RuntimeError("Linearized FP path extraction failed: no valid target cells.")
+
+    target_indices = np.argwhere(valid_target_mask)
+    target_values = t_arr[valid_target_mask]
+    order = np.argsort(target_values, kind="stable")
+    failure_messages: list[str] = []
+    for target_idx in order.tolist():
+        start_cell = tuple(int(v) for v in target_indices[int(target_idx)])
+        try:
+            return _extract_linearized_path_from_start_cell(
+                t_arr,
+                start_cell=start_cell,
+                source_mask=source_mask,
+                traversable_mask=traversable_mask,
+            )
+        except RuntimeError as exc:
+            failure_messages.append(str(exc))
+            continue
+
+    first_reason = failure_messages[0] if failure_messages else "unknown failure"
+    raise RuntimeError(
+        "Linearized FP path extraction failed: "
+        f"checked {len(order)} target candidates and none admitted a descending path. "
+        f"First failure: {first_reason}"
+    )
+
+
+def _compute_fmm_path(
+    field: np.ndarray,
+    *,
+    geometry: Step5Geometry,
+    grid_spacing: float,
+    fast_marching_2d_regions: Any,
+    extract_path_source_to_target: Any,
+    extract_path_continuous: Any,
+    backtracking: str = "discrete",
+    continuous_step_size: float = 0.5,
+    traversable_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    if traversable_mask is None:
+        traversable_mask = np.isfinite(field) & (field > 0.0)
+    source_mask, target_mask, traversable_mask = _build_source_target_masks(
+        field_shape=field.shape,
+        source_rows=geometry.source_rows,
+        target_rows=geometry.target_rows,
+        x0=geometry.source_x,
+        x1=geometry.target_x,
+        traversable_mask=traversable_mask,
+    )
+    if not np.any(source_mask) or not np.any(target_mask):
+        raise RuntimeError("No traversable source/target cells for FMM.")
+
+    t_field, _state = fast_marching_2d_regions(field, source_mask, h=grid_spacing, traversable_mask=traversable_mask)
+    path_xy = _extract_fmm_path_from_t_field(
+        t_field,
+        source_mask=source_mask,
+        target_mask=target_mask,
+        extract_path_source_to_target=extract_path_source_to_target,
+        extract_path_continuous=extract_path_continuous,
+        backtracking=backtracking,
+        continuous_step_size=continuous_step_size,
+        traversable_mask=traversable_mask,
+    )
     return path_xy, t_field
 
 
@@ -345,10 +655,7 @@ def _run_particle_tracking(
     h_field: np.ndarray,
     x: np.ndarray,
     y: np.ndarray,
-    x0: int,
-    x1: int,
-    y0: int,
-    y1: int,
+    geometry: Step5Geometry,
     solver: str,
     backend: str,
     velocity_location: str,
@@ -369,11 +676,15 @@ def _run_particle_tracking(
     n_particles = _resolve_particle_count(
         num_particles=num_particles,
         density_particle=density_particle,
-        y0=y0,
-        y1=y1,
+        y0=geometry.source_y_start,
+        y1=geometry.source_y_end,
     )
-    seeds_x = np.full(n_particles, x0, np.float32)
-    seeds_y = np.linspace(y0, y1, n_particles, endpoint=True).astype(np.float32)
+    seeds_x = np.full(n_particles, geometry.source_x, np.float32)
+    seeds_y = _build_particle_seed_y(
+        y_start=geometry.source_y_start,
+        y_end=geometry.source_y_end,
+        num_particles=n_particles,
+    )
 
     summary_params: dict[str, Any] = {
         "backend": backend,
@@ -385,7 +696,7 @@ def _run_particle_tracking(
         "return_fastest": True,
         "seeds_x": seeds_x,
         "seeds_y": seeds_y,
-        "right_x": x1,
+        "right_x": geometry.target_x,
         "max_points": max_points,
         "max_iters": max_iters,
         "threads_per_block": 256,
@@ -453,6 +764,145 @@ def _run_particle_tracking(
     return fp, np.asarray(vx, dtype=float), np.asarray(vy, dtype=float)
 
 
+def _compute_linearized_fp_series(
+    *,
+    linear_solver: Any,
+    slowness_unperturbed: np.ndarray,
+    slowness_true: np.ndarray,
+    geometry: Step5Geometry,
+    fast_marching_2d_regions: Any,
+    extract_path_source_to_target: Any,
+    extract_path_continuous: Any,
+    scheme: str,
+    backtracking: str,
+    continuous_step_size: float,
+    outer_max: int,
+    inner_max_sweeps: int,
+    inner_tol: float,
+    eikonal_tol: float,
+    damping: float,
+    max_delta_t: float | None,
+    monotone_residual: bool,
+    verbose: bool,
+) -> LinearizedFpSeries:
+    traversable_mask = (
+        np.isfinite(slowness_unperturbed)
+        & np.isfinite(slowness_true)
+        & (slowness_unperturbed > 0.0)
+        & (slowness_true > 0.0)
+    )
+    source_mask, target_mask, traversable_mask = _build_source_target_masks(
+        field_shape=slowness_unperturbed.shape,
+        source_rows=geometry.source_rows,
+        target_rows=geometry.target_rows,
+        x0=geometry.source_x,
+        x1=geometry.target_x,
+        traversable_mask=traversable_mask,
+    )
+    if not np.any(source_mask) or not np.any(target_mask):
+        raise RuntimeError("No traversable source/target cells for linearized FP.")
+
+    t_init, _state = fast_marching_2d_regions(
+        slowness_unperturbed,
+        source_mask,
+        h=1.0,
+        traversable_mask=traversable_mask,
+    )
+    if scheme == "linearized":
+        _t_final, history, iterates = linear_solver.solve_eikonal_by_relinearization(
+            T0_fmm=t_init,
+            n_true=slowness_true,
+            dx=1.0,
+            dy=1.0,
+            source_mask=source_mask,
+            outer_max=outer_max,
+            inner_max_sweeps=inner_max_sweeps,
+            inner_tol=inner_tol,
+            eikonal_tol=eikonal_tol,
+            damping=damping,
+            max_deltaT=max_delta_t,
+            monotone_residual=monotone_residual,
+            verbose=verbose,
+        )
+        extractor = "descent"
+        history_out = [{str(k): float(v) for k, v in entry.items()} for entry in history]
+        converged = False
+        if history_out:
+            converged = bool(history_out[-1].get("residual_inf", np.inf) <= eikonal_tol)
+    elif scheme == "full_eikonal":
+        if outer_max < 1:
+            raise ValueError("full_eikonal scheme requires linearized_outer_max >= 1.")
+        iterates = [np.asarray(t_init, dtype=float)]
+        history_out = []
+        for idx in range(1, outer_max + 1):
+            lam = float(idx) / float(outer_max)
+            slowness_i = (1.0 - lam) * slowness_unperturbed + lam * slowness_true
+            t_i, _state_i = fast_marching_2d_regions(
+                slowness_i,
+                source_mask,
+                h=1.0,
+                traversable_mask=traversable_mask,
+            )
+            iterates.append(np.asarray(t_i, dtype=float))
+            history_out.append({"iter": float(idx), "lambda": float(lam)})
+        extractor = "fmm"
+        converged = True
+        if verbose:
+            ignored = [
+                "linearized_inner_max_sweeps",
+                "linearized_inner_tol",
+                "linearized_eikonal_tol",
+                "linearized_damping",
+                "linearized_max_deltat",
+                "linearized_monotone_residual",
+            ]
+            print(
+                "Linearized FP scheme 'full_eikonal' selected; "
+                f"ignoring controls: {', '.join(ignored)}"
+            )
+    else:
+        raise ValueError(f"Unsupported linearized scheme {scheme!r}; expected 'linearized' or 'full_eikonal'.")
+
+    paths: list[np.ndarray] = []
+    path_indices: list[int] = []
+    failed_path_indices: list[int] = []
+    for idx, t_field in enumerate(iterates[1:], start=1):
+        try:
+            if extractor == "descent":
+                path_xy = _extract_linearized_path_from_t_field(
+                    np.asarray(t_field, dtype=float),
+                    source_mask=source_mask,
+                    target_mask=target_mask,
+                    traversable_mask=traversable_mask,
+                )
+            else:
+                path_xy = _extract_fmm_path_from_t_field(
+                    np.asarray(t_field, dtype=float),
+                    source_mask=source_mask,
+                    target_mask=target_mask,
+                    extract_path_source_to_target=extract_path_source_to_target,
+                    extract_path_continuous=extract_path_continuous,
+                    backtracking=backtracking,
+                    continuous_step_size=continuous_step_size,
+                    traversable_mask=traversable_mask,
+                )
+        except RuntimeError as exc:
+            if verbose:
+                print(f"Linearized FP path extraction failed at iteration {idx}: {exc}")
+            failed_path_indices.append(idx)
+            continue
+        paths.append(path_xy)
+        path_indices.append(idx)
+    return LinearizedFpSeries(
+        travel_time_fields=[np.asarray(t_field, dtype=float) for t_field in iterates],
+        paths=paths,
+        path_indices=path_indices,
+        history=history_out,
+        failed_path_indices=failed_path_indices,
+        converged=converged,
+    )
+
+
 def solve_single_field(
     logk_field: np.ndarray,
     *,
@@ -462,12 +912,25 @@ def solve_single_field(
     backend: str = "cpu",
     velocity_location: str,
     align_with_modflow_velocity: bool,
-    fmm_velocity_layout: str,
-    fmm_face_mapping: str,
-    fmm_zero_policy: str,
-    fmm_min_speed: float,
     fmm_backtracking: str,
     fmm_continuous_step_size: float,
+    linearized_fp: bool,
+    linearized_scheme: str,
+    linearized_outer_max: int,
+    linearized_inner_max_sweeps: int,
+    linearized_inner_tol: float,
+    linearized_eikonal_tol: float,
+    linearized_damping: float,
+    linearized_max_deltat: float | None,
+    linearized_monotone_residual: bool,
+    linearized_verbose: bool,
+    check_path_geometry: bool,
+    source_x: int | None = None,
+    target_x: int | None = None,
+    source_y_start: int | None = None,
+    source_y_end: int | None = None,
+    target_y_start: int | None = None,
+    target_y_end: int | None = None,
     density_particle: int,
     num_particles: int | None = None,
     eps_speed: float,
@@ -481,11 +944,11 @@ def solve_single_field(
     rk45_max_bad_frac: float,
 ) -> PathSolveResult:
     modules = _import_solver_modules()
+    linear_solver = _import_linear_eikonal_solver() if linearized_fp else None
     extract_path_continuous = modules["extract_path_continuous"]
     sim_hyd = modules["sim_hyd"]
     sim_pt = modules["sim_pt"]
     sim_path = modules["sim_path"]
-    prepare_fmm_speed = modules["prepare_fmm_speed"]
     fast_marching_2d_regions = modules["fast_marching_2d_regions"]
     extract_path_source_to_target = modules["extract_path_source_to_target"]
 
@@ -494,78 +957,104 @@ def solve_single_field(
     _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location, backend=backend)
 
     k_field = np.exp(logk_field)
-    domain = _build_domain(field_size)
-    x = domain["x"]
-    y = domain["y"]
-    x0 = int(domain["x0"])
-    x1 = int(domain["x1"])
-    y0 = int(domain["y0"])
-    y1 = int(domain["y1"])
-    source = domain["source"]
-    target = domain["target"]
-    domain_box = domain["domain_box"]
-    source_rows = np.arange(y0, y1, dtype=int)
-    target_rows = np.arange(0, field_size - 1, dtype=int)
-
-    lrp, _total_r, _s_node, _e_node, _rmap = sim_path.dijkstra_2d_least_resistance(k_field, source, target, average="harmonic")
-    _require_path_valid(sim_path, lrp, domain_box, x0, x1, "LRP")
-    lrp_fmm, _r_min_field = _compute_fmm_path(
-        k_field,
-        source_rows=source_rows,
-        target_rows=target_rows,
-        x0=x0,
-        x1=x1,
-        grid_spacing=1.0,
-        fast_marching_2d_regions=fast_marching_2d_regions,
-        extract_path_source_to_target=extract_path_source_to_target,
-        extract_path_continuous=extract_path_continuous,
-        backtracking=fmm_backtracking,
-        continuous_step_size=fmm_continuous_step_size,
+    geometry = _resolve_geometry(
+        field_size=field_size,
+        source_x=source_x,
+        target_x=target_x,
+        source_y_start=source_y_start,
+        source_y_end=source_y_end,
+        target_y_start=target_y_start,
+        target_y_end=target_y_end,
     )
-    _require_path_valid(sim_path, lrp_fmm, domain_box, x0, x1, "LRP (FMM)")
+    x = geometry.x
+    y = geometry.y
+    domain_box = geometry.domain_box
 
     h, msg, is_success = sim_hyd.solve_head(k_field, x, y, dh=dh, rtol=1e-10, atol=1e-20, max_it=10000)
     if not is_success:
         raise RuntimeError(f"Head solver failed: {msg}")
 
-    if fmm_velocity_layout == "face":
-        vx_fmm, vy_fmm = sim_hyd.compute_velocity(
-            k_field,
-            x,
-            y,
-            h,
-            output_location="face",
-            face_output="full",
-        )
-    else:
-        vx_fmm, vy_fmm = sim_hyd.compute_velocity(k_field, x, y, h, output_location="cell")
-    speed_fmm, traversable_mask, _speed_diag = prepare_fmm_speed(
-        vx=vx_fmm,
-        vy=vy_fmm,
-        layout=fmm_velocity_layout,
-        face_mapping=fmm_face_mapping,
-        zero_policy=fmm_zero_policy,
-        min_speed=fmm_min_speed,
-    )
-
-    fp_dijkstra, _total_t_dij, _sd, _ed, _rmap_v = sim_path.dijkstra_2d_least_resistance(speed_fmm, source, target, average="arithmetic")
-    _require_path_valid(sim_path, fp_dijkstra, domain_box, x0, x1, "FP (Dijkstra)")
-
-    fp_fmm, t_min = _compute_fmm_path(
-        speed_fmm,
-        source_rows=source_rows,
-        target_rows=target_rows,
-        x0=x0,
-        x1=x1,
+    grad_h_x, grad_h_y = _compute_centered_gradient(h, x, y)
+    grad_h_mag = np.hypot(grad_h_x, grad_h_y)
+    dh_mean = abs(float(dh))
+    if dh_mean <= 0.0 or not np.isfinite(dh_mean):
+        raise ValueError(f"Invalid mean hydraulic gradient dh={dh}; expected positive finite magnitude.")
+    slowness_unperturbed = 1.0 / np.maximum(k_field * dh_mean, 1e-12)
+    slowness_true = 1.0 / np.maximum(k_field * grad_h_mag, 1e-12)
+    lrp_fmm, _r_min_field = _compute_fmm_path(
+        slowness_unperturbed,
+        geometry=geometry,
         grid_spacing=1.0,
         fast_marching_2d_regions=fast_marching_2d_regions,
         extract_path_source_to_target=extract_path_source_to_target,
         extract_path_continuous=extract_path_continuous,
         backtracking=fmm_backtracking,
         continuous_step_size=fmm_continuous_step_size,
-        traversable_mask=traversable_mask,
+        traversable_mask=np.isfinite(slowness_unperturbed) & (slowness_unperturbed > 0.0),
     )
-    _require_path_valid(sim_path, fp_fmm, domain_box, x0, x1, "FP (FMM)")
+    _maybe_require_path_valid(
+        sim_path,
+        lrp_fmm,
+        domain_box,
+        geometry.source_x,
+        geometry.target_x,
+        "LRP (FMM)",
+        check_path_geometry=check_path_geometry,
+    )
+
+    fp_fmm, t_min = _compute_fmm_path(
+        slowness_true,
+        geometry=geometry,
+        grid_spacing=1.0,
+        fast_marching_2d_regions=fast_marching_2d_regions,
+        extract_path_source_to_target=extract_path_source_to_target,
+        extract_path_continuous=extract_path_continuous,
+        backtracking=fmm_backtracking,
+        continuous_step_size=fmm_continuous_step_size,
+        traversable_mask=np.isfinite(slowness_true) & (slowness_true > 0.0),
+    )
+    _maybe_require_path_valid(
+        sim_path,
+        fp_fmm,
+        domain_box,
+        geometry.source_x,
+        geometry.target_x,
+        "FP (FMM)",
+        check_path_geometry=check_path_geometry,
+    )
+
+    linearized_series: LinearizedFpSeries | None = None
+    if linearized_fp:
+        linearized_series = _compute_linearized_fp_series(
+            linear_solver=linear_solver,
+            slowness_unperturbed=slowness_unperturbed,
+            slowness_true=slowness_true,
+            geometry=geometry,
+            fast_marching_2d_regions=fast_marching_2d_regions,
+            extract_path_source_to_target=extract_path_source_to_target,
+            extract_path_continuous=extract_path_continuous,
+            scheme=linearized_scheme,
+            backtracking=fmm_backtracking,
+            continuous_step_size=fmm_continuous_step_size,
+            outer_max=linearized_outer_max,
+            inner_max_sweeps=linearized_inner_max_sweeps,
+            inner_tol=linearized_inner_tol,
+            eikonal_tol=linearized_eikonal_tol,
+            damping=linearized_damping,
+            max_delta_t=linearized_max_deltat,
+            monotone_residual=linearized_monotone_residual,
+            verbose=linearized_verbose,
+        )
+        for idx, path in enumerate(linearized_series.paths, start=1):
+            _maybe_require_path_valid(
+                sim_path,
+                path,
+                domain_box,
+                geometry.source_x,
+                geometry.target_x,
+                f"Linearized FP^{idx}",
+                check_path_geometry=check_path_geometry,
+            )
 
     fp, vx_pt, vy_pt = _run_particle_tracking(
         sim_hyd=sim_hyd,
@@ -574,10 +1063,7 @@ def solve_single_field(
         h_field=h,
         x=x,
         y=y,
-        x0=x0,
-        x1=x1,
-        y0=y0,
-        y1=y1,
+        geometry=geometry,
         solver=solver,
         backend=backend,
         velocity_location=velocity_location,
@@ -594,26 +1080,35 @@ def solve_single_field(
         rk45_min_success_frac=rk45_min_success_frac,
         rk45_max_bad_frac=rk45_max_bad_frac,
     )
-    fp = fp[fp[:, 0] <= x1]
-    _require_path_valid(sim_path, fp, domain_box, x0, x1, "FP")
-
-    source_xy = np.column_stack([np.full(y1 - y0, x0, dtype=float), np.arange(y0, y1, dtype=float)])
-    target_xy = np.column_stack([np.full(field_size - 1, x1, dtype=float), np.arange(0, field_size - 1, dtype=float)])
+    fp = fp[fp[:, 0] <= geometry.target_x]
+    _maybe_require_path_valid(
+        sim_path,
+        fp,
+        domain_box,
+        geometry.source_x,
+        geometry.target_x,
+        "FP",
+        check_path_geometry=check_path_geometry,
+    )
 
     return PathSolveResult(
         fp=fp,
         fp_fmm=fp_fmm,
-        fp_dijkstra=fp_dijkstra,
-        lrp=lrp,
         lrp_fmm=lrp_fmm,
         t_min=t_min,
+        linearized_fp_paths=None if linearized_series is None else linearized_series.paths,
+        linearized_fp_indices=None if linearized_series is None else linearized_series.path_indices,
+        linearized_fp_final=None if linearized_series is None or not linearized_series.paths else linearized_series.paths[-1],
+        linearized_fp_history=None if linearized_series is None else linearized_series.history,
+        linearized_fp_failed_indices=None if linearized_series is None else linearized_series.failed_path_indices,
+        linearized_fp_converged=None if linearized_series is None else linearized_series.converged,
         h=np.asarray(h, dtype=float),
         x=np.asarray(x, dtype=float),
         y=np.asarray(y, dtype=float),
         vx=vx_pt,
         vy=vy_pt,
-        source_xy=source_xy,
-        target_xy=target_xy,
+        source_xy=geometry.source_xy,
+        target_xy=geometry.target_xy,
     )
 
 
@@ -630,23 +1125,54 @@ def _normalized_extent(x: np.ndarray, y: np.ndarray, i_y: float) -> tuple[float,
         (y[-1] + dy/2) / i_y,
     )
 
-def _plot_common_overlays(ax: Any, result: PathSolveResult, i_y: float) -> None:
+def _plot_common_overlays(
+    ax: Any,
+    result: PathSolveResult,
+    i_y: float,
+    *,
+    fp_diag: PathBalanceDiagnostics | None = None,
+    lrp_diag: PathBalanceDiagnostics | None = None,
+) -> None:
     lw = LINEWIDTHS
+    fp_spline_label = None if fp_diag is None else (
+        "FP (FMM, spline interp)" if fp_diag.curvature_spline_mode == "interpolation" else "FP (FMM, spline approx)"
+    )
+    lrp_spline_label = None if lrp_diag is None else (
+        "LRP (FMM, spline interp)" if lrp_diag.curvature_spline_mode == "interpolation" else "LRP (FMM, spline approx)"
+    )
     ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label="FP", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label="FP (Particle)", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label="FP (FMM)", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(
-        result.fp_dijkstra[:, 0] / i_y,
-        result.fp_dijkstra[:, 1] / i_y,
-        color=COLORS["fpDijkstra"],
-        linestyle=LINESTYLES["fpDijkstra"],
-        linewidth=lw,
-        label="FP (Dijkstra)",
-        path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()],
-    )
-    ax.plot(result.lrp[:, 0] / i_y, result.lrp[:, 1] / i_y, color=COLORS["lrp"], linestyle=LINESTYLES["lrp"], linewidth=lw, label="LRP", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label="LRP (FMM)", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    if fp_diag is not None:
+        ax.plot(
+            fp_diag.spline_points[:, 0] / i_y,
+            fp_diag.spline_points[:, 1] / i_y,
+            color=to_rgba(COLORS["fpFMM"], alpha=0.75),
+            linestyle="-",
+            linewidth=1.0,
+            label=fp_spline_label,
+        )
+    if lrp_diag is not None:
+        ax.plot(
+            lrp_diag.spline_points[:, 0] / i_y,
+            lrp_diag.spline_points[:, 1] / i_y,
+            color=to_rgba(COLORS["lrpFMM"], alpha=0.75),
+            linestyle="-",
+            linewidth=1.0,
+            label=lrp_spline_label,
+        )
+    if result.linearized_fp_final is not None:
+        ax.plot(
+            result.linearized_fp_final[:, 0] / i_y,
+            result.linearized_fp_final[:, 1] / i_y,
+            color="#C84C09",
+            linestyle="-",
+            linewidth=lw,
+            label="FP(last, linearized)",
+            path_effects=[pe.Stroke(linewidth=1.5 * lw, foreground="white"), pe.Normal()],
+        )
     ax.set_title("")
     ax.set_xlabel(r"$x/I_Y$")
     ax.set_ylabel(r"$y/I_Y$")
@@ -685,6 +1211,15 @@ def _dimensionless_velocity(vx: np.ndarray, vy: np.ndarray, q_ref: float) -> tup
 def _safe_log(field: np.ndarray, floor: float = 1e-12) -> np.ndarray:
     arr = np.asarray(field, dtype=float)
     return np.log(np.maximum(arr, floor))
+
+
+def _smooth_scalar_field(field: np.ndarray, *, method: str, sigma: float) -> np.ndarray:
+    arr = np.asarray(field, dtype=float)
+    if method == "none" or sigma <= 0.0:
+        return arr
+    if method != "gaussian":
+        raise ValueError(f"Unsupported curvature field smoothing method {method!r}; expected 'none' or 'gaussian'.")
+    return np.asarray(gaussian_filter(arr, sigma=float(sigma), mode="nearest"), dtype=float)
 
 
 def _compute_centered_gradient(field: np.ndarray, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -731,101 +1266,6 @@ def _bilinear_sample(field: np.ndarray, x: np.ndarray, y: np.ndarray, points: np
     )
 
 
-def _normalize_tangent(tangent: np.ndarray) -> np.ndarray:
-    tan = np.asarray(tangent, dtype=float)
-    norms = np.linalg.norm(tan, axis=1)
-    return tan / np.maximum(norms[:, None], 1e-12)
-
-
-def _coerce_odd_window(window: int, n_points: int, minimum: int) -> int:
-    max_size = n_points if n_points % 2 == 1 else n_points - 1
-    if max_size < 1:
-        return 0
-    size = max(int(window), 1)
-    if size % 2 == 0:
-        size += 1
-    size = min(size, max_size)
-    if size % 2 == 0:
-        size -= 1
-    if size < 1:
-        return 0
-    return size
-
-
-def _compute_raw_geometry(points: np.ndarray, s: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    xs = np.gradient(points[:, 0], s, edge_order=2)
-    ys = np.gradient(points[:, 1], s, edge_order=2)
-    xss = np.gradient(xs, s, edge_order=2)
-    yss = np.gradient(ys, s, edge_order=2)
-    tangent = _normalize_tangent(np.column_stack([xs, ys]))
-    curvature = tangent[:, 0] * yss - tangent[:, 1] * xss
-    normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
-    return tangent, normal, curvature
-
-
-def _compute_savgol_geometry(
-    points: np.ndarray,
-    *,
-    ds: float,
-    window: int,
-    poly: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    n_points = points.shape[0]
-    win = _coerce_odd_window(window, n_points, minimum=poly + 2)
-    if win <= poly or win < 3 or n_points <= poly:
-        return _compute_raw_geometry(points, np.arange(n_points, dtype=float) * ds)
-
-    x = np.asarray(points[:, 0], dtype=float)
-    y = np.asarray(points[:, 1], dtype=float)
-    dx = savgol_filter(x, window_length=win, polyorder=poly, deriv=1, delta=ds, mode="interp")
-    dy = savgol_filter(y, window_length=win, polyorder=poly, deriv=1, delta=ds, mode="interp")
-    ddx = savgol_filter(x, window_length=win, polyorder=poly, deriv=2, delta=ds, mode="interp")
-    ddy = savgol_filter(y, window_length=win, polyorder=poly, deriv=2, delta=ds, mode="interp")
-    tangent = _normalize_tangent(np.column_stack([dx, dy]))
-    curvature = (dx * ddy - dy * ddx) / np.maximum(dx * dx + dy * dy, 1e-12) ** 1.5
-    normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
-    return tangent, normal, np.asarray(curvature, dtype=float)
-
-
-def _fit_circle(points: np.ndarray) -> tuple[float, float, float]:
-    pts = np.asarray(points, dtype=float)
-    x = pts[:, 0]
-    y = pts[:, 1]
-    a = np.column_stack([2.0 * x, 2.0 * y, np.ones(pts.shape[0], dtype=float)])
-    b = x * x + y * y
-    coeffs, _, _, _ = np.linalg.lstsq(a, b, rcond=None)
-    cx, cy, d = coeffs
-    radius_sq = cx * cx + cy * cy + d
-    if not np.isfinite(radius_sq) or radius_sq <= 0.0:
-        raise ValueError("Degenerate circle fit")
-    return float(cx), float(cy), float(np.sqrt(radius_sq))
-
-
-def _compute_circle_curvature(points: np.ndarray, window: int) -> np.ndarray:
-    pts = np.asarray(points, dtype=float)
-    n_points = pts.shape[0]
-    win = _coerce_odd_window(window, n_points, minimum=3)
-    if win < 3:
-        return np.full(n_points, np.nan, dtype=float)
-
-    half = win // 2
-    curvature = np.full(n_points, np.nan, dtype=float)
-    for idx in range(half, n_points - half):
-        local_pts = pts[idx - half : idx + half + 1]
-        try:
-            _cx, _cy, radius = _fit_circle(local_pts)
-        except (np.linalg.LinAlgError, ValueError):
-            continue
-        if not np.isfinite(radius) or radius <= 1e-12:
-            continue
-        prev_vec = pts[idx] - pts[idx - 1]
-        next_vec = pts[idx + 1] - pts[idx]
-        turn = prev_vec[0] * next_vec[1] - prev_vec[1] * next_vec[0]
-        sign = 1.0 if turn >= 0.0 else -1.0
-        curvature[idx] = sign / radius
-    return curvature
-
-
 def _build_path_balance_diagnostics(
     path: np.ndarray,
     *,
@@ -839,8 +1279,9 @@ def _build_path_balance_diagnostics(
     grad_logv_x: np.ndarray,
     grad_logv_y: np.ndarray,
     curvature_method: str,
-    savgol_window: int,
-    savgol_poly: int,
+    spline_mode: str,
+    spline_smooth: float,
+    spline_degree: int,
     circle_window: int,
     ds: float = 1.0,
 ) -> PathBalanceDiagnostics:
@@ -848,62 +1289,63 @@ def _build_path_balance_diagnostics(
     if pts.shape[0] < 3:
         raise ValueError(f"{label} path must contain at least 3 resampled points to compute curvature.")
 
-    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
-    s = np.concatenate(([0.0], np.cumsum(seg)))
+    curvature_module = _import_curvature_module()
+    geometry = curvature_module.compute_curvature_bundle(
+        pts,
+        method=curvature_method,
+        spline_mode=spline_mode,
+        spline_smooth=spline_smooth,
+        spline_degree=spline_degree,
+        circle_window=circle_window,
+    )
+
+    s = np.asarray(geometry.s, dtype=float)
+    spline_points = np.asarray(geometry.spline_points, dtype=float)
+    tangent = np.asarray(geometry.tangent, dtype=float)
+    normal = np.asarray(geometry.normal, dtype=float)
+    curvature = np.asarray(geometry.curvature, dtype=float)
+    curvature_raw = np.asarray(geometry.curvature_raw, dtype=float)
+    curvature_circle = np.asarray(geometry.curvature_circle, dtype=float)
     length = float(s[-1])
     if length <= 0.0:
         raise ValueError(f"{label} path has zero arclength.")
 
-    tangent_raw, _normal_raw, curvature_raw = _compute_raw_geometry(pts, s)
-    tangent, normal, curvature_savgol = _compute_savgol_geometry(
-        pts,
-        ds=ds,
-        window=savgol_window,
-        poly=savgol_poly,
-    )
-    curvature_circle = _compute_circle_curvature(pts, window=circle_window)
-    if curvature_method != "savgol":
-        raise ValueError(f"Unsupported curvature method {curvature_method!r}; expected 'savgol'.")
-    curvature = curvature_savgol
-    if not np.all(np.isfinite(curvature)):
-        curvature = np.where(np.isfinite(curvature), curvature, curvature_raw)
-        tangent = np.where(np.isfinite(curvature_savgol)[:, None], tangent, tangent_raw)
-        normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
-
     grad_logk = np.column_stack([
-        _bilinear_sample(grad_logk_x, x, y, pts),
-        _bilinear_sample(grad_logk_y, x, y, pts),
+        _bilinear_sample(grad_logk_x, x, y, spline_points),
+        _bilinear_sample(grad_logk_y, x, y, spline_points),
     ])
     grad_loggradh = np.column_stack([
-        _bilinear_sample(grad_loggradh_x, x, y, pts),
-        _bilinear_sample(grad_loggradh_y, x, y, pts),
+        _bilinear_sample(grad_loggradh_x, x, y, spline_points),
+        _bilinear_sample(grad_loggradh_y, x, y, spline_points),
     ])
     grad_logv = np.column_stack([
-        _bilinear_sample(grad_logv_x, x, y, pts),
-        _bilinear_sample(grad_logv_y, x, y, pts),
+        _bilinear_sample(grad_logv_x, x, y, spline_points),
+        _bilinear_sample(grad_logv_y, x, y, spline_points),
     ])
 
     dlogk_dn = np.einsum("ij,ij->i", grad_logk, normal)
     dloggradh_dn = np.einsum("ij,ij->i", grad_loggradh, normal)
     dlogv_dn = np.einsum("ij,ij->i", grad_logv, normal)
-    residual = curvature + dlogv_dn
+    residual_term = dlogv_dn if label == "FP (FMM)" else dlogk_dn
 
     return PathBalanceDiagnostics(
         label=label,
-        points=pts,
+        points=spline_points,
+        spline_points=spline_points,
         s=s,
         s_norm=s / length,
         tangent=tangent,
         normal=normal,
         curvature=curvature,
         curvature_raw=curvature_raw,
-        curvature_savgol=curvature_savgol,
+        curvature_spline=curvature,
         curvature_circle=curvature_circle,
-        curvature_method=curvature_method,
+        curvature_method=str(geometry.curvature_label),
+        curvature_spline_mode=str(geometry.spline_mode),
         dlogk_dn=dlogk_dn,
         dloggradh_dn=dloggradh_dn,
         dlogv_dn=dlogv_dn,
-        residual=residual,
+        residual=curvature + residual_term,
     )
 
 
@@ -911,9 +1353,12 @@ def compute_balance_diagnostics(
     *,
     logk_field: np.ndarray,
     result: PathSolveResult,
-    curvature_method: str = "savgol",
-    curvature_savgol_window: int = 9,
-    curvature_savgol_poly: int = 3,
+    curvature_method: str = "spline",
+    curvature_spline_mode: str = "interpolation",
+    curvature_spline_smooth: float = 0.0,
+    curvature_spline_degree: int = 3,
+    curvature_field_smooth_method: str = "none",
+    curvature_field_smooth_sigma: float = 0.0,
     curvature_circle_window: int = 7,
     ds: float = 1.0,
 ) -> tuple[PathBalanceDiagnostics, PathBalanceDiagnostics]:
@@ -921,16 +1366,32 @@ def compute_balance_diagnostics(
     x = np.asarray(result.x, dtype=float)
     y = np.asarray(result.y, dtype=float)
     logk = np.asarray(logk_field, dtype=float)
+    logk_smoothed = _smooth_scalar_field(
+        logk,
+        method=curvature_field_smooth_method,
+        sigma=curvature_field_smooth_sigma,
+    )
     k_field = np.exp(logk)
 
     grad_h_x, grad_h_y = _compute_centered_gradient(h, x, y)
     grad_h_mag = np.hypot(grad_h_x, grad_h_y)
     v_mag = k_field * grad_h_mag
 
-    log_grad_h = _safe_log(grad_h_mag)
-    log_v = _safe_log(v_mag)
+    grad_h_mag_smoothed = _smooth_scalar_field(
+        grad_h_mag,
+        method=curvature_field_smooth_method,
+        sigma=curvature_field_smooth_sigma,
+    )
+    v_mag_smoothed = _smooth_scalar_field(
+        v_mag,
+        method=curvature_field_smooth_method,
+        sigma=curvature_field_smooth_sigma,
+    )
 
-    grad_logk_x, grad_logk_y = _compute_centered_gradient(logk, x, y)
+    log_grad_h = _safe_log(grad_h_mag_smoothed)
+    log_v = _safe_log(v_mag_smoothed)
+
+    grad_logk_x, grad_logk_y = _compute_centered_gradient(logk_smoothed, x, y)
     grad_loggradh_x, grad_loggradh_y = _compute_centered_gradient(log_grad_h, x, y)
     grad_logv_x, grad_logv_y = _compute_centered_gradient(log_v, x, y)
 
@@ -946,8 +1407,9 @@ def compute_balance_diagnostics(
         grad_logv_x=grad_logv_x,
         grad_logv_y=grad_logv_y,
         curvature_method=curvature_method,
-        savgol_window=curvature_savgol_window,
-        savgol_poly=curvature_savgol_poly,
+        spline_mode=curvature_spline_mode,
+        spline_smooth=curvature_spline_smooth,
+        spline_degree=curvature_spline_degree,
         circle_window=curvature_circle_window,
         ds=ds,
     )
@@ -963,8 +1425,9 @@ def compute_balance_diagnostics(
         grad_logv_x=grad_logv_x,
         grad_logv_y=grad_logv_y,
         curvature_method=curvature_method,
-        savgol_window=curvature_savgol_window,
-        savgol_poly=curvature_savgol_poly,
+        spline_mode=curvature_spline_mode,
+        spline_smooth=curvature_spline_smooth,
+        spline_degree=curvature_spline_degree,
         circle_window=curvature_circle_window,
         ds=ds,
     )
@@ -978,10 +1441,12 @@ def plot_paths_over_field(
     colorbar_label: str,
     result: PathSolveResult,
     i_y: float,
+    fp_diag: PathBalanceDiagnostics | None = None,
+    lrp_diag: PathBalanceDiagnostics | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     im = ax.imshow(field, origin="lower", cmap=cmap, interpolation="nearest", extent=_normalized_extent(result.x, result.y, i_y))
-    _plot_common_overlays(ax, result, i_y)
+    _plot_common_overlays(ax, result, i_y, fp_diag=fp_diag, lrp_diag=lrp_diag)
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label(colorbar_label)
     fig.tight_layout()
@@ -995,6 +1460,8 @@ def plot_paths_over_speed_with_streamlines(
     *,
     result: PathSolveResult,
     i_y: float,
+    fp_diag: PathBalanceDiagnostics | None = None,
+    lrp_diag: PathBalanceDiagnostics | None = None,
     colorbar_label: str = r"$|v|/q_{\mathrm{ref}}$",
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
@@ -1016,9 +1483,55 @@ def plot_paths_over_speed_with_streamlines(
         linewidth=0.8,
         arrowsize=0.6,
     )
-    _plot_common_overlays(ax, result, i_y)
+    _plot_common_overlays(ax, result, i_y, fp_diag=fp_diag, lrp_diag=lrp_diag)
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label(colorbar_label)
+    fig.tight_layout()
+    return fig
+
+
+def plot_linearized_fp_progression(
+    field: np.ndarray,
+    *,
+    cmap: str,
+    colorbar_label: str,
+    result: PathSolveResult,
+    i_y: float,
+) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=[5, 4])
+    im = ax.imshow(field, origin="lower", cmap=cmap, interpolation="nearest", extent=_normalized_extent(result.x, result.y, i_y))
+    lw = LINEWIDTHS
+    ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle="-", label="Source", path_effects=[pe.Stroke(linewidth=1.5 * lw, foreground="white"), pe.Normal()])
+    ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle="-", label="Target", path_effects=[pe.Stroke(linewidth=1.5 * lw, foreground="white"), pe.Normal()])
+    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label="LRP (FMM)", path_effects=[pe.Stroke(linewidth=1.5 * lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label="FP (FMM)", path_effects=[pe.Stroke(linewidth=1.5 * lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label="FP (Particle)", path_effects=[pe.Stroke(linewidth=1.5 * lw, foreground="white"), pe.Normal()])
+    if result.linearized_fp_paths:
+        progression_cmap = plt.get_cmap("cividis")
+        denom = max(1, len(result.linearized_fp_paths) - 1)
+        path_indices = result.linearized_fp_indices or list(range(1, len(result.linearized_fp_paths) + 1))
+        for order_idx, (iter_idx, path) in enumerate(zip(path_indices, result.linearized_fp_paths), start=1):
+            color = progression_cmap((order_idx - 1) / denom)
+            # label = f"FP^{iter_idx}" if order_idx in {1, len(result.linearized_fp_paths)} else None
+            label = f"FP^{iter_idx}" if order_idx in range(1, len(result.linearized_fp_paths)+1, len(result.linearized_fp_paths)//10) else None
+            ax.plot(path[:, 0] / i_y, path[:, 1] / i_y, color=color, linestyle="-", linewidth=1.8, alpha=0.95, label=label, zorder=5)
+    else:
+        ax.text(
+            0.02,
+            0.98,
+            r"No linearized FP$^i$ paths extracted",
+            transform=ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            bbox={"facecolor": "white", "edgecolor": "black", "alpha": 0.9, "boxstyle": "round,pad=0.25"},
+        )
+    ax.set_xlabel(r"$x/I_Y$")
+    ax.set_ylabel(r"$y/I_Y$")
+    ax.set_aspect("equal", adjustable="box")
+    cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    cbar.set_label(colorbar_label)
+    ax.legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
     fig.tight_layout()
     return fig
 
@@ -1027,101 +1540,121 @@ def plot_curvature_balance(
     fp_diag: PathBalanceDiagnostics,
     lrp_diag: PathBalanceDiagnostics,
 ) -> Any:
-    fig, axes = plt.subplots(3, 1, figsize=(6, 8), sharex=True)
-    lw = LINEWIDTHS
+    fig, axes = plt.subplots(5, 1, figsize=(6, 12), sharex=True)
+    lw = 1#LINEWIDTHS
+    alpha = 0.5
 
     axes[0].plot(
         fp_diag.s_norm,
         fp_diag.curvature,
         color=COLORS["fpFMM"],
-        linestyle=LINESTYLES["fpFMM"],
         linewidth=lw,
         label=rf"$\kappa$ FP (FMM) [{fp_diag.curvature_method}]",
     )
     axes[0].plot(
         fp_diag.s_norm,
         -fp_diag.dlogv_dn,
-        color=COLORS["fp"],
-        linestyle=LINESTYLES["fp"],
+        color=COLORS["fpFMM"],
+        alpha=alpha,
         linewidth=lw,
         label=r"$-\partial_N \ln |v|$ on FP (FMM)",
     )
-    axes[0].plot(
-        lrp_diag.s_norm,
-        lrp_diag.curvature,
-        color=COLORS["lrpFMM"],
-        linestyle=LINESTYLES["lrpFMM"],
-        linewidth=lw,
-        label=rf"$\kappa$ LRP (FMM) [{lrp_diag.curvature_method}]",
-    )
-    axes[0].plot(
-        lrp_diag.s_norm,
-        -lrp_diag.dlogk_dn,
-        color=COLORS["lrp"],
-        linestyle=LINESTYLES["lrp"],
-        linewidth=lw,
-        label=r"$-\partial_N \ln K$ on LRP (FMM)",
-    )
     axes[0].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[0].set_ylabel("Balance")
+    axes[0].set_ylabel("FP Spline")
     axes[0].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
 
     axes[1].plot(
         fp_diag.s_norm,
         fp_diag.curvature_circle,
         color=COLORS["fpFMM"],
-        linestyle=":",
         linewidth=lw,
         label=r"$\kappa_{\mathrm{circle}}$ FP (FMM)",
     )
     axes[1].plot(
         fp_diag.s_norm,
         -fp_diag.dlogv_dn,
-        color=COLORS["fp"],
-        linestyle=LINESTYLES["fp"],
+        color=COLORS["fpFMM"],
+        alpha=alpha,
         linewidth=lw,
         label=r"$-\partial_N \ln |v|$ on FP (FMM)",
     )
-    axes[1].plot(
-        lrp_diag.s_norm,
-        lrp_diag.curvature_circle,
-        color=COLORS["lrpFMM"],
-        linestyle=":",
-        linewidth=lw,
-        label=r"$\kappa_{\mathrm{circle}}$ LRP (FMM)",
-    )
-    axes[1].plot(
-        lrp_diag.s_norm,
-        -lrp_diag.dlogk_dn,
-        color=COLORS["lrp"],
-        linestyle=LINESTYLES["lrp"],
-        linewidth=lw,
-        label=r"$-\partial_N \ln K$ on LRP (FMM)",
-    )
     axes[1].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[1].set_ylabel("Circle Fit")
+    axes[1].set_ylabel("FP Circle")
     axes[1].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
 
     axes[2].plot(
-        fp_diag.s_norm,
-        fp_diag.residual,
-        color=COLORS["fp"],
-        linestyle=LINESTYLES["fp"],
+        lrp_diag.s_norm,
+        lrp_diag.curvature,
+        color=COLORS["lrpFMM"],
         linewidth=lw,
-        label=r"$R_{\mathrm{FP}}=\kappa+\partial_N \ln |v|$",
+        label=rf"$\kappa$ LRP (FMM) [{lrp_diag.curvature_method}]",
     )
     axes[2].plot(
         lrp_diag.s_norm,
-        lrp_diag.residual,
+        -lrp_diag.dlogk_dn,
         color=COLORS["lrpFMM"],
-        linestyle=LINESTYLES["lrpFMM"],
+        alpha=alpha,
         linewidth=lw,
-        label=r"$R_{\mathrm{LRP}}=\kappa+\partial_N \ln |v|$",
+        label=r"$-\partial_N \ln K$ on LRP (FMM)",
     )
     axes[2].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[2].set_xlabel(r"Normalized arclength $s/L$")
-    axes[2].set_ylabel("Residual")
+    axes[2].set_ylabel("LRP Spline")
     axes[2].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+
+    axes[3].plot(
+        lrp_diag.s_norm,
+        lrp_diag.curvature_circle,
+        color=COLORS["lrpFMM"],
+        linewidth=lw,
+        label=r"$\kappa_{\mathrm{circle}}$ LRP (FMM)",
+    )
+    axes[3].plot(
+        lrp_diag.s_norm,
+        -lrp_diag.dlogk_dn,
+        color=COLORS["lrpFMM"],
+        alpha=alpha,
+        linewidth=lw,
+        label=r"$-\partial_N \ln K$ on LRP (FMM)",
+    )
+    axes[3].axhline(0.0, color="0.7", linewidth=1.0)
+    axes[3].set_ylabel("LRP Circle")
+    axes[3].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+
+    axes[4].plot(
+        fp_diag.s_norm,
+        fp_diag.residual,
+        color=COLORS["fpFMM"],
+        linewidth=lw,
+        label=r"$R_{\mathrm{FP}}=\kappa+\partial_N \ln |v|$",
+    )
+    axes[4].plot(
+        lrp_diag.s_norm,
+        lrp_diag.residual,
+        color=COLORS["lrpFMM"],
+        alpha=alpha,
+        linewidth=lw,
+        label=r"$R_{\mathrm{LRP}}=\kappa+\partial_N \ln K$",
+    )
+    axes[4].plot(
+        lrp_diag.s_norm,
+        lrp_diag.curvature + lrp_diag.dlogv_dn,
+        color=COLORS["lrpFMM"],
+        linestyle="--",
+        linewidth=lw,
+        label=r"$R_{\mathrm{LRP},v}=\kappa+\partial_N \ln |v|$",
+    )
+    axes[4].plot(
+        lrp_diag.s_norm,
+        lrp_diag.curvature + lrp_diag.dlogk_dn + lrp_diag.dloggradh_dn,
+        color=COLORS["lrpFMM"],
+        linestyle=":",
+        linewidth=lw,
+        label=r"$R_{\mathrm{LRP},K+\nabla h}=\kappa+\partial_N \ln K+\partial_N \ln |\nabla h|$",
+    )
+    axes[4].axhline(0.0, color="0.7", linewidth=1.0)
+    axes[4].set_xlabel(r"Normalized arclength $s/L$")
+    axes[4].set_ylabel("Residual")
+    axes[4].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
 
     for ax in axes:
         ax.set_xlim(0.0, 1.0)
@@ -1148,15 +1681,31 @@ def run_step5(
     backend: str = "cpu",
     velocity_location: str,
     align_with_modflow_velocity: bool,
-    fmm_velocity_layout: str,
-    fmm_face_mapping: str,
-    fmm_zero_policy: str,
-    fmm_min_speed: float,
     fmm_backtracking: str,
     fmm_continuous_step_size: float,
+    linearized_fp: bool,
+    linearized_scheme: str,
+    linearized_outer_max: int,
+    linearized_inner_max_sweeps: int,
+    linearized_inner_tol: float,
+    linearized_eikonal_tol: float,
+    linearized_damping: float,
+    linearized_max_deltat: float | None,
+    linearized_monotone_residual: bool,
+    linearized_verbose: bool,
+    check_path_geometry: bool,
+    source_x: int | None = None,
+    target_x: int | None = None,
+    source_y_start: int | None = None,
+    source_y_end: int | None = None,
+    target_y_start: int | None = None,
+    target_y_end: int | None = None,
     curvature_method: str,
-    curvature_savgol_window: int,
-    curvature_savgol_poly: int,
+    curvature_spline_mode: str,
+    curvature_spline_smooth: float,
+    curvature_spline_degree: int,
+    curvature_field_smooth_method: str,
+    curvature_field_smooth_sigma: float,
     curvature_circle_window: int,
     density_particle: int,
     num_particles: int | None = None,
@@ -1169,7 +1718,7 @@ def run_step5(
     max_iters: int,
     rk45_min_success_frac: float,
     rk45_max_bad_frac: float,
-) -> tuple[Path, Path, Path, Path]:
+) -> tuple[Path, Path, Path, Path, Path | None]:
     selected = select_run_input(cfg, sweep=sweep, value=value, field_size=field_size, mc_index=mc_index)
     logk_field = load_selected_logk(selected)
 
@@ -1182,12 +1731,25 @@ def run_step5(
         backend=backend,
         velocity_location=velocity_location,
         align_with_modflow_velocity=align_with_modflow_velocity,
-        fmm_velocity_layout=fmm_velocity_layout,
-        fmm_face_mapping=fmm_face_mapping,
-        fmm_zero_policy=fmm_zero_policy,
-        fmm_min_speed=fmm_min_speed,
         fmm_backtracking=fmm_backtracking,
         fmm_continuous_step_size=fmm_continuous_step_size,
+        linearized_fp=linearized_fp,
+        linearized_scheme=linearized_scheme,
+        linearized_outer_max=linearized_outer_max,
+        linearized_inner_max_sweeps=linearized_inner_max_sweeps,
+        linearized_inner_tol=linearized_inner_tol,
+        linearized_eikonal_tol=linearized_eikonal_tol,
+        linearized_damping=linearized_damping,
+        linearized_max_deltat=linearized_max_deltat,
+        linearized_monotone_residual=linearized_monotone_residual,
+        linearized_verbose=linearized_verbose,
+        check_path_geometry=check_path_geometry,
+        source_x=source_x,
+        target_x=target_x,
+        source_y_start=source_y_start,
+        source_y_end=source_y_end,
+        target_y_start=target_y_start,
+        target_y_end=target_y_end,
         density_particle=density_particle,
         num_particles=num_particles,
         eps_speed=eps_speed,
@@ -1200,6 +1762,14 @@ def run_step5(
         rk45_min_success_frac=rk45_min_success_frac,
         rk45_max_bad_frac=rk45_max_bad_frac,
     )
+    if linearized_fp:
+        successful_indices = result.linearized_fp_indices or []
+        failed_indices = result.linearized_fp_failed_indices or []
+        print(f"Linearized FP^i extraction: {len(successful_indices)} succeeded, {len(failed_indices)} failed")
+        if successful_indices:
+            print(f"Successful FP^i iterations: {successful_indices}")
+        if failed_indices:
+            print(f"Failed FP^i iterations: {failed_indices}")
 
     step4.configure_style(cfg)
     out_dir = Path(output_dir or cfg.output_dir)
@@ -1219,6 +1789,20 @@ def run_step5(
     tmin_path = out_dir / f"{stem}_arrival_paths.png"
     stream_path = out_dir / f"{stem}_speed_streamlines.png"
     balance_path = out_dir / f"{stem}_curvature_balance.png"
+    progression_path = out_dir / f"{stem}_linearized_fp_progression.png"
+
+    fp_diag, lrp_diag = compute_balance_diagnostics(
+        logk_field=logk_field,
+        result=result,
+        curvature_method=curvature_method,
+        curvature_spline_mode=curvature_spline_mode,
+        curvature_spline_smooth=curvature_spline_smooth,
+        curvature_spline_degree=curvature_spline_degree,
+        curvature_field_smooth_method=curvature_field_smooth_method,
+        curvature_field_smooth_sigma=curvature_field_smooth_sigma,
+        curvature_circle_window=curvature_circle_window,
+        ds=1.0,
+    )
 
     fig_logk = plot_paths_over_field(
         logk_field,
@@ -1226,6 +1810,8 @@ def run_step5(
         colorbar_label=r"$\ln K$",
         result=result,
         i_y=i_y,
+        fp_diag=fp_diag,
+        lrp_diag=lrp_diag,
     )
     fig_logk.savefig(logk_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_logk)
@@ -1237,6 +1823,8 @@ def run_step5(
         colorbar_label=r"$T_{\min} U/I_Y$",
         result=result,
         i_y=i_y,
+        fp_diag=fp_diag,
+        lrp_diag=lrp_diag,
     )
     fig_tmin.savefig(tmin_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_tmin)
@@ -1250,28 +1838,33 @@ def run_step5(
         vy_star,
         result=result,
         i_y=i_y,
+        fp_diag=fp_diag,
+        lrp_diag=lrp_diag,
     )
     fig_stream.savefig(stream_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_stream)
 
-    fp_diag, lrp_diag = compute_balance_diagnostics(
-        logk_field=logk_field,
-        result=result,
-        curvature_method=curvature_method,
-        curvature_savgol_window=curvature_savgol_window,
-        curvature_savgol_poly=curvature_savgol_poly,
-        curvature_circle_window=curvature_circle_window,
-        ds=1.0,
-    )
     fig_balance = plot_curvature_balance(fp_diag, lrp_diag)
     fig_balance.savefig(balance_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_balance)
-    return logk_path, tmin_path, stream_path, balance_path
+    progression_path_out: Path | None = None
+    if linearized_fp:
+        fig_progression = plot_linearized_fp_progression(
+            tmin_plot,
+            cmap=cmc.lajolla.reversed(),
+            colorbar_label=r"$T_{\min} U/I_Y$",
+            result=result,
+            i_y=i_y,
+        )
+        fig_progression.savefig(progression_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+        plt.close(fig_progression)
+        progression_path_out = progression_path
+    return logk_path, tmin_path, stream_path, balance_path, progression_path_out
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Stage 5: solve and visualize FP / FP(FMM) / FP(Dijkstra) / LRP / LRP(FMM) for one logK field"
+        description="Stage 5: solve and visualize particle-tracking FP, FP(FMM), LRP(FMM), and optional linearized FP^i for one logK field"
     )
     parser.add_argument("--config", required=True, type=Path)
     parser.add_argument("--sweep", required=True, choices=["variance", "std"])
@@ -1290,15 +1883,56 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Whether to align face velocities with MODFLOW convention for particle tracking.",
     )
-    parser.add_argument("--fmm-velocity-layout", choices=["face", "cell"], default="face")
-    parser.add_argument("--fmm-face-mapping", choices=["to_cell_avg", "direct"], default="to_cell_avg")
-    parser.add_argument("--fmm-zero-policy", choices=["obstacle", "clip", "error"], default="obstacle")
-    parser.add_argument("--fmm-min-speed", type=float, default=1e-12)
     parser.add_argument("--fmm-backtracking", choices=["discrete", "continuous"], default="discrete")
     parser.add_argument("--fmm-continuous-step-size", type=float, default=0.5)
-    parser.add_argument("--curvature-method", choices=["savgol"], default="savgol")
-    parser.add_argument("--curvature-savgol-window", type=int, default=11)
-    parser.add_argument("--curvature-savgol-poly", type=int, default=3)
+    parser.add_argument(
+        "--linearized-fp",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable iterative linearized-Eikonal FP^i computation from LRP (FMM) toward FP (FMM).",
+    )
+    parser.add_argument(
+        "--linearized-scheme",
+        choices=["linearized", "full_eikonal"],
+        default="linearized",
+        help="Choose the FP^i iteration scheme: current linearized solver or full-Eikonal homotopy solved by FMM each step.",
+    )
+    parser.add_argument("--linearized-outer-max", type=int, default=20)
+    parser.add_argument("--linearized-inner-max-sweeps", type=int, default=200)
+    parser.add_argument("--linearized-inner-tol", type=float, default=1e-8)
+    parser.add_argument("--linearized-eikonal-tol", type=float, default=1e-6)
+    parser.add_argument("--linearized-damping", type=float, default=0.8)
+    parser.add_argument("--linearized-max-deltat", type=float, default=None)
+    parser.add_argument(
+        "--linearized-monotone-residual",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Require monotone nonlinear-residual improvement during linearized-Eikonal updates.",
+    )
+    parser.add_argument(
+        "--linearized-verbose",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Print iterative linearized-Eikonal diagnostics.",
+    )
+    parser.add_argument(
+        "--check-path-geometry",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Whether to enforce Step 5 path-geometry validation for FP/LRP/FP^i paths.",
+    )
+    parser.add_argument("--source-x", type=int, default=None)
+    parser.add_argument("--target-x", type=int, default=None)
+    parser.add_argument("--source-y-start", type=int, default=None)
+    parser.add_argument("--source-y-end", type=int, default=None)
+    parser.add_argument("--target-y-start", type=int, default=None)
+    parser.add_argument("--target-y-end", type=int, default=None)
+    parser.add_argument("--curvature-method", choices=["spline"], default="spline")
+    parser.add_argument("--curvature-spline-mode", choices=["interpolation", "approximation"], default="interpolation")
+    parser.add_argument("--curvature-spline-smooth", type=float, default=0.0)
+    parser.add_argument("--curvature-spline-degree", type=int, default=3)
+    parser.add_argument("--curvature-field-smooth-method", choices=["none", "gaussian"], default="none")
+    parser.add_argument("--curvature-field-smooth-sigma", type=float, default=0.0)
     parser.add_argument("--curvature-circle-window", type=int, default=11)
 
     parser.add_argument("--density-particle", type=int, default=20)
@@ -1320,7 +1954,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     cfg = step1.load_config(args.config)
-    logk_path, tmin_path, stream_path, balance_path = run_step5(
+    logk_path, tmin_path, stream_path, balance_path, progression_path = run_step5(
         cfg,
         sweep=args.sweep,
         value=args.value,
@@ -1332,15 +1966,31 @@ def main() -> int:
         backend=args.backend,
         velocity_location=args.velocity_location,
         align_with_modflow_velocity=args.align_with_modflow_velocity,
-        fmm_velocity_layout=args.fmm_velocity_layout,
-        fmm_face_mapping=args.fmm_face_mapping,
-        fmm_zero_policy=args.fmm_zero_policy,
-        fmm_min_speed=args.fmm_min_speed,
         fmm_backtracking=args.fmm_backtracking,
         fmm_continuous_step_size=args.fmm_continuous_step_size,
+        linearized_fp=args.linearized_fp,
+        linearized_scheme=args.linearized_scheme,
+        linearized_outer_max=args.linearized_outer_max,
+        linearized_inner_max_sweeps=args.linearized_inner_max_sweeps,
+        linearized_inner_tol=args.linearized_inner_tol,
+        linearized_eikonal_tol=args.linearized_eikonal_tol,
+        linearized_damping=args.linearized_damping,
+        linearized_max_deltat=args.linearized_max_deltat,
+        linearized_monotone_residual=args.linearized_monotone_residual,
+        linearized_verbose=args.linearized_verbose,
+        check_path_geometry=args.check_path_geometry,
+        source_x=args.source_x,
+        target_x=args.target_x,
+        source_y_start=args.source_y_start,
+        source_y_end=args.source_y_end,
+        target_y_start=args.target_y_start,
+        target_y_end=args.target_y_end,
         curvature_method=args.curvature_method,
-        curvature_savgol_window=args.curvature_savgol_window,
-        curvature_savgol_poly=args.curvature_savgol_poly,
+        curvature_spline_mode=args.curvature_spline_mode,
+        curvature_spline_smooth=args.curvature_spline_smooth,
+        curvature_spline_degree=args.curvature_spline_degree,
+        curvature_field_smooth_method=args.curvature_field_smooth_method,
+        curvature_field_smooth_sigma=args.curvature_field_smooth_sigma,
         curvature_circle_window=args.curvature_circle_window,
         density_particle=args.density_particle,
         num_particles=args.num_particles,
@@ -1358,6 +2008,8 @@ def main() -> int:
     print(f"Saved figure: {tmin_path}")
     print(f"Saved figure: {stream_path}")
     print(f"Saved figure: {balance_path}")
+    if progression_path is not None:
+        print(f"Saved figure: {progression_path}")
     return 0
 
 
