@@ -52,13 +52,13 @@ PYTHONPATH=./scripts python scripts/run_all.py --config configs/visualization.de
 ## Stage-by-Stage Run
 
 ```bash
-CACHE_DIR=outputs/cache/run3
-FIGURE_DIR=outputs/visualization/run3
+CACHE_DIR=project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run9_newoutput_fmmconti/cache
+FIGURE_DIR=project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run9_newoutput_fmmconti/visualization
 
 PYTHONPATH=./scripts python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --hausdorff-compute-method custom 
 PYTHONPATH=./scripts python scripts/step3_stats.py   --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
-PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR" --plot-variances 0.1 --scatter-mode mean,all_points
+PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR" --plot-variances 0.1 --scatter-mode mean,all_points --hausdorff-cdf
 ```
 
 `configs/visualization.default.yaml` no longer specifies `output_dir`.  
@@ -108,6 +108,9 @@ PYTHONPATH=./scripts python scripts/step4_plot.py --config configs/visualization
 
 # choose variance values for separate path-length CDF and scatter(all_points) figures
 PYTHONPATH=./scripts python scripts/step4_plot.py --config configs/visualization.default.yaml --plot-variances 0.1,1.0 --scatter-mode all_points
+
+# ensemble-averaged Hausdorff distance CDF
+PYTHONPATH=./scripts python scripts/step4_plot.py --config configs/visualization.default.yaml --plot-variances 0.1,1.0 --hausdorff-cdf
 ```
 
 ## Single-Field Path Overlay
@@ -291,6 +294,14 @@ Default `sections` now include:
 
 When enabled, the Frechet section is saved as `run<id>_frechet.png` (or corresponding configured format).
 
+### Hausdorff CDF Ensemble Plot
+
+Use `--hausdorff-cdf` to generate ensemble-averaged empirical CDF plots of Hausdorff nearest-neighbor distances. For each selected `--plot-variances` value:
+
+- Stage 3 loads every MC consolidated `.npy` file, extracts the full `['hausdorff'][pair_key]['distances']` array (symmetric nearest-neighbor distances between path pairs), and computes per-MC empirical CDFs evaluated on a common 500-point grid.
+- Stage 4 plots the mean CDF curve (solid line) with a shaded +/- 1 std region for each of the 4 distance pairs (FP vs LRP, FP vs LRP(FMM), FP vs FP(Dijkstra), FP vs FP(FMM)).
+- Output: `run<id>_hausdorff_cdf_var<value>.png`
+
 ## Cache Contracts
 
 Artifacts written under `outputs/cache/run<id>/`:
@@ -337,3 +348,4 @@ PYTHONPATH=./scripts python tests/compare_distance_by_shapely_with_custom.py \
 - Analytical solve failures are recorded as warnings in `<output_dir>/manifest.json`.
 - `wasserstein_len` is normalized by `I_Y` and computed from Stage 2 path-length sample arrays.
 - Separate CDF figures use empirical CDF of normalized path length (`\ell/I_Y`) for FP, LRP, FP(FMM), FP(Dijkstra).
+- `--hausdorff-cdf` generates ensemble-averaged Hausdorff nearest-neighbor distance CDFs (mean curve + std band) for selected `--plot-variances`; requires Stage 3 to have access to `stage1_index.pkl` and raw MC consolidated files.

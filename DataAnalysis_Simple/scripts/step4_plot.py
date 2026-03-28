@@ -687,6 +687,44 @@ def plot_hausdorff_box_by_variance(
     return fig, {"kind": "hausdorff_box_variance"}
 
 
+_HAUSDORFF_CDF_PAIRS = (
+    ("fp_lrp", "$d_H$[FP, LRP]", COLORS["lrp"]),
+    ("fp_lrpFMM", "$d_H$[FP, LRP(FMM)]", COLORS["lrpFMM"]),
+    ("fp_fpDijkstra", "$d_H$[FP, FP(Dijkstra)]", COLORS["fpDijkstra"]),
+    ("fp_fpFMM", "$d_H$[FP, FP(FMM)]", COLORS["fpFMM"]),
+)
+
+
+def plot_hausdorff_cdf_ensemble(
+    ensemble_data: dict[str, dict[str, np.ndarray]],
+    variance_value: float,
+    i_y: float,
+):
+    fig, ax = plt.subplots(figsize=[5, 4])
+    for pair_key, label, color in _HAUSDORFF_CDF_PAIRS:
+        entry = ensemble_data.get(pair_key)
+        if entry is None:
+            continue
+        x = entry["x"] / i_y
+        mean_cdf = entry["mean_cdf"]
+        std_cdf = entry["std_cdf"]
+        ax.plot(x, mean_cdf, linestyle="-", color=color, label=label)
+        ax.fill_between(
+            x,
+            np.clip(mean_cdf - std_cdf, 0.0, 1.0),
+            np.clip(mean_cdf + std_cdf, 0.0, 1.0),
+            color=color,
+            alpha=0.2,
+        )
+    ax.set_xlabel(r"$d / I_Y$")
+    ax.set_ylabel("Empirical CDF")
+    ax.set_title(fr"Hausdorff Distance CDF ($\sigma_Y^2={variance_value:g}$)")
+    ax.legend(fontsize="9", loc="best")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": "hausdorff_cdf_ensemble", "variance": float(variance_value)}
+
+
 def plot_times_box_by_variance(
     var: np.ndarray,
     time_samples: dict[str, dict[str, np.ndarray]],
@@ -928,6 +966,7 @@ def run_stage4(
     unique_filenames: bool = False,
     plot_variances: list[float] | None = None,
     scatter_modes: list[str] | None = None,
+    hausdorff_cdf: bool = False,
 ) -> list[FigureArtifact]:
     cache_dir = cache_dir or default_cache_dir(cfg)
     payload = load_pickle(cache_dir / "stage3_plot_inputs.pkl")
@@ -1138,6 +1177,33 @@ def run_stage4(
         artifacts.extend(save_figure(fig, section="std_endpoint", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
 
+    if hausdorff_cdf:
+        hcdf_data = prepared.get("hausdorff_cdf_ensemble")
+        if not isinstance(hcdf_data, dict) or not hcdf_data:
+            all_warnings.append("Requested hausdorff CDF ensemble plot but Stage 3 cache is missing hausdorff_cdf_ensemble data.")
+        else:
+            requested = _resolve_requested_plot_variances(var, plot_variances)
+            for variance_value in requested:
+                key = _resolve_sample_key(hcdf_data, variance_value)
+                if key is None:
+                    all_warnings.append(f"Missing hausdorff CDF ensemble data for sigma2={variance_value}.")
+                    continue
+                fig, meta = plot_hausdorff_cdf_ensemble(hcdf_data[key], variance_value, i_y)
+                section = f"hausdorff_cdf_var{_value_slug(variance_value)}"
+                artifacts.extend(
+                    save_figure(
+                        fig,
+                        section=section,
+                        output_dir=cfg.output_dir,
+                        run_id=cfg.run_id,
+                        dpi=cfg.figure_dpi,
+                        save_formats=cfg.save_formats,
+                        metadata=meta,
+                        unique_filenames=unique_filenames,
+                    )
+                )
+                plt.close(fig)
+
     write_manifest(cfg.output_dir, config=asdict(cfg), artifacts=artifacts, warnings=all_warnings)
     return artifacts
 
@@ -1165,6 +1231,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Whether to include timestamp/hash in output figure filenames",
     )
+    parser.add_argument(
+        "--hausdorff-cdf",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Plot ensemble-averaged empirical CDF of Hausdorff nearest-neighbor distances",
+    )
     return parser.parse_args()
 
 
@@ -1179,6 +1251,7 @@ def main() -> int:
         unique_filenames=args.unique_filenames,
         plot_variances=_parse_plot_variances(args.plot_variances),
         scatter_modes=_parse_scatter_modes(args.scatter_mode),
+        hausdorff_cdf=args.hausdorff_cdf,
     )
     print(f"Generated {len(artifacts)} figure artifact(s) in {cfg.output_dir}")
     return 0

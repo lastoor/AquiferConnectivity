@@ -9,7 +9,8 @@ from typing import Any
 import numpy as np
 from scipy.stats import wasserstein_distance
 
-from step1_index import VisualizationConfig, default_cache_dir, load_config, save_pickle, write_stage_metadata
+from step1_index import RunPaths, VisualizationConfig, default_cache_dir, load_config, save_pickle, write_stage_metadata
+from step2_metrics import deserialize_discovered, load_mc_consolidated
 
 
 def load_pickle(path: Path) -> Any:
@@ -376,6 +377,81 @@ def collect_hausdorff_box_samples(var_data: dict[str, dict[str, Any]], var_value
     return out, warnings
 
 
+_MC_HAUSDORFF_PAIRS = (
+    ("fp_vs_lrp", "fp_lrp"),
+    ("fp_vs_lrp_fmm", "fp_lrpFMM"),
+    ("fp_vs_dijkstra", "fp_fpDijkstra"),
+    ("fp_vs_fmm", "fp_fpFMM"),
+)
+_CDF_GRID_SIZE = 500
+
+
+def _ecdf_on_grid(samples: np.ndarray, grid: np.ndarray) -> np.ndarray:
+    xs = np.sort(samples)
+    ys = np.arange(1, xs.size + 1, dtype=float) / float(xs.size)
+    return np.interp(grid, xs, ys, left=0.0, right=1.0)
+
+
+def collect_hausdorff_cdf_ensemble(
+    discovered_var: dict[float, list[RunPaths]],
+    var_values: list[float],
+    cfg: VisualizationConfig,
+) -> tuple[dict[str, dict[str, dict[str, np.ndarray]]], list[str]]:
+    out: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+    warnings: list[str] = []
+
+    target_size = int(cfg.field_size_ref)
+
+    for var_ in var_values:
+        var_key = f"var_{var_}"
+        run_paths_list = discovered_var.get(var_, [])
+        target_rp = next((rp for rp in run_paths_list if int(rp.size_value) == target_size), None)
+        if target_rp is None or not target_rp.mc_files:
+            warnings.append(f"Hausdorff CDF ensemble: no MC files for sigma2={var_}, size={target_size}.")
+            continue
+
+        raw_dists: dict[str, list[np.ndarray]] = {display: [] for _, display in _MC_HAUSDORFF_PAIRS}
+
+        for mc_path in target_rp.mc_files:
+            try:
+                mc = load_mc_consolidated(mc_path)
+            except Exception:
+                continue
+            hausdorff_block = mc.get("hausdorff", {})
+            for mc_key, display_key in _MC_HAUSDORFF_PAIRS:
+                d = hausdorff_block.get(mc_key, {}).get("distances")
+                if d is None:
+                    continue
+                arr = np.asarray(d, dtype=float).ravel()
+                finite = arr[np.isfinite(arr)]
+                if finite.size > 0:
+                    raw_dists[display_key].append(finite)
+
+        pair_result: dict[str, dict[str, np.ndarray]] = {}
+        for _, display_key in _MC_HAUSDORFF_PAIRS:
+            dists_list = raw_dists[display_key]
+            if len(dists_list) < 2:
+                warnings.append(
+                    f"Hausdorff CDF ensemble: fewer than 2 MC realizations with data for {display_key} at sigma2={var_}."
+                )
+                continue
+            x_max = max(float(np.max(a)) for a in dists_list)
+            if x_max <= 0:
+                continue
+            grid = np.linspace(0.0, x_max, _CDF_GRID_SIZE)
+            cdf_matrix = np.array([_ecdf_on_grid(a, grid) for a in dists_list])
+            pair_result[display_key] = {
+                "x": grid,
+                "mean_cdf": np.mean(cdf_matrix, axis=0),
+                "std_cdf": np.std(cdf_matrix, axis=0),
+            }
+
+        if pair_result:
+            out[var_key] = pair_result
+
+    return out, warnings
+
+
 def compute_t_ref(k_g: float, dh: float, field_size: float, length_scale: float) -> float:
     i_y = length_scale * field_size
     q_ref = k_g * dh
@@ -418,7 +494,12 @@ def compute_taylor_times(
     }
 
 
-def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results: Any | None) -> dict[str, Any]:
+def prepare_plot_inputs(
+    cfg: VisualizationConfig,
+    var_results: Any,
+    std_results: Any | None,
+    discovered_var: dict[float, list[RunPaths]] | None = None,
+) -> dict[str, Any]:
     var_stats = _pick(var_results, "stats")
     var_data = _pick(var_results, "data")
     var_line_integrals = _pick(var_results, "line_integrals")
@@ -437,6 +518,11 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
     derived_warnings.extend(scatter_warnings)
     derived_warnings.extend(endpoint_box_warnings)
     derived_warnings.extend(hausdorff_box_warnings)
+
+    hausdorff_cdf_ensemble: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+    if discovered_var is not None:
+        hausdorff_cdf_ensemble, hcdf_warnings = collect_hausdorff_cdf_ensemble(discovered_var, var_values, cfg)
+        derived_warnings.extend(hcdf_warnings)
 
     field_size_arr = np.asarray(var_field_size, dtype=float)
     field_size = cfg.field_size_ref if field_size_arr.size == 0 else float(field_size_arr[0])
@@ -480,6 +566,7 @@ def prepare_plot_inputs(cfg: VisualizationConfig, var_results: Any, std_results:
         "scatter_time_samples": scatter_time_samples,
         "endpoint_box_samples": endpoint_box_samples,
         "hausdorff_box_samples": hausdorff_box_samples,
+        "hausdorff_cdf_ensemble": hausdorff_cdf_ensemble,
         "derived_warnings": derived_warnings,
     }
 
@@ -490,7 +577,13 @@ def run_stage3(cfg: VisualizationConfig, *, cache_dir: Path | None = None) -> Pa
     var_results = metrics["var_results"]
     std_results = metrics["std_results"]
 
-    plot_inputs = prepare_plot_inputs(cfg, var_results, std_results)
+    discovered_var: dict[float, list[RunPaths]] | None = None
+    index_path = cache_dir / "stage1_index.pkl"
+    if index_path.exists():
+        index = load_pickle(index_path)
+        discovered_var = deserialize_discovered(index["variance"])
+
+    plot_inputs = prepare_plot_inputs(cfg, var_results, std_results, discovered_var=discovered_var)
     payload = {
         "plot_inputs": plot_inputs,
         "warnings": metrics.get("warnings", {}),

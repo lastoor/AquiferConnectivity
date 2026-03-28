@@ -513,3 +513,17 @@
   - `python -m py_compile scripts/step6_single_field_arrival_hist.py tests/test_step6_single_field_arrival_hist.py`
 - Limitations/follow-up:
   - Full automated test execution still requires `pytest` to be installed in the active environment.
+
+## 2026-03-27
+- Agent/tool: Cursor (Claude)
+- Summary: Added ensemble-averaged empirical CDF plot for Hausdorff nearest-neighbor distances. Stage 3 now loads raw MC consolidated `.npy` files, extracts the full `['hausdorff'][pair_key]['distances']` arrays, computes per-MC empirical CDFs on a common 500-point grid, and stores mean/std CDF arrays per pair per variance. Stage 4 renders the mean CDF curve with std shading for all 4 distance pairs, gated by a new `--hausdorff-cdf` CLI flag.
+- Files changed:
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step3_stats.py scripts/step4_plot.py`
+- Limitations/follow-up:
+  - Full Stage 3/4 runtime with the new feature was not executed here; validated by compile check and code-path review.
+  - The ensemble CDF uses only the reference field size (`field_size_ref`) MC files; multi-size ensemble is not supported.
