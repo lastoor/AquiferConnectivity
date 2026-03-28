@@ -312,6 +312,46 @@ def load_selected_logk(selected: SelectedRun) -> np.ndarray:
     return np.asarray(np.load(selected.logk_file), dtype=float)
 
 
+def generate_synthetic_logk(
+    *,
+    field_size: int,
+    amplitude: float,
+    frequency_x: float,
+    frequency_y: float,
+    offset: float,
+) -> np.ndarray:
+    if field_size <= 1:
+        raise ValueError(f"field_size must be at least 2 for synthetic logK generation; got {field_size}.")
+    for name, value in {
+        "synthetic_amplitude": amplitude,
+        "synthetic_frequency_x": frequency_x,
+        "synthetic_frequency_y": frequency_y,
+        "synthetic_offset": offset,
+    }.items():
+        if not np.isfinite(float(value)):
+            raise ValueError(f"{name} must be finite; got {value}.")
+
+    x_norm = np.arange(field_size, dtype=float) / float(field_size)
+    y_norm = np.arange(field_size, dtype=float) / float(field_size)
+    xx, yy = np.meshgrid(x_norm, y_norm, indexing="xy")
+
+    return np.asarray(
+        offset
+        + amplitude * np.exp(- (xx ** 2 + yy ** 2) / field_size) * (
+            np.sin(2.0 * np.pi * frequency_x * xx)
+            * np.cos(2.0 * np.pi * frequency_y * yy)
+        ),
+        dtype=float,
+    )
+
+    # # Sine curve
+    # y_sin = np.sin(xx)/2
+    # thickness = 0.05  # adjust for thickness
+    # matrix = np.abs(yy - y_sin) < thickness
+    # matrix = matrix.astype(float)
+    # return offset + amplitude * matrix
+
+
 def _add_search_path(path: Path) -> None:
     path_str = str(path)
     if path_str not in sys.path:
@@ -803,7 +843,7 @@ def _compute_linearized_fp_series(
         raise RuntimeError("No traversable source/target cells for linearized FP.")
 
     t_init, _state = fast_marching_2d_regions(
-        slowness_unperturbed,
+        1/slowness_unperturbed,
         source_mask,
         h=1.0,
         traversable_mask=traversable_mask,
@@ -838,7 +878,7 @@ def _compute_linearized_fp_series(
             lam = float(idx) / float(outer_max)
             slowness_i = (1.0 - lam) * slowness_unperturbed + lam * slowness_true
             t_i, _state_i = fast_marching_2d_regions(
-                slowness_i,
+                1/slowness_i,
                 source_mask,
                 h=1.0,
                 traversable_mask=traversable_mask,
@@ -982,7 +1022,7 @@ def solve_single_field(
     slowness_unperturbed = 1.0 / np.maximum(k_field * dh_mean, 1e-12)
     slowness_true = 1.0 / np.maximum(k_field * grad_h_mag, 1e-12)
     lrp_fmm, _r_min_field = _compute_fmm_path(
-        slowness_unperturbed,
+        1/slowness_unperturbed,
         geometry=geometry,
         grid_spacing=1.0,
         fast_marching_2d_regions=fast_marching_2d_regions,
@@ -1003,7 +1043,7 @@ def solve_single_field(
     )
 
     fp_fmm, t_min = _compute_fmm_path(
-        slowness_true,
+        1/slowness_true,
         geometry=geometry,
         grid_spacing=1.0,
         fast_marching_2d_regions=fast_marching_2d_regions,
@@ -1468,7 +1508,7 @@ def plot_paths_over_speed_with_streamlines(
     im = ax.imshow(
         speed_field,
         origin="lower",
-        cmap=cmc.lajolla.reversed(),
+        cmap=cmc.lajolla,
         interpolation="nearest",
         extent=_normalized_extent(result.x, result.y, i_y),
     )
@@ -1625,7 +1665,7 @@ def plot_curvature_balance(
         fp_diag.residual,
         color=COLORS["fpFMM"],
         linewidth=lw,
-        label=r"$R_{\mathrm{FP}}=\kappa+\partial_N \ln |v|$",
+        label=r"$R_{\mathrm{FP}}=\kappa + \partial_N \ln |v|$",
     )
     axes[4].plot(
         lrp_diag.s_norm,
@@ -1633,23 +1673,23 @@ def plot_curvature_balance(
         color=COLORS["lrpFMM"],
         alpha=alpha,
         linewidth=lw,
-        label=r"$R_{\mathrm{LRP}}=\kappa+\partial_N \ln K$",
+        label=r"$R_{\mathrm{LRP}}=\kappa + \partial_N \ln K$",
     )
-    axes[4].plot(
-        lrp_diag.s_norm,
-        lrp_diag.curvature + lrp_diag.dlogv_dn,
-        color=COLORS["lrpFMM"],
-        linestyle="--",
-        linewidth=lw,
-        label=r"$R_{\mathrm{LRP},v}=\kappa+\partial_N \ln |v|$",
-    )
+    # axes[4].plot(
+    #     lrp_diag.s_norm,
+    #     lrp_diag.curvature + lrp_diag.dlogv_dn,
+    #     color=COLORS["lrpFMM"],
+    #     linestyle="--",
+    #     linewidth=lw,
+    #     label=r"$R_{\mathrm{LRP},v}=\kappa + \partial_N \ln |v|$",
+    # )
     axes[4].plot(
         lrp_diag.s_norm,
         lrp_diag.curvature + lrp_diag.dlogk_dn + lrp_diag.dloggradh_dn,
         color=COLORS["lrpFMM"],
         linestyle=":",
         linewidth=lw,
-        label=r"$R_{\mathrm{LRP},K+\nabla h}=\kappa+\partial_N \ln K+\partial_N \ln |\nabla h|$",
+        label=r"$R_{\mathrm{LRP},K+\nabla h}=\kappa + \partial_N \ln K + \partial_N \ln |\nabla h|$",
     )
     axes[4].axhline(0.0, color="0.7", linewidth=1.0)
     axes[4].set_xlabel(r"Normalized arclength $s/L$")
@@ -1671,11 +1711,16 @@ def _value_slug(value: float) -> str:
 def run_step5(
     cfg: step1.VisualizationConfig,
     *,
-    sweep: str,
-    value: float,
+    logk_source: str,
+    sweep: str | None,
+    value: float | None,
     field_size: int,
-    mc_index: int,
+    mc_index: int | None,
     output_dir: Path | None,
+    synthetic_amplitude: float,
+    synthetic_frequency_x: float,
+    synthetic_frequency_y: float,
+    synthetic_offset: float,
     dh: float | None,
     solver: str,
     backend: str = "cpu",
@@ -1719,8 +1764,33 @@ def run_step5(
     rk45_min_success_frac: float,
     rk45_max_bad_frac: float,
 ) -> tuple[Path, Path, Path, Path, Path | None]:
-    selected = select_run_input(cfg, sweep=sweep, value=value, field_size=field_size, mc_index=mc_index)
-    logk_field = load_selected_logk(selected)
+    selected: SelectedRun | None = None
+    if logk_source == "dataset":
+        if sweep is None or value is None or mc_index is None:
+            raise ValueError("Dataset logK source requires sweep, value, and mc_index.")
+        selected = select_run_input(cfg, sweep=sweep, value=value, field_size=field_size, mc_index=mc_index)
+        logk_field = load_selected_logk(selected)
+        stem = (
+            f"run{cfg.run_id}_{_sweep_token(sweep)}{_value_slug(selected.value_key)}_"
+            f"size{field_size}_mc{selected.mc_label}"
+        )
+    elif logk_source == "synthetic":
+        logk_field = generate_synthetic_logk(
+            field_size=field_size,
+            amplitude=synthetic_amplitude,
+            frequency_x=synthetic_frequency_x,
+            frequency_y=synthetic_frequency_y,
+            offset=synthetic_offset,
+        )
+        stem = (
+            f"synthetic_size{field_size}_"
+            f"amp{_value_slug(synthetic_amplitude)}_"
+            f"fx{_value_slug(synthetic_frequency_x)}_"
+            f"fy{_value_slug(synthetic_frequency_y)}_"
+            f"offset{_value_slug(synthetic_offset)}"
+        )
+    else:
+        raise ValueError(f"Unsupported logk_source={logk_source!r}; expected 'dataset' or 'synthetic'.")
 
     dh_eff = cfg.dh if dh is None else dh
     result = solve_single_field(
@@ -1775,10 +1845,6 @@ def run_step5(
     out_dir = Path(output_dir or cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    stem = (
-        f"run{cfg.run_id}_{_sweep_token(sweep)}{_value_slug(selected.value_key)}_"
-        f"size{field_size}_mc{selected.mc_label}"
-    )
     i_y = cfg.length_scale * float(field_size)
     t_ref = step3.compute_t_ref(cfg.k_g, dh_eff, float(field_size), cfg.length_scale)
     q_ref = cfg.k_g * dh_eff
@@ -1806,7 +1872,7 @@ def run_step5(
 
     fig_logk = plot_paths_over_field(
         logk_field,
-        cmap=cmc.lajolla.reversed(),
+        cmap=cmc.lajolla,
         colorbar_label=r"$\ln K$",
         result=result,
         i_y=i_y,
@@ -1819,7 +1885,7 @@ def run_step5(
     tmin_plot = np.where(np.isfinite(result.t_min), result.t_min / t_ref, np.nan)
     fig_tmin = plot_paths_over_field(
         tmin_plot,
-        cmap=cmc.lajolla.reversed(),
+        cmap=cmc.lajolla,
         colorbar_label=r"$T_{\min} U/I_Y$",
         result=result,
         i_y=i_y,
@@ -1851,7 +1917,7 @@ def run_step5(
     if linearized_fp:
         fig_progression = plot_linearized_fp_progression(
             tmin_plot,
-            cmap=cmc.lajolla.reversed(),
+            cmap=cmc.lajolla,
             colorbar_label=r"$T_{\min} U/I_Y$",
             result=result,
             i_y=i_y,
@@ -1867,11 +1933,16 @@ def parse_args() -> argparse.Namespace:
         description="Stage 5: solve and visualize particle-tracking FP, FP(FMM), LRP(FMM), and optional linearized FP^i for one logK field"
     )
     parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--sweep", required=True, choices=["variance", "std"])
-    parser.add_argument("--value", required=True, type=float)
+    parser.add_argument("--logk-source", choices=["dataset", "synthetic"], default="dataset")
+    parser.add_argument("--sweep", choices=["variance", "std"])
+    parser.add_argument("--value", type=float)
     parser.add_argument("--field-size", required=True, type=int)
-    parser.add_argument("--mc-index", required=True, type=int)
+    parser.add_argument("--mc-index", type=int)
     parser.add_argument("--output-dir", type=Path, default=None)
+    parser.add_argument("--synthetic-amplitude", type=float, default=1.0)
+    parser.add_argument("--synthetic-frequency-x", type=float, default=1.0)
+    parser.add_argument("--synthetic-frequency-y", type=float, default=1.0)
+    parser.add_argument("--synthetic-offset", type=float, default=0.0)
 
     parser.add_argument("--dh", type=float, default=None)
     parser.add_argument("--solver", choices=["pollock", "rk45"], default="pollock")
@@ -1947,6 +2018,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rk45-min-success-frac", type=float, default=0.5)
     parser.add_argument("--rk45-max-bad-frac", type=float, default=0.1)
     args = parser.parse_args()
+    if args.logk_source == "dataset":
+        missing = [
+            name
+            for name in ("sweep", "value", "mc_index")
+            if getattr(args, name) is None
+        ]
+        if missing:
+            parser.error(
+                "Dataset logK source requires "
+                + ", ".join(f"--{name.replace('_', '-')}" for name in missing)
+                + "."
+            )
+    else:
+        generate_synthetic_logk(
+            field_size=args.field_size,
+            amplitude=args.synthetic_amplitude,
+            frequency_x=args.synthetic_frequency_x,
+            frequency_y=args.synthetic_frequency_y,
+            offset=args.synthetic_offset,
+        )
     _validate_particle_tracking_options(solver=args.solver, velocity_location=args.velocity_location, backend=args.backend)
     return args
 
@@ -1956,11 +2047,16 @@ def main() -> int:
     cfg = step1.load_config(args.config)
     logk_path, tmin_path, stream_path, balance_path, progression_path = run_step5(
         cfg,
+        logk_source=args.logk_source,
         sweep=args.sweep,
         value=args.value,
         field_size=args.field_size,
         mc_index=args.mc_index,
         output_dir=args.output_dir,
+        synthetic_amplitude=args.synthetic_amplitude,
+        synthetic_frequency_x=args.synthetic_frequency_x,
+        synthetic_frequency_y=args.synthetic_frequency_y,
+        synthetic_offset=args.synthetic_offset,
         dh=args.dh,
         solver=args.solver,
         backend=args.backend,

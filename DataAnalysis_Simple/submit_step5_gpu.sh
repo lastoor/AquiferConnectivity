@@ -1,16 +1,21 @@
 #!/bin/bash
 set -euo pipefail
 
+logk_source="dataset" # Options: dataset, synthetic
 sweep="variance"
-value="2.5"
+value="5"
 field_size="200"
-mc_index="10"
+mc_index="34"
+synthetic_amplitude="2.0"
+synthetic_frequency_x="2.0"
+synthetic_frequency_y="0.5"
+synthetic_offset="0.0"
 
 run_tag="1_full_eikonal_iteration"
 num_particles="1000000"
 dh=""
-linearized_fp="true"
-linearized_scheme="full_eikonal" # Options: linearized, full_eikonal
+linearized_fp="false"
+linearized_scheme="linearized" # Options: linearized, full_eikonal
 linearized_outer_max="10"
 linearized_inner_max_sweeps="200"
 linearized_inner_tol="1e-8"
@@ -27,10 +32,10 @@ source_y_end=""
 target_y_start=""
 target_y_end=""
 curvature_method="spline"
-curvature_spline_mode="approximation"
-curvature_spline_smooth="10"
+curvature_spline_mode="approximation" # Options: approximation, interpolation
+curvature_spline_smooth="3"
 curvature_spline_degree="3"
-curvature_field_smooth_method="gaussian"
+curvature_field_smooth_method="none" # Options: none, gaussian
 curvature_field_smooth_sigma="1.0"
 curvature_circle_window="10"
 
@@ -104,12 +109,32 @@ if [[ -n "${target_y_end}" ]]; then
     geometry_args+=" --target-y-end ${target_y_end}"
 fi
 
+logk_args="--logk-source ${logk_source} --field-size ${field_size}"
+job_suffix=""
+if [[ "${logk_source}" == "dataset" ]]; then
+    logk_args+=" --sweep ${sweep}"
+    logk_args+=" --value ${value}"
+    logk_args+=" --mc-index ${mc_index}"
+    job_suffix="${sweep}_${value}"
+    output_dir="${run_root}/${sweep}_${value}_size${field_size}_mc${mc_index}"
+elif [[ "${logk_source}" == "synthetic" ]]; then
+    logk_args+=" --synthetic-amplitude ${synthetic_amplitude}"
+    logk_args+=" --synthetic-frequency-x ${synthetic_frequency_x}"
+    logk_args+=" --synthetic-frequency-y ${synthetic_frequency_y}"
+    logk_args+=" --synthetic-offset ${synthetic_offset}"
+    job_suffix="synthetic_amp${synthetic_amplitude}_fx${synthetic_frequency_x}_fy${synthetic_frequency_y}"
+    output_dir="${run_root}/synthetic_size${field_size}_amp${synthetic_amplitude}_fx${synthetic_frequency_x}_fy${synthetic_frequency_y}_offset${synthetic_offset}"
+else
+    echo "Unsupported logk_source=${logk_source}; expected dataset or synthetic." >&2
+    exit 1
+fi
+
 sbatch <<EOF
 #!/bin/bash
 #SBATCH --account=${account}
-#SBATCH --job-name=step5_gpu_${sweep}_${value}
-#SBATCH --output=${log_dir}/output_${sweep}_${value}_%j.txt
-#SBATCH --error=${log_dir}/error_${sweep}_${value}_%j.txt
+#SBATCH --job-name=step5_gpu_${job_suffix}
+#SBATCH --output=${log_dir}/output_${job_suffix}_%j.txt
+#SBATCH --error=${log_dir}/error_${job_suffix}_%j.txt
 #SBATCH --partition=${partition}
 #SBATCH --time=${time}
 #SBATCH --nodes=1
@@ -121,17 +146,23 @@ sbatch <<EOF
 
 echo "Running step5 GPU Pollock on node \$SLURM_NODELIST"
 echo "Start Time: \$(date)"
+echo "logK source: ${logk_source}"
 echo "Linearized FP: ${linearized_fp}"
 echo "Linearized scheme: ${linearized_scheme}"
 echo "Check path geometry: ${check_path_geometry}"
 echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window})"
 echo "Curvature field smoothing: method=${curvature_field_smooth_method}, sigma=${curvature_field_smooth_sigma}"
 echo "Step5 geometry overrides: source_x=${source_x:-default}, target_x=${target_x:-default}, source_y=[${source_y_start:-default}, ${source_y_end:-default}), target_y=[${target_y_start:-default}, ${target_y_end:-default})"
+if [[ "${logk_source}" == "dataset" ]]; then
+  echo "Dataset selection: sweep=${sweep}, value=${value}, mc_index=${mc_index}"
+else
+  echo "Synthetic logK: amplitude=${synthetic_amplitude}, freq_x=${synthetic_frequency_x}, freq_y=${synthetic_frequency_y}, offset=${synthetic_offset}"
+fi
 if [[ "${linearized_fp}" == "true" && "${linearized_scheme}" == "full_eikonal" ]]; then
   echo "Note: full_eikonal ignores linearized-only controls: inner_max_sweeps, inner_tol, eikonal_tol, damping, max_deltat, monotone_residual."
 fi
 
-output_dir="${run_root}/${sweep}_${value}_size${field_size}_mc${mc_index}"
+output_dir="${output_dir}"
 mkdir -p "\${output_dir}"
 
 export OMP_NUM_THREADS=1
@@ -149,10 +180,7 @@ export PYTHONPATH=./scripts
 
 python ./scripts/step5_single_field_paths.py \\
   --config "${config_path}" \\
-  --sweep "${sweep}" \\
-  --value "${value}" \\
-  --field-size "${field_size}" \\
-  --mc-index "${mc_index}" \\
+  ${logk_args} \\
   --output-dir "\${output_dir}" \\
   ${dh_args} \\
   --solver pollock \\
@@ -160,8 +188,8 @@ python ./scripts/step5_single_field_paths.py \\
   --num-particles "${num_particles}" \\
   --velocity-location face \\
   --no-align-with-modflow-velocity \\
-  --fmm-backtracking continuous \\
-  --fmm-continuous-step-size 0.5 \\
+  --fmm-backtracking continuous \\ 
+#   --fmm-continuous-step-size 0.1 \\
   ${linearized_args} \\
   ${check_path_geometry_args} \\
   ${geometry_args} \\
