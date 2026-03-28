@@ -21,7 +21,7 @@ if str(SRC_ROOT) not in os.sys.path:
 
 from fmm_core import compute_fmm_path
 from fmm_core.metrics import distance_distribution
-from fmm_core.speed import prepare_fmm_speed
+from fmm_core.speed import _face_to_cell_speed_full, prepare_fmm_speed
 from simulation import grf_generation as sim_grf
 from simulation import hydraulic as sim_hyd
 from simulation import particle_tracking as sim_pt
@@ -53,10 +53,8 @@ MC_FIELDS = [
     "travel_time_fmm",
     "resistance_lrp",
     "resistance_lrp_fmm",
-    "hausdorff_fp_vs_lrp",
-    "hausdorff_fp_vs_lrp_fmm",
-    "hausdorff_fp_vs_dijkstra",
-    "hausdorff_fp_vs_fmm",
+    "shannon_entropy_vmag",
+    "shannon_entropy_angle",
     "endpoint_dy_fp_vs_lrp",
     "endpoint_dy_fp_vs_lrp_fmm",
     "endpoint_dy_fp_vs_dijkstra",
@@ -152,30 +150,46 @@ def build_base_record(mc_index: int, trial_used: int | None = None) -> dict[str,
     return record
 
 
-def save_mc_outputs(config_mc: dict[str, Any], mc_index: int, outputs: dict[str, Any]) -> None:
-    none_keys = [k for k, v in outputs.items() if v is None]
-    if none_keys:
-        raise ValueError(f"None values are not allowed in MC outputs: {none_keys}")
-    np.savez(
-        str(config_mc["path_size_mainOutput"] / f"mainOutput_size{config_mc['field_size_']}_mc{mc_index}.npz"),
-        **outputs,
-    )
+def _hausdorff_detail(D: np.ndarray) -> dict[str, Any]:
+    return {
+        "distances": D,
+        "max": float(np.max(D)),
+        "mean": float(np.mean(D)),
+        "std": float(np.std(D)),
+        "median": float(np.median(D)),
+    }
 
 
-def save_path_outputs(
+def _shannon_entropy_vmag(vx: np.ndarray, vy: np.ndarray) -> float:
+    v_mag = np.sqrt(vx**2 + vy**2)
+    v_mag_sum = v_mag.sum()
+    if v_mag_sum <= 0:
+        return float("nan")
+    p = v_mag / v_mag_sum
+    mask = p > 0
+    return float(-np.sum(p[mask] * np.log(p[mask])))
+
+
+def _shannon_entropy_angle(vx: np.ndarray, vy: np.ndarray, n_bins: int = 360) -> float:
+    theta = np.arctan2(vy, vx) % (2 * np.pi)
+    counts, _ = np.histogram(theta.ravel(), bins=n_bins, range=(0, 2 * np.pi))
+    counts = counts[counts > 0]
+    if counts.sum() == 0:
+        return float("nan")
+    p = counts / counts.sum()
+    return float(-np.sum(p * np.log(p)))
+
+
+def save_mc_consolidated(
     config_mc: dict[str, Any],
     mc_index: int,
-    lrp: np.ndarray,
-    lrp_fmm: np.ndarray,
-    fp_dijkstra: np.ndarray,
-    fp_fmm: np.ndarray,
-    fp: np.ndarray,
+    consolidated: dict[str, Any],
 ) -> None:
-    np.save(config_mc["path_size_path"] / f"lrp_size{config_mc['field_size_']}_mc{mc_index}.npy", lrp)
-    np.save(config_mc["path_size_path"] / f"lrp_fmm_size{config_mc['field_size_']}_mc{mc_index}.npy", lrp_fmm)
-    np.save(config_mc["path_size_path"] / f"fp_dijkstra_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_dijkstra)
-    np.save(config_mc["path_size_path"] / f"fp_fmm_size{config_mc['field_size_']}_mc{mc_index}.npy", fp_fmm)
-    np.save(config_mc["path_size_path"] / f"fp_size{config_mc['field_size_']}_mc{mc_index}.npy", fp)
+    np.save(
+        str(config_mc["path_size"] / f"size{config_mc['field_size_']}_mc{mc_index}.npy"),
+        consolidated,
+        allow_pickle=True,
+    )
 
 
 def _uint64_to_u32_pair(value: int) -> tuple[int, int]:
@@ -469,10 +483,7 @@ def make_config_for_size(config_base: dict[str, Any], idx_size: int) -> dict[str
     config["x"] = np.arange(0, field_size_, config["dx"], dtype=float)
     config["y"] = np.arange(0, field_size_, config["dy"], dtype=float)
 
-    config["path_size"] = config["path_simulation"] / f"lengthScale{config['grf_arg']['length_scale']}_size{field_size_}"
-    config["path_size_mainOutput"] = config["path_size"] / "main_output"
-    config["path_size_path"] = config["path_size"] / "path"
-    config["path_size_logk"] = config["path_size"] / "logk_field"
+    config["path_size"] = config["path_simulation"] / f"LengthScale{config['grf_arg']['length_scale']}_Size{field_size_}"
 
     if config["path_size"].exists() and config["path_size"].is_dir():
         import shutil
@@ -480,9 +491,6 @@ def make_config_for_size(config_base: dict[str, Any], idx_size: int) -> dict[str
         shutil.rmtree(config["path_size"])
 
     config["path_size"].mkdir(parents=True, exist_ok=True)
-    config["path_size_mainOutput"].mkdir(parents=True, exist_ok=True)
-    config["path_size_path"].mkdir(parents=True, exist_ok=True)
-    config["path_size_logk"].mkdir(parents=True, exist_ok=True)
     return config
 
 
@@ -547,10 +555,6 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 record["status_message"] = grf_msg
                 logger.warning(f"[MC {mc_index}] {grf_msg}")
                 continue
-            np.save(
-                config_mc["path_size_logk"] / f"logKField_size{config_mc['field_size_']}_mc{mc_index}.npy",
-                logk_field,
-            )
             logger.info(f"[MC {mc_index}] {grf_msg}")
             k_field = np.exp(logk_field)
 
@@ -698,79 +702,176 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             # 5) Metrics and persist
-            hist_fp_lrp, _, _ = distance_distribution(fp, lrp, ds=1.0)
-            hist_fp_lrp_fmm, _, _ = distance_distribution(fp, lrp_fmm, ds=1.0)
-            hist_fp_dij, _, _ = distance_distribution(fp, fp_dijkstra, ds=1.0)
-            hist_fp_fmm, _, _ = distance_distribution(fp, fp_fmm, ds=1.0)
+            D_fp_lrp, _, _ = distance_distribution(fp, lrp, ds=1.0)
+            D_fp_lrp_fmm, _, _ = distance_distribution(fp, lrp_fmm, ds=1.0)
+            D_fp_dij, _, _ = distance_distribution(fp, fp_dijkstra, ds=1.0)
+            D_fp_fmm, _, _ = distance_distribution(fp, fp_fmm, ds=1.0)
+
+            vx_pt = np.asarray(_pt_velocity["vx"])
+            vy_pt = np.asarray(_pt_velocity["vy"])
+            vx_cell, vy_cell = _face_to_cell_speed_full(vx_pt, vy_pt, return_vector=True)
+            entropy_vmag = _shannon_entropy_vmag(vx_cell, vy_cell)
+            entropy_angle = _shannon_entropy_angle(vx_cell, vy_cell)
+
             y_end_fp = endpoint_y_at_x(fp, x_ref=x_ref)
             y_end_lrp = endpoint_y_at_x(lrp, x_ref=x_ref)
             y_end_lrp_fmm = endpoint_y_at_x(lrp_fmm, x_ref=x_ref)
             y_end_fp_dij = endpoint_y_at_x(fp_dijkstra, x_ref=x_ref)
             y_end_fp_fmm = endpoint_y_at_x(fp_fmm, x_ref=x_ref)
 
+            seeds_dict = {
+                "base": none_to_nan(config_mc.get("seed_base", np.nan)),
+                "effective_run": none_to_nan(config_mc.get("seed_effective_run", np.nan)),
+                "mode": seed_mode,
+                "mc": seed_mc if seed_mc is not None else np.nan,
+                "trial": seed_trial if seed_trial is not None else np.nan,
+                "variance": {
+                    "policy": config_mc.get("variance_seed_policy", "same"),
+                    "rank": none_to_nan(config_mc.get("variance_rank", np.nan)),
+                    "override": none_to_nan(config_mc.get("variance_seed_override", np.nan)),
+                },
+            }
+            config_dict = {
+                "particle_tracking": {
+                    "solver": config_mc["particleTracking_arg"]["solver"],
+                    "backend": str(pt_res["backend"]),
+                    "num_particles": int(resolve_particle_count(config_mc, source_rows)),
+                    "velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
+                    "align_with_modflow_velocity": bool(
+                        config_mc["particleTracking_arg"]["align_with_modflow_velocity"]
+                    ),
+                },
+                "fmm": {
+                    "velocity_layout": config_mc["fmm_arg"]["velocity_layout"],
+                    "face_output": config_mc["fmm_arg"]["face_output"],
+                    "face_mapping": config_mc["fmm_arg"]["face_mapping"],
+                    "solver": config_mc["fmm_arg"]["solver"],
+                    "backtracking": config_mc["fmm_arg"]["backtracking"],
+                    "zero_policy": config_mc["fmm_arg"]["zero_policy"],
+                    "min_speed": float(config_mc["fmm_arg"]["min_speed"]),
+                    "zero_count": int(speed_diag["zero_or_bad_count"]),
+                    "nontraversable_count": int(nontraversable_count),
+                },
+            }
+
+            consolidated = {
+                "meta": {
+                    "schema_version": MC_SCHEMA_VERSION,
+                    "mc_index": int(mc_index),
+                    "trial_used": int(trial),
+                    "status_code": 0,
+                    "status_message": "ok",
+                },
+                "seeds": seeds_dict,
+                "config": config_dict,
+                "fields": {
+                    "logk": logk_field,
+                },
+                "paths": {
+                    "fp": {
+                        "coords": fp,
+                        "length": float(sim_utils.euclidean_length(fp)),
+                        "travel_time": float(pt_res["travel_time"]),
+                    },
+                    "fp_dijkstra": {
+                        "coords": fp_dijkstra,
+                        "length": float(sim_utils.euclidean_length(fp_dijkstra)),
+                        "travel_time": float(total_t_dijkstra),
+                    },
+                    "fp_fmm": {
+                        "coords": fp_fmm,
+                        "length": float(sim_utils.euclidean_length(fp_fmm)),
+                        "travel_time": float(total_t_fmm),
+                    },
+                    "lrp": {
+                        "coords": lrp,
+                        "length": float(sim_utils.euclidean_length(lrp)),
+                        "resistance": float(total_R),
+                    },
+                    "lrp_fmm": {
+                        "coords": lrp_fmm,
+                        "length": float(sim_utils.euclidean_length(lrp_fmm)),
+                        "resistance": float(total_R_fmm),
+                    },
+                },
+                "endpoint": {
+                    "method": "interp_at_xref",
+                    "x_ref": float(x_ref),
+                    "fp": {"x": float(fp[-1, 0]), "y": float(y_end_fp)},
+                    "fp_dijkstra": {"x": float(fp_dijkstra[-1, 0]), "y": float(y_end_fp_dij)},
+                    "fp_fmm": {"x": float(fp_fmm[-1, 0]), "y": float(y_end_fp_fmm)},
+                    "lrp": {"x": float(lrp[-1, 0]), "y": float(y_end_lrp)},
+                    "lrp_fmm": {"x": float(lrp_fmm[-1, 0]), "y": float(y_end_lrp_fmm)},
+                    "dy": {
+                        "fp_vs_lrp": float(y_end_fp - y_end_lrp),
+                        "fp_vs_lrp_fmm": float(y_end_fp - y_end_lrp_fmm),
+                        "fp_vs_dijkstra": float(y_end_fp - y_end_fp_dij),
+                        "fp_vs_fmm": float(y_end_fp - y_end_fp_fmm),
+                    },
+                },
+                "hausdorff": {
+                    "fp_vs_lrp": _hausdorff_detail(D_fp_lrp),
+                    "fp_vs_lrp_fmm": _hausdorff_detail(D_fp_lrp_fmm),
+                    "fp_vs_dijkstra": _hausdorff_detail(D_fp_dij),
+                    "fp_vs_fmm": _hausdorff_detail(D_fp_fmm),
+                },
+                "shannon_entropy": {
+                    "vmag": entropy_vmag,
+                    "angle": entropy_angle,
+                },
+            }
+
+            save_mc_consolidated(config_mc=config_mc, mc_index=mc_index, consolidated=consolidated)
+
             record.update(
                 {
                     "status_code": 0,
                     "status_message": "ok",
-                    "len_lrp": float(sim_utils.euclidean_length(lrp)),
-                    "len_lrp_fmm": float(sim_utils.euclidean_length(lrp_fmm)),
-                    "len_fp": float(sim_utils.euclidean_length(fp)),
-                    "len_fp_dijkstra": float(sim_utils.euclidean_length(fp_dijkstra)),
-                    "len_fp_fmm": float(sim_utils.euclidean_length(fp_fmm)),
-                    "travel_time_fp": float(pt_res["travel_time"]),
-                    "travel_time_dijkstra": float(total_t_dijkstra),
-                    "travel_time_fmm": float(total_t_fmm),
-                    "resistance_lrp": float(total_R),
-                    "resistance_lrp_fmm": float(total_R_fmm),
-                    "hausdorff_fp_vs_lrp": float(np.max(hist_fp_lrp)),
-                    "hausdorff_fp_vs_lrp_fmm": float(np.max(hist_fp_lrp_fmm)),
-                    "hausdorff_fp_vs_dijkstra": float(np.max(hist_fp_dij)),
-                    "hausdorff_fp_vs_fmm": float(np.max(hist_fp_fmm)),
+                    "len_lrp": consolidated["paths"]["lrp"]["length"],
+                    "len_lrp_fmm": consolidated["paths"]["lrp_fmm"]["length"],
+                    "len_fp": consolidated["paths"]["fp"]["length"],
+                    "len_fp_dijkstra": consolidated["paths"]["fp_dijkstra"]["length"],
+                    "len_fp_fmm": consolidated["paths"]["fp_fmm"]["length"],
+                    "travel_time_fp": consolidated["paths"]["fp"]["travel_time"],
+                    "travel_time_dijkstra": consolidated["paths"]["fp_dijkstra"]["travel_time"],
+                    "travel_time_fmm": consolidated["paths"]["fp_fmm"]["travel_time"],
+                    "resistance_lrp": consolidated["paths"]["lrp"]["resistance"],
+                    "resistance_lrp_fmm": consolidated["paths"]["lrp_fmm"]["resistance"],
+                    "shannon_entropy_vmag": entropy_vmag,
+                    "shannon_entropy_angle": entropy_angle,
                     "endpoint_method": "interp_at_xref",
                     "endpoint_x_ref": float(x_ref),
-                    "x_end_fp": float(fp[-1, 0]),
-                    "x_end_lrp": float(lrp[-1, 0]),
-                    "x_end_lrp_fmm": float(lrp_fmm[-1, 0]),
-                    "x_end_fp_dijkstra": float(fp_dijkstra[-1, 0]),
-                    "x_end_fp_fmm": float(fp_fmm[-1, 0]),
-                    "y_end_fp": float(y_end_fp),
-                    "y_end_lrp": float(y_end_lrp),
-                    "y_end_lrp_fmm": float(y_end_lrp_fmm),
-                    "y_end_fp_dijkstra": float(y_end_fp_dij),
-                    "y_end_fp_fmm": float(y_end_fp_fmm),
-                    "endpoint_dy_fp_vs_lrp": float(y_end_fp - y_end_lrp),
-                    "endpoint_dy_fp_vs_lrp_fmm": float(y_end_fp - y_end_lrp_fmm),
-                    "endpoint_dy_fp_vs_dijkstra": float(y_end_fp - y_end_fp_dij),
-                    "endpoint_dy_fp_vs_fmm": float(y_end_fp - y_end_fp_fmm),
-                    "pt_solver": config_mc["particleTracking_arg"]["solver"],
-                    "pt_backend": pt_res["backend"],
-                    "pt_num_particles": int(resolve_particle_count(config_mc, source_rows)),
-                    "pt_velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
-                    "pt_align_with_modflow_velocity": bool(
-                        config_mc["particleTracking_arg"]["align_with_modflow_velocity"]
-                    ),
-                    "fmm_velocity_layout": config_mc["fmm_arg"]["velocity_layout"],
-                    "fmm_face_output": config_mc["fmm_arg"]["face_output"],
-                    "fmm_face_mapping": config_mc["fmm_arg"]["face_mapping"],
-                    "fmm_solver": config_mc["fmm_arg"]["solver"],
-                    "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
-                    "fmm_zero_policy": config_mc["fmm_arg"]["zero_policy"],
-                    "fmm_min_speed": float(config_mc["fmm_arg"]["min_speed"]),
-                    "fmm_zero_count": int(speed_diag["zero_or_bad_count"]),
-                    "fmm_nontraversable_count": int(nontraversable_count),
+                    "x_end_fp": consolidated["endpoint"]["fp"]["x"],
+                    "x_end_lrp": consolidated["endpoint"]["lrp"]["x"],
+                    "x_end_lrp_fmm": consolidated["endpoint"]["lrp_fmm"]["x"],
+                    "x_end_fp_dijkstra": consolidated["endpoint"]["fp_dijkstra"]["x"],
+                    "x_end_fp_fmm": consolidated["endpoint"]["fp_fmm"]["x"],
+                    "y_end_fp": consolidated["endpoint"]["fp"]["y"],
+                    "y_end_lrp": consolidated["endpoint"]["lrp"]["y"],
+                    "y_end_lrp_fmm": consolidated["endpoint"]["lrp_fmm"]["y"],
+                    "y_end_fp_dijkstra": consolidated["endpoint"]["fp_dijkstra"]["y"],
+                    "y_end_fp_fmm": consolidated["endpoint"]["fp_fmm"]["y"],
+                    "endpoint_dy_fp_vs_lrp": consolidated["endpoint"]["dy"]["fp_vs_lrp"],
+                    "endpoint_dy_fp_vs_lrp_fmm": consolidated["endpoint"]["dy"]["fp_vs_lrp_fmm"],
+                    "endpoint_dy_fp_vs_dijkstra": consolidated["endpoint"]["dy"]["fp_vs_dijkstra"],
+                    "endpoint_dy_fp_vs_fmm": consolidated["endpoint"]["dy"]["fp_vs_fmm"],
+                    "pt_solver": config_dict["particle_tracking"]["solver"],
+                    "pt_backend": config_dict["particle_tracking"]["backend"],
+                    "pt_num_particles": config_dict["particle_tracking"]["num_particles"],
+                    "pt_velocity_location": config_dict["particle_tracking"]["velocity_location"],
+                    "pt_align_with_modflow_velocity": config_dict["particle_tracking"]["align_with_modflow_velocity"],
+                    "fmm_velocity_layout": config_dict["fmm"]["velocity_layout"],
+                    "fmm_face_output": config_dict["fmm"]["face_output"],
+                    "fmm_face_mapping": config_dict["fmm"]["face_mapping"],
+                    "fmm_solver": config_dict["fmm"]["solver"],
+                    "fmm_backtracking": config_dict["fmm"]["backtracking"],
+                    "fmm_zero_policy": config_dict["fmm"]["zero_policy"],
+                    "fmm_min_speed": config_dict["fmm"]["min_speed"],
+                    "fmm_zero_count": config_dict["fmm"]["zero_count"],
+                    "fmm_nontraversable_count": config_dict["fmm"]["nontraversable_count"],
                 }
             )
 
-            save_mc_outputs(config_mc=config_mc, mc_index=mc_index, outputs=record)
-            save_path_outputs(
-                config_mc=config_mc,
-                mc_index=mc_index,
-                lrp=lrp,
-                lrp_fmm=lrp_fmm,
-                fp_dijkstra=fp_dijkstra,
-                fp_fmm=fp_fmm,
-                fp=fp,
-            )
             logger.info(f"[MC {mc_index}] Trial {trial + 1} successful and outputs saved.")
             return record
 
@@ -803,7 +904,52 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
     )
     failed["status_code"] = 9
     failed["status_message"] = f"All {num_trial} trials failed"
-    save_mc_outputs(config_mc=config_mc, mc_index=mc_index, outputs=failed)
+
+    failed_consolidated = {
+        "meta": {
+            "schema_version": MC_SCHEMA_VERSION,
+            "mc_index": int(mc_index),
+            "trial_used": -1,
+            "status_code": 9,
+            "status_message": f"All {num_trial} trials failed",
+        },
+        "seeds": {
+            "base": none_to_nan(config_mc.get("seed_base", np.nan)),
+            "effective_run": none_to_nan(config_mc.get("seed_effective_run", np.nan)),
+            "mode": str(config_mc.get("seed_mode", "strict_mc")),
+            "mc": seed_mc if seed_mc is not None else np.nan,
+            "trial": np.nan,
+            "variance": {
+                "policy": config_mc.get("variance_seed_policy", "same"),
+                "rank": none_to_nan(config_mc.get("variance_rank", np.nan)),
+                "override": none_to_nan(config_mc.get("variance_seed_override", np.nan)),
+            },
+        },
+        "config": {
+            "particle_tracking": {
+                "solver": config_mc["particleTracking_arg"]["solver"],
+                "backend": config_mc["particleTracking_arg"].get("backend", "auto"),
+                "num_particles": int(resolve_particle_count(config_mc, source_rows)),
+                "velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
+                "align_with_modflow_velocity": bool(
+                    config_mc["particleTracking_arg"]["align_with_modflow_velocity"]
+                ),
+            },
+            "fmm": {
+                "velocity_layout": config_mc["fmm_arg"]["velocity_layout"],
+                "face_output": config_mc["fmm_arg"]["face_output"],
+                "face_mapping": config_mc["fmm_arg"]["face_mapping"],
+                "solver": config_mc["fmm_arg"]["solver"],
+                "backtracking": config_mc["fmm_arg"]["backtracking"],
+                "zero_policy": config_mc["fmm_arg"]["zero_policy"],
+                "min_speed": float(config_mc["fmm_arg"]["min_speed"]),
+                "zero_count": np.nan,
+                "nontraversable_count": np.nan,
+            },
+        },
+    }
+    save_mc_consolidated(config_mc=config_mc, mc_index=mc_index, consolidated=failed_consolidated)
+
     logger.error(f"[MC {mc_index}] All {num_trial} trials failed to produce valid outputs.")
     return failed
 
@@ -844,7 +990,7 @@ def run_field_size_simulation(idx_size: int, config_base: dict[str, Any]) -> dic
         else:
             agg[key] = np.asarray(values, dtype=float)
 
-    np.savez(str(config["path_size_mainOutput"] / f"mainOutput_size{field_size_}.npz"), **agg)
+    np.savez(str(config["path_size"] / f"size{field_size_}.npz"), **agg)
     logger.info(f"[SIZE {field_size_}] Main outputs saved.")
     logger.info(f"[SIZE {field_size_}] Completed simulation.")
     return {"idx_size": idx_size, "field_size": field_size_, "records": records}

@@ -585,7 +585,7 @@ def run_field_size_simulation_gpu(
         else:
             agg[key] = np.asarray(values, dtype=float)
 
-    np.savez(str(config["path_size_mainOutput"] / f"mainOutput_size{field_size_}.npz"), **agg)
+    np.savez(str(config["path_size"] / f"size{field_size_}.npz"), **agg)
     logger.info(f"[SIZE {field_size_}] Main outputs saved.")
     logger.info(f"[SIZE {field_size_}] Completed simulation.")
     return {"idx_size": idx_size, "field_size": field_size_, "records": records}

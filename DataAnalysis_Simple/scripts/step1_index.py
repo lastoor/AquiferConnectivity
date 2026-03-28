@@ -21,10 +21,10 @@ DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
         "fp_fpFMM": "endpoint_dy_fp_vs_fmm",
     },
     "hausdorff": {
-        "fp_lrp": "hausdorff_fp_vs_lrp",
-        "fp_lrpFMM": "hausdorff_fp_vs_lrp_fmm",
-        "fp_fpDijkstra": "hausdorff_fp_vs_dijkstra",
-        "fp_fpFMM": "hausdorff_fp_vs_fmm",
+        "fp_lrp": "hausdorffDist_fp_lrp_m",
+        "fp_lrpFMM": "hausdorffDist_fp_lrpFMM_m",
+        "fp_fpDijkstra": "hausdorffDist_fp_fpDijkstra_m",
+        "fp_fpFMM": "hausdorffDist_fp_fpFMM_m",
     },
     "frechet": {
         "fp_lrp": "frechetDist_fp_lrp_m",
@@ -129,6 +129,7 @@ class RunPaths:
     size_dir: Path
     size_value: float
     size_str: str
+    mc_files: list[Path] = field(default_factory=list)
     main_output_files: list[Path] = field(default_factory=list)
     fp_files: list[Path] = field(default_factory=list)
     lrp_files: list[Path] = field(default_factory=list)
@@ -304,7 +305,7 @@ def default_cache_dir(cfg: VisualizationConfig) -> Path:
 
 
 def _size_sort_key(size_dir: Path) -> int:
-    return int(size_dir.name.split("size")[-1])
+    return int(size_dir.name.lower().split("size")[-1])
 
 
 def _value_dir_candidates(value: float) -> list[str]:
@@ -328,6 +329,14 @@ def _resolve_value_dir(run_dir: Path, prefix: str, value: float) -> Path:
 
 
 def _collect_run_paths(size_dir: Path, size_str: str) -> RunPaths:
+    mc_files = sorted(size_dir.glob(f"size{size_str}_mc*.npy"))
+    if mc_files:
+        return RunPaths(
+            size_dir=size_dir,
+            size_value=float(size_str),
+            size_str=size_str,
+            mc_files=mc_files,
+        )
     main_output_files = sorted((size_dir / "main_output").glob(f"mainOutput_size{size_str}_mc*.npz"))
     path_dir = size_dir / "path"
     return RunPaths(
@@ -344,16 +353,33 @@ def _collect_run_paths(size_dir: Path, size_str: str) -> RunPaths:
     )
 
 
+def _discover_size_dirs(base: Path, length_scale: float) -> list[Path]:
+    patterns = [
+        f"LengthScale{length_scale}_Size*",
+        f"lengthScale{length_scale}_size*",
+    ]
+    found: dict[str, Path] = {}
+    for pattern in patterns:
+        for d in base.glob(pattern):
+            if d.name not in found:
+                found[d.name] = d
+    return sorted(found.values(), key=_size_sort_key)
+
+
+def _extract_size_str(dir_name: str) -> str:
+    lower = dir_name.lower()
+    return lower.split("size")[-1]
+
+
 def discover_variance_runs(cfg: VisualizationConfig) -> dict[float, list[RunPaths]]:
     output: dict[float, list[RunPaths]] = {}
     run_dir = cfg.data_root / f"run{cfg.run_id}"
     for var_ in cfg.variance_values:
         base = _resolve_value_dir(run_dir, "var", var_)
-        pattern = f"lengthScale{cfg.length_scale}_size*"
-        size_dirs = sorted(base.glob(pattern), key=_size_sort_key)
+        size_dirs = _discover_size_dirs(base, cfg.length_scale)
         runs: list[RunPaths] = []
         for size_dir in size_dirs:
-            size_str = size_dir.name.split("size")[-1]
+            size_str = _extract_size_str(size_dir.name)
             runs.append(_collect_run_paths(size_dir, size_str))
         output[var_] = runs
     return output
@@ -364,11 +390,10 @@ def discover_std_runs(cfg: VisualizationConfig) -> dict[float, list[RunPaths]]:
     run_dir = cfg.data_root / f"run{cfg.run_id}"
     for std_ in cfg.std_values:
         base = _resolve_value_dir(run_dir, "std", std_)
-        pattern = f"lengthScale{cfg.length_scale}_size*"
-        size_dirs = sorted(base.glob(pattern), key=_size_sort_key)
+        size_dirs = _discover_size_dirs(base, cfg.length_scale)
         runs: list[RunPaths] = []
         for size_dir in size_dirs:
-            size_str = size_dir.name.split("size")[-1]
+            size_str = _extract_size_str(size_dir.name)
             runs.append(_collect_run_paths(size_dir, size_str))
         output[std_] = runs
     return output
@@ -379,6 +404,7 @@ def runpaths_to_dict(rp: RunPaths) -> dict[str, Any]:
         "size_dir": str(rp.size_dir),
         "size_value": rp.size_value,
         "size_str": rp.size_str,
+        "mc_files": [str(p) for p in rp.mc_files],
         "main_output_files": [str(p) for p in rp.main_output_files],
         "fp_files": [str(p) for p in rp.fp_files],
         "lrp_files": [str(p) for p in rp.lrp_files],

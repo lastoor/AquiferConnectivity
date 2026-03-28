@@ -27,17 +27,36 @@ def _face_to_cell_speed_trimmed(vx: np.ndarray, vy: np.ndarray) -> np.ndarray:
     return np.sqrt(vx_cell * vx_cell + vy_cell * vy_cell)
 
 
-def _face_to_cell_speed_full(vx: np.ndarray, vy: np.ndarray) -> np.ndarray:
-    """Convert full staggered face flux arrays to a cell-centered speed proxy."""
-    vx_face = np.abs(np.asarray(vx, dtype=float))
-    vy_face = np.abs(np.asarray(vy, dtype=float))
-    if vx_face.ndim != 2 or vy_face.ndim != 2:
+def _face_to_cell_speed_full(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    *,
+    return_vector: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
+    """Convert full staggered face flux arrays to cell-centered values.
+
+    When *return_vector* is False (default) the absolute values of the face
+    fluxes are averaged and the scalar speed magnitude is returned.  When True
+    the signed face values are averaged and the ``(vx_cell, vy_cell)`` pair is
+    returned instead, preserving direction information needed for angle-based
+    metrics.
+    """
+    vx_raw = np.asarray(vx, dtype=float)
+    vy_raw = np.asarray(vy, dtype=float)
+    if vx_raw.ndim != 2 or vy_raw.ndim != 2:
         raise ValueError("full face velocity components must be 2D arrays")
-    if vx_face.shape[0] != vy_face.shape[0] - 1 or vx_face.shape[1] != vy_face.shape[1] + 1:
+    if vx_raw.shape[0] != vy_raw.shape[0] - 1 or vx_raw.shape[1] != vy_raw.shape[1] + 1:
         raise ValueError(
             "full face velocity shapes must satisfy vx.shape == (ny, nx+1) and vy.shape == (ny+1, nx)"
         )
 
+    if return_vector:
+        vx_cell = 0.5 * (vx_raw[:, :-1] + vx_raw[:, 1:])
+        vy_cell = 0.5 * (vy_raw[:-1, :] + vy_raw[1:, :])
+        return vx_cell, vy_cell
+
+    vx_face = np.abs(vx_raw)
+    vy_face = np.abs(vy_raw)
     vx_cell = 0.5 * (vx_face[:, :-1] + vx_face[:, 1:])
     vy_cell = 0.5 * (vy_face[:-1, :] + vy_face[1:, :])
     return np.sqrt(vx_cell * vx_cell + vy_cell * vy_cell)

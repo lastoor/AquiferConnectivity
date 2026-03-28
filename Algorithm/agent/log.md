@@ -94,3 +94,14 @@
   - CLI guard checks for CPU-vs-GPU entrypoints
   - `tests/test_run_fmm_gpu_worker.py`
   - relevant `tests/test_run_fmm_integration.py` and `tests/test_import_contract.py` slices
+
+## 2026-03-27
+
+- Consolidated per-MC output in `./scripts/run_fmm.py`: all data (fields, paths, endpoints, Hausdorff, Shannon entropy, seeds, config) saved as a single nested dict in `size{N}_mc{i}.npy` with `allow_pickle=True`. Removed old separate saves and `main_output/`, `path/`, `logk_field/` subdirectories.
+- Changed output folder naming from `lengthScale{L}_size{N}` to `LengthScale{L}_Size{N}`.
+- Added Hausdorff detail stats per path pair: full symmetric minimal distance array (`distances`) plus `max`, `mean`, `std`, `median`.
+- Added Shannon entropy metrics for velocity magnitude and angle distribution (`shannon_entropy_vmag`, `shannon_entropy_angle`) as new per-MC scalars in `MC_FIELDS`.
+- Removed old Hausdorff scalar fields (`hausdorff_fp_vs_lrp`, etc.) from `MC_FIELDS`.
+- Extended `_face_to_cell_speed_full` in `./src/fmm_core/speed.py` with a `return_vector` keyword option to return signed cell-centered `(vx_cell, vy_cell)` components instead of the scalar magnitude, needed for angle-based entropy computation on staggered face velocity fields.
+- Updated `./scripts/run_fmm_gpu_worker.py` aggregation save path to match new folder structure.
+- Updated `DataAnalysis_Simple` scripts (`step1_index.py`, `step2_metrics.py`) to discover and load data from the new consolidated `.npy` files and `LengthScale{L}_Size{N}` directories, with backward compatibility for older structures.

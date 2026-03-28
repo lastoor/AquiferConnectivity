@@ -3,7 +3,7 @@ set -euo pipefail
 
 VAR=("0" "0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
 length_scale="0.05"
-run="8_pollock_gpu_1e6_discrete"
+run="9_newoutput_fmmdiscrete"
 dh="0.1"
 
 num_mc="1000"

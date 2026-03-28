@@ -113,18 +113,64 @@ def runpaths_from_dict(raw: dict[str, Any]) -> RunPaths:
         size_dir=Path(raw["size_dir"]),
         size_value=float(raw["size_value"]),
         size_str=str(raw["size_str"]),
-        main_output_files=[Path(p) for p in raw["main_output_files"]],
-        fp_files=[Path(p) for p in raw["fp_files"]],
-        lrp_files=[Path(p) for p in raw["lrp_files"]],
+        mc_files=[Path(p) for p in raw.get("mc_files", [])],
+        main_output_files=[Path(p) for p in raw.get("main_output_files", [])],
+        fp_files=[Path(p) for p in raw.get("fp_files", [])],
+        lrp_files=[Path(p) for p in raw.get("lrp_files", [])],
         lrp_fmm_files=[Path(p) for p in raw.get("lrp_fmm_files", [])],
-        fp_dijkstra_files=[Path(p) for p in raw["fp_dijkstra_files"]],
-        fp_fmm_files=[Path(p) for p in raw["fp_fmm_files"]],
-        logk_files=[Path(p) for p in raw["logk_files"]],
+        fp_dijkstra_files=[Path(p) for p in raw.get("fp_dijkstra_files", [])],
+        fp_fmm_files=[Path(p) for p in raw.get("fp_fmm_files", [])],
+        logk_files=[Path(p) for p in raw.get("logk_files", [])],
     )
 
 
 def deserialize_discovered(raw: dict[float, list[dict[str, Any]]]) -> dict[float, list[RunPaths]]:
     return {float(k): [runpaths_from_dict(rp) for rp in v] for k, v in raw.items()}
+
+
+def load_mc_consolidated(npy_path: Path) -> dict[str, Any]:
+    return np.load(npy_path, allow_pickle=True).item()
+
+
+def _consolidated_to_output_data(mc: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    paths = mc.get("paths", {})
+    for key in ("fp", "fp_dijkstra", "fp_fmm"):
+        p = paths.get(key, {})
+        out[f"len_{key}"] = p.get("length", np.nan)
+        out[f"travel_time_{key}".replace("travel_time_fp_", "travel_time_")] = p.get("travel_time", np.nan)
+    out["travel_time_fp"] = paths.get("fp", {}).get("travel_time", np.nan)
+    out["travel_time_dijkstra"] = paths.get("fp_dijkstra", {}).get("travel_time", np.nan)
+    out["travel_time_fmm"] = paths.get("fp_fmm", {}).get("travel_time", np.nan)
+    for key in ("lrp", "lrp_fmm"):
+        p = paths.get(key, {})
+        out[f"len_{key}"] = p.get("length", np.nan)
+        out[f"resistance_{key}"] = p.get("resistance", np.nan)
+    endpoint = mc.get("endpoint", {})
+    dy = endpoint.get("dy", {})
+    out["endpoint_dy_fp_vs_lrp"] = dy.get("fp_vs_lrp", np.nan)
+    out["endpoint_dy_fp_vs_lrp_fmm"] = dy.get("fp_vs_lrp_fmm", np.nan)
+    out["endpoint_dy_fp_vs_dijkstra"] = dy.get("fp_vs_dijkstra", np.nan)
+    out["endpoint_dy_fp_vs_fmm"] = dy.get("fp_vs_fmm", np.nan)
+    entropy = mc.get("shannon_entropy", {})
+    out["shannon_entropy_vmag"] = entropy.get("vmag", np.nan)
+    out["shannon_entropy_angle"] = entropy.get("angle", np.nan)
+    return out
+
+
+def _consolidated_to_pathset(mc: dict[str, Any]) -> PathSet:
+    paths = mc.get("paths", {})
+    return PathSet(
+        fp=paths.get("fp", {}).get("coords"),
+        lrp=paths.get("lrp", {}).get("coords"),
+        lrp_fmm=paths.get("lrp_fmm", {}).get("coords"),
+        fp_dijkstra=paths.get("fp_dijkstra", {}).get("coords"),
+        fp_fmm=paths.get("fp_fmm", {}).get("coords"),
+    )
+
+
+def _consolidated_to_logk(mc: dict[str, Any]) -> np.ndarray | None:
+    return mc.get("fields", {}).get("logk")
 
 
 def load_main_output(npz_path: Path) -> dict[str, Any]:
@@ -525,15 +571,21 @@ def _compute_line_integrals_for_var(
         "fp_fmm": {"logk": [], "logk2": []},
     }
 
-    n_mc = len(target.logk_files)
+    use_consolidated = bool(target.mc_files)
+    n_mc = len(target.mc_files) if use_consolidated else len(target.logk_files)
     if max_mc_per_size is not None:
         n_mc = min(n_mc, max_mc_per_size)
 
     for mc_idx in range(n_mc):
-        field = load_logk_field(target, mc_idx)
+        if use_consolidated:
+            mc = load_mc_consolidated(target.mc_files[mc_idx])
+            field = _consolidated_to_logk(mc)
+            pathset = _consolidated_to_pathset(mc)
+        else:
+            field = load_logk_field(target, mc_idx)
+            pathset = load_paths(target, mc_idx)
         if field is None:
             continue
-        pathset = load_paths(target, mc_idx)
         ints = compute_mc_line_integrals(pathset, field, grid_spacing=1.0)
         for key, pair in ints.items():
             if pair[0] is None:
@@ -588,7 +640,8 @@ def run_variance_analysis_from_discovered(
         run_iter = tqdm(run_paths, desc=f"var={var_} sizes", unit="size", leave=False) if show_progress else run_paths
         for rp in run_iter:
             field_size_list.append(rp.size_value)
-            if not rp.main_output_files:
+            use_consolidated = bool(rp.mc_files)
+            if not rp.mc_files and not rp.main_output_files:
                 warnings.append(f"No mainOutput files found for var={var_}, size={rp.size_str}")
                 continue
 
@@ -615,13 +668,20 @@ def run_variance_analysis_from_discovered(
             end_fp_d: list[float] = []
             end_fp_fmm: list[float] = []
 
-            main_output_files = rp.main_output_files[:max_mc_per_size] if max_mc_per_size is not None else rp.main_output_files
-            mc_iter = enumerate(main_output_files)
+            iter_files = rp.mc_files if use_consolidated else rp.main_output_files
+            if max_mc_per_size is not None:
+                iter_files = iter_files[:max_mc_per_size]
+            mc_iter = enumerate(iter_files)
             if show_progress:
-                mc_iter = enumerate(tqdm(main_output_files, desc=f"var={var_} size={rp.size_str} MC", unit="mc", leave=False))
+                mc_iter = enumerate(tqdm(iter_files, desc=f"var={var_} size={rp.size_str} MC", unit="mc", leave=False))
 
             for mc_idx, path in mc_iter:
-                output_data = load_main_output(path)
+                mc_consolidated = None
+                if use_consolidated:
+                    mc_consolidated = load_mc_consolidated(path)
+                    output_data = _consolidated_to_output_data(mc_consolidated)
+                else:
+                    output_data = load_main_output(path)
                 len_fp_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp"])
                 len_fp_dijkstra_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp_dijkstra"])
                 len_fp_fmm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp_fmm"])
@@ -664,6 +724,11 @@ def run_variance_analysis_from_discovered(
                 mhr_m.append(mhr_val)
                 mhr_fmm_m.append(mhr_fmm_val)
 
+                if use_consolidated and mc_consolidated is not None:
+                    pathset_loader_fn = lambda mc=mc_consolidated: _consolidated_to_pathset(mc)
+                else:
+                    pathset_loader_fn = lambda rp=rp, mc_idx=mc_idx: load_paths(rp, mc_idx)
+
                 dist_values, distance_warnings = resolve_distances(
                     cfg,
                     output_data,
@@ -671,7 +736,7 @@ def run_variance_analysis_from_discovered(
                     workers=cfg.workers,
                     hausdorff_compute_method=hausdorff_compute_method,
                     frechet_compute_method=frechet_compute_method,
-                    pathset_loader=lambda rp=rp, mc_idx=mc_idx: load_paths(rp, mc_idx),
+                    pathset_loader=pathset_loader_fn,
                 )
                 for warning in distance_warnings:
                     _add_unique_warning(warnings, warning_seen, warning)
@@ -768,7 +833,8 @@ def run_std_analysis_from_discovered(
         run_iter = tqdm(runs, desc=f"std={std_} sizes", unit="size", leave=False) if show_progress else runs
         for rp in run_iter:
             field_size.append(rp.size_value)
-            if not (rp.fp_files or rp.lrp_files or rp.lrp_fmm_files or rp.fp_dijkstra_files or rp.fp_fmm_files or rp.main_output_files):
+            use_consolidated = bool(rp.mc_files)
+            if not rp.mc_files and not (rp.fp_files or rp.lrp_files or rp.lrp_fmm_files or rp.fp_dijkstra_files or rp.fp_fmm_files or rp.main_output_files):
                 warnings.append(f"No path/mainOutput files found for std={std_}, size={rp.size_str}")
                 continue
 
@@ -785,29 +851,37 @@ def run_std_analysis_from_discovered(
             frechetDist_fp_fpFMM_m: list[float] = []
             endPointDist_fp_fpFMM_m: list[float] = []
 
-            n_mc = max(
-                len(rp.fp_files),
-                len(rp.lrp_files),
-                len(rp.lrp_fmm_files),
-                len(rp.fp_dijkstra_files),
-                len(rp.fp_fmm_files),
-                len(rp.main_output_files),
-            )
+            if use_consolidated:
+                n_mc = len(rp.mc_files)
+            else:
+                n_mc = max(
+                    len(rp.fp_files),
+                    len(rp.lrp_files),
+                    len(rp.lrp_fmm_files),
+                    len(rp.fp_dijkstra_files),
+                    len(rp.fp_fmm_files),
+                    len(rp.main_output_files),
+                )
             if max_mc_per_size is not None:
                 n_mc = min(n_mc, max_mc_per_size)
 
             mc_range = tqdm(range(n_mc), desc=f"std={std_} size={rp.size_str} MC", unit="mc", leave=False) if show_progress else range(n_mc)
             for mc_idx in mc_range:
-                output_data = load_main_output(rp.main_output_files[mc_idx]) if mc_idx < len(rp.main_output_files) else None
+                if use_consolidated:
+                    mc_consolidated = load_mc_consolidated(rp.mc_files[mc_idx])
+                    output_data = _consolidated_to_output_data(mc_consolidated)
+                    pathset_loader_fn = lambda mc=mc_consolidated: _consolidated_to_pathset(mc)
+                else:
+                    output_data = load_main_output(rp.main_output_files[mc_idx]) if mc_idx < len(rp.main_output_files) else None
 
-                def _load_pathset(rp: RunPaths = rp, mc_idx: int = mc_idx) -> PathSet:
-                    return PathSet(
-                        fp=_safe_load(rp.fp_files, mc_idx),
-                        lrp=_safe_load(rp.lrp_files, mc_idx),
-                        lrp_fmm=_safe_load(rp.lrp_fmm_files, mc_idx),
-                        fp_dijkstra=_safe_load(rp.fp_dijkstra_files, mc_idx),
-                        fp_fmm=_safe_load(rp.fp_fmm_files, mc_idx),
-                    )
+                    def pathset_loader_fn(rp: RunPaths = rp, mc_idx: int = mc_idx) -> PathSet:
+                        return PathSet(
+                            fp=_safe_load(rp.fp_files, mc_idx),
+                            lrp=_safe_load(rp.lrp_files, mc_idx),
+                            lrp_fmm=_safe_load(rp.lrp_fmm_files, mc_idx),
+                            fp_dijkstra=_safe_load(rp.fp_dijkstra_files, mc_idx),
+                            fp_fmm=_safe_load(rp.fp_fmm_files, mc_idx),
+                        )
 
                 dist_values, distance_warnings = resolve_distances(
                     cfg,
@@ -816,7 +890,7 @@ def run_std_analysis_from_discovered(
                     workers=cfg.workers,
                     hausdorff_compute_method=hausdorff_compute_method,
                     frechet_compute_method=frechet_compute_method,
-                    pathset_loader=_load_pathset,
+                    pathset_loader=pathset_loader_fn,
                 )
                 for warning in distance_warnings:
                     full = f"std={std_}, size={rp.size_str}, {warning}"
