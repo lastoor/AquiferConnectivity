@@ -9,6 +9,12 @@ from typing import Any
 import numpy as np
 from scipy.stats import wasserstein_distance
 
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional dependency
+    def tqdm(iterable=None, **kwargs):  # type: ignore[override]
+        return iterable
+
 from step1_index import RunPaths, VisualizationConfig, default_cache_dir, load_config, save_pickle, write_stage_metadata
 from step2_metrics import deserialize_discovered, load_mc_consolidated
 
@@ -396,13 +402,16 @@ def collect_hausdorff_cdf_ensemble(
     discovered_var: dict[float, list[RunPaths]],
     var_values: list[float],
     cfg: VisualizationConfig,
+    *,
+    show_progress: bool = False,
 ) -> tuple[dict[str, dict[str, dict[str, np.ndarray]]], list[str]]:
     out: dict[str, dict[str, dict[str, np.ndarray]]] = {}
     warnings: list[str] = []
 
     target_size = int(cfg.field_size_ref)
 
-    for var_ in var_values:
+    var_iter = tqdm(var_values, desc="Hausdorff CDF variance", unit="var", leave=False) if show_progress else var_values
+    for var_ in var_iter:
         var_key = f"var_{var_}"
         run_paths_list = discovered_var.get(var_, [])
         target_rp = next((rp for rp in run_paths_list if int(rp.size_value) == target_size), None)
@@ -412,7 +421,8 @@ def collect_hausdorff_cdf_ensemble(
 
         raw_dists: dict[str, list[np.ndarray]] = {display: [] for _, display in _MC_HAUSDORFF_PAIRS}
 
-        for mc_path in target_rp.mc_files:
+        mc_iter = tqdm(target_rp.mc_files, desc=f"var={var_} MC files", unit="mc", leave=False) if show_progress else target_rp.mc_files
+        for mc_path in mc_iter:
             try:
                 mc = load_mc_consolidated(mc_path)
             except Exception:
@@ -448,6 +458,67 @@ def collect_hausdorff_cdf_ensemble(
 
         if pair_result:
             out[var_key] = pair_result
+
+    return out, warnings
+
+
+_HAUSDORFF_STAT_KEYS = ("max", "mean", "median")
+
+
+def collect_entropy_hausdorff_samples(
+    discovered_var: dict[float, list[RunPaths]],
+    var_values: list[float],
+    cfg: VisualizationConfig,
+    *,
+    show_progress: bool = False,
+) -> tuple[dict[str, dict[str, Any]], list[str]]:
+    """Collect per-MC Renyi entropy profiles and Hausdorff summary stats from consolidated files."""
+    out: dict[str, dict[str, Any]] = {}
+    warnings: list[str] = []
+    target_size = int(cfg.field_size_ref)
+
+    var_iter = tqdm(var_values, desc="Entropy+Hausdorff samples", unit="var", leave=False) if show_progress else var_values
+    for var_ in var_iter:
+        var_key = f"var_{var_}"
+        run_paths_list = discovered_var.get(var_, [])
+        target_rp = next((rp for rp in run_paths_list if int(rp.size_value) == target_size), None)
+        if target_rp is None or not target_rp.mc_files:
+            warnings.append(f"Entropy+Hausdorff samples: no MC files for sigma2={var_}, size={target_size}.")
+            continue
+
+        renyi_s1_list: list[np.ndarray] = []
+        renyi_s2_list: list[np.ndarray] = []
+        haus: dict[str, dict[str, list[float]]] = {
+            stat: {display: [] for _, display in _MC_HAUSDORFF_PAIRS}
+            for stat in _HAUSDORFF_STAT_KEYS
+        }
+
+        mc_iter = tqdm(target_rp.mc_files, desc=f"var={var_} MC", unit="mc", leave=False) if show_progress else target_rp.mc_files
+        for mc_path in mc_iter:
+            try:
+                mc = load_mc_consolidated(mc_path)
+            except Exception:
+                continue
+            renyi = mc.get("renyi_entropy", {})
+            renyi_s1_list.append(np.asarray(renyi.get("S1", [np.nan]), dtype=float))
+            renyi_s2_list.append(np.asarray(renyi.get("S2", [np.nan]), dtype=float))
+
+            hausdorff_block = mc.get("hausdorff", {})
+            for mc_key, display_key in _MC_HAUSDORFF_PAIRS:
+                pair_data = hausdorff_block.get(mc_key, {})
+                for stat in _HAUSDORFF_STAT_KEYS:
+                    haus[stat][display_key].append(float(pair_data.get(stat, np.nan)))
+
+        result: dict[str, Any] = {
+            "renyi_S1": renyi_s1_list,
+            "renyi_S2": renyi_s2_list,
+        }
+        for stat in _HAUSDORFF_STAT_KEYS:
+            result[f"hausdorff_{stat}"] = {
+                display: np.asarray(haus[stat][display], dtype=float)
+                for _, display in _MC_HAUSDORFF_PAIRS
+            }
+        out[var_key] = result
 
     return out, warnings
 
@@ -499,6 +570,8 @@ def prepare_plot_inputs(
     var_results: Any,
     std_results: Any | None,
     discovered_var: dict[float, list[RunPaths]] | None = None,
+    *,
+    show_progress: bool = False,
 ) -> dict[str, Any]:
     var_stats = _pick(var_results, "stats")
     var_data = _pick(var_results, "data")
@@ -520,9 +593,12 @@ def prepare_plot_inputs(
     derived_warnings.extend(hausdorff_box_warnings)
 
     hausdorff_cdf_ensemble: dict[str, dict[str, dict[str, np.ndarray]]] = {}
+    entropy_hausdorff_samples: dict[str, dict[str, Any]] = {}
     if discovered_var is not None:
-        hausdorff_cdf_ensemble, hcdf_warnings = collect_hausdorff_cdf_ensemble(discovered_var, var_values, cfg)
+        hausdorff_cdf_ensemble, hcdf_warnings = collect_hausdorff_cdf_ensemble(discovered_var, var_values, cfg, show_progress=show_progress)
         derived_warnings.extend(hcdf_warnings)
+        entropy_hausdorff_samples, eh_warnings = collect_entropy_hausdorff_samples(discovered_var, var_values, cfg, show_progress=show_progress)
+        derived_warnings.extend(eh_warnings)
 
     field_size_arr = np.asarray(var_field_size, dtype=float)
     field_size = cfg.field_size_ref if field_size_arr.size == 0 else float(field_size_arr[0])
@@ -567,6 +643,7 @@ def prepare_plot_inputs(
         "endpoint_box_samples": endpoint_box_samples,
         "hausdorff_box_samples": hausdorff_box_samples,
         "hausdorff_cdf_ensemble": hausdorff_cdf_ensemble,
+        "entropy_hausdorff_samples": entropy_hausdorff_samples,
         "derived_warnings": derived_warnings,
     }
 
@@ -583,7 +660,7 @@ def run_stage3(cfg: VisualizationConfig, *, cache_dir: Path | None = None) -> Pa
         index = load_pickle(index_path)
         discovered_var = deserialize_discovered(index["variance"])
 
-    plot_inputs = prepare_plot_inputs(cfg, var_results, std_results, discovered_var=discovered_var)
+    plot_inputs = prepare_plot_inputs(cfg, var_results, std_results, discovered_var=discovered_var, show_progress=True)
     payload = {
         "plot_inputs": plot_inputs,
         "warnings": metrics.get("warnings", {}),

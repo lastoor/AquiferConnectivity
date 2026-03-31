@@ -19,6 +19,12 @@ from scipy import constants
 from scipy.optimize import brentq
 from scipy.special import erfc, expi
 
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional dependency
+    def tqdm(iterable=None, **kwargs):  # type: ignore[override]
+        return iterable
+
 from step1_index import VisualizationConfig, default_cache_dir, load_config
 
 COLORS = {
@@ -725,6 +731,87 @@ def plot_hausdorff_cdf_ensemble(
     return fig, {"kind": "hausdorff_cdf_ensemble", "variance": float(variance_value)}
 
 
+_ENTROPY_HAUSDORFF_PANELS = (
+    ("fp_fpFMM", "FP (FMM)"),
+    ("fp_fpDijkstra", "FP (Dijkstra)"),
+    ("fp_lrpFMM", "LRP (FMM)"),
+    ("fp_lrp", "LRP (Dijkstra)"),
+)
+
+_HAUSDORFF_STAT_STYLES = {
+    "max": {"color": "#D62728", "marker": "^", "label": "max"},
+    "mean": {"color": "#1F77B4", "marker": "o", "label": "mean"},
+    "median": {"color": "#2CA02C", "marker": "s", "label": "median"},
+}
+
+
+def plot_entropy_vs_hausdorff(
+    samples: dict[str, Any],
+    variance_value: float,
+    i_y: float,
+    *,
+    sort_by_entropy: bool = False,
+    subsample: int = 1,
+):
+    renyi_s1_list = samples.get("renyi_S1", [])
+    renyi_s2_list = samples.get("renyi_S2", [])
+    mean_s1 = np.asarray([float(np.nanmean(a)) for a in renyi_s1_list], dtype=float)
+    mean_s2 = np.asarray([float(np.nanmean(a)) for a in renyi_s2_list], dtype=float)
+    
+    def _r_squared(x: np.ndarray, y: np.ndarray) -> float:
+        mask = np.isfinite(x) & np.isfinite(y)
+        if mask.sum() < 3:
+            return float("nan")
+        r = float(np.corrcoef(x[mask], y[mask])[0, 1])
+        return r * r
+
+    n_rows = len(_ENTROPY_HAUSDORFF_PANELS)
+    fig, axes = plt.subplots(n_rows, 2, figsize=(10, 2.8 * n_rows))
+
+    entropy_cols = [
+        (mean_s1, r"$\overline{S}_1(x)$"),
+        (mean_s2, r"$\overline{S}_2(x)$"),
+    ]
+
+    for row_idx, (pair_key, panel_label) in enumerate(_ENTROPY_HAUSDORFF_PANELS):
+        for col_idx, (entropy_arr, entropy_label) in enumerate(entropy_cols):
+            ax = axes[row_idx, col_idx]
+            for stat_key, style in _HAUSDORFF_STAT_STYLES.items():
+                haus_data = samples.get(f"hausdorff_{stat_key}", {})
+                full_arr = np.asarray(haus_data.get(pair_key, []), dtype=float)
+                if full_arr.size == 0:
+                    continue
+                n = min(len(entropy_arr), len(full_arr))
+                x = entropy_arr[:n]
+                y = full_arr[:n] / i_y
+                r2 = _r_squared(x, y)
+                label = f"{style['label']}: $R^2={r2:.2f}$"
+                ax.scatter(
+                    x, y,
+                    s=12, alpha=0.5,
+                    marker=style["marker"],
+                    color=style["color"],
+                    label=label,
+                )
+            ax.set_ylabel(r"$d_H / I_Y$")
+            ax.set_yscale("log")
+            ax.legend(fontsize=6, loc="best")
+            ax.grid(True, alpha=0.3)
+            if row_idx == 0:
+                ax.set_title(entropy_label, fontsize=10)
+            if row_idx == n_rows - 1:
+                ax.set_xlabel(entropy_label)
+            ax.annotate(
+                panel_label, xy=(0.02, 0.95), xycoords="axes fraction",
+                fontsize=8, ha="left", va="top",
+                bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="gray", alpha=0.7),
+            )
+
+    fig.suptitle(fr"$\sigma_Y^2 = {variance_value:g}$", fontsize=11)
+    fig.tight_layout()
+    return fig, {"kind": "entropy_hausdorff", "variance": float(variance_value)}
+
+
 def plot_times_box_by_variance(
     var: np.ndarray,
     time_samples: dict[str, dict[str, np.ndarray]],
@@ -967,6 +1054,7 @@ def run_stage4(
     plot_variances: list[float] | None = None,
     scatter_modes: list[str] | None = None,
     hausdorff_cdf: bool = False,
+    entropy_hausdorff: bool = False,
 ) -> list[FigureArtifact]:
     cache_dir = cache_dir or default_cache_dir(cfg)
     payload = load_pickle(cache_dir / "stage3_plot_inputs.pkl")
@@ -1039,7 +1127,7 @@ def run_stage4(
                 all_warnings.append("Requested scatter all-points mode but Stage 3 cache is missing scatter_time_samples.")
             else:
                 requested = _resolve_requested_plot_variances(var, plot_variances)
-                for variance_value in requested:
+                for variance_value in tqdm(requested, desc="Scatter all-points", unit="var", leave=False):
                     key = _resolve_sample_key(scatter_samples_by_var, variance_value)
                     if key is None:
                         all_warnings.append(f"Missing scatter samples for sigma2={variance_value}.")
@@ -1141,7 +1229,7 @@ def run_stage4(
                 all_warnings.append("Requested Wasserstein/CDF plot but Stage 3 cache is missing length_cdf_samples.")
             else:
                 requested = _resolve_requested_plot_variances(var, plot_variances)
-                for variance_value in requested:
+                for variance_value in tqdm(requested, desc="Length CDF figures", unit="var", leave=False):
                     key = _resolve_sample_key(samples_by_var, variance_value)
                     if key is None:
                         all_warnings.append(f"Missing length CDF samples for sigma2={variance_value}.")
@@ -1183,13 +1271,40 @@ def run_stage4(
             all_warnings.append("Requested hausdorff CDF ensemble plot but Stage 3 cache is missing hausdorff_cdf_ensemble data.")
         else:
             requested = _resolve_requested_plot_variances(var, plot_variances)
-            for variance_value in requested:
+            for variance_value in tqdm(requested, desc="Hausdorff CDF figures", unit="var", leave=False):
                 key = _resolve_sample_key(hcdf_data, variance_value)
                 if key is None:
                     all_warnings.append(f"Missing hausdorff CDF ensemble data for sigma2={variance_value}.")
                     continue
                 fig, meta = plot_hausdorff_cdf_ensemble(hcdf_data[key], variance_value, i_y)
                 section = f"hausdorff_cdf_var{_value_slug(variance_value)}"
+                artifacts.extend(
+                    save_figure(
+                        fig,
+                        section=section,
+                        output_dir=cfg.output_dir,
+                        run_id=cfg.run_id,
+                        dpi=cfg.figure_dpi,
+                        save_formats=cfg.save_formats,
+                        metadata=meta,
+                        unique_filenames=unique_filenames,
+                    )
+                )
+                plt.close(fig)
+
+    if entropy_hausdorff:
+        eh_data = prepared.get("entropy_hausdorff_samples")
+        if not isinstance(eh_data, dict) or not eh_data:
+            all_warnings.append("Requested entropy-hausdorff plot but Stage 3 cache is missing entropy_hausdorff_samples data.")
+        else:
+            requested = _resolve_requested_plot_variances(var, plot_variances)
+            for variance_value in tqdm(requested, desc="Entropy+Hausdorff figures", unit="var", leave=False):
+                key = _resolve_sample_key(eh_data, variance_value)
+                if key is None:
+                    all_warnings.append(f"Missing entropy+hausdorff samples for sigma2={variance_value}.")
+                    continue
+                fig, meta = plot_entropy_vs_hausdorff(eh_data[key], variance_value, i_y)
+                section = f"entropy_hausdorff_var{_value_slug(variance_value)}"
                 artifacts.extend(
                     save_figure(
                         fig,
@@ -1237,6 +1352,12 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Plot ensemble-averaged empirical CDF of Hausdorff nearest-neighbor distances",
     )
+    parser.add_argument(
+        "--entropy-hausdorff",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Plot per-MC Renyi entropy and Hausdorff summary stats (mean/median/max) vs MC index",
+    )
     return parser.parse_args()
 
 
@@ -1252,6 +1373,7 @@ def main() -> int:
         plot_variances=_parse_plot_variances(args.plot_variances),
         scatter_modes=_parse_scatter_modes(args.scatter_mode),
         hausdorff_cdf=args.hausdorff_cdf,
+        entropy_hausdorff=args.entropy_hausdorff,
     )
     print(f"Generated {len(artifacts)} figure artifact(s) in {cfg.output_dir}")
     return 0

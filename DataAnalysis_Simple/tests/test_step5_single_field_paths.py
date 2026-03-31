@@ -18,6 +18,7 @@ def _mock_result() -> step5.PathSolveResult:
         np.array([[0.0, 0.7], [2.0, 2.1], [4.0, 3.1]], dtype=float),
     ]
     t_min = np.ones((8, 8), dtype=float)
+    t_min_lrp = np.ones((8, 8), dtype=float)
     h = np.ones((8, 8), dtype=float)
     x = np.arange(0, 8, 1.0)
     y = np.arange(0, 8, 1.0)
@@ -30,6 +31,7 @@ def _mock_result() -> step5.PathSolveResult:
         fp_fmm=fp_fmm,
         lrp_fmm=lrp_fmm,
         t_min=t_min,
+        t_min_lrp=t_min_lrp,
         linearized_fp_paths=linearized_fp_paths,
         linearized_fp_indices=[1, 2],
         linearized_fp_final=linearized_fp_paths[-1],
@@ -43,6 +45,7 @@ def _mock_result() -> step5.PathSolveResult:
         vy=vy,
         source_xy=source_xy,
         target_xy=target_xy,
+        snapshots=None,
     )
 
 
@@ -71,7 +74,8 @@ def test_run_step5_saves_expected_figures_with_mock_solver(pipeline_fixture, mon
 
     monkeypatch.setattr(step5, "solve_single_field", lambda *args, **kwargs: _mock_result())
 
-    logk_path, tmin_path, stream_path, balance_path, progression_path = step5.run_step5(
+    (logk_path, tmin_path, stream_path, balance_path,
+     progression_path, isochrone_plume_path) = step5.run_step5(
         cfg,
         sweep="variance",
         value=0.1,
@@ -123,6 +127,7 @@ def test_run_step5_saves_expected_figures_with_mock_solver(pipeline_fixture, mon
     assert stream_path.name.endswith("_speed_streamlines.png")
     assert balance_path.name.endswith("_curvature_balance.png")
     assert progression_path.name.endswith("_linearized_fp_progression.png")
+    assert isochrone_plume_path is None  # mock result has snapshots=None
 
 
 def test_validate_particle_tracking_options_rejects_pollock_cell_mode() -> None:

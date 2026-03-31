@@ -1,17 +1,23 @@
 #!/bin/bash
 set -euo pipefail
 
-logk_source="dataset" # Options: dataset, synthetic
+logk_source="grf" # Options: dataset, synthetic, grf
 sweep="variance"
 value="5"
 field_size="200"
 mc_index="34"
-synthetic_amplitude="2.0"
+synthetic_amplitude="6.0"
 synthetic_frequency_x="2.0"
 synthetic_frequency_y="0.5"
-synthetic_offset="0.0"
+synthetic_offset="-3.0"
 
-run_tag="1_full_eikonal_iteration"
+# GRF logK source (used when logk_source="grf")
+grf_std="1.0"
+grf_length_scale=""   # leave empty to use cfg.length_scale
+grf_seed="2"
+grf_minpadding="0"
+
+run_tag="3_synthetic_plume"
 num_particles="1000000"
 dh=""
 linearized_fp="false"
@@ -33,11 +39,13 @@ target_y_start=""
 target_y_end=""
 curvature_method="spline"
 curvature_spline_mode="approximation" # Options: approximation, interpolation
-curvature_spline_smooth="3"
+curvature_spline_smooth="2"
 curvature_spline_degree="3"
 curvature_field_smooth_method="none" # Options: none, gaussian
-curvature_field_smooth_sigma="1.0"
+curvature_field_smooth_sigma="2.0"
 curvature_circle_window="10"
+snapshot_mode="fraction_of_first_arrival"  # Options: fraction_of_first_arrival, dt_interval, physical, or "" to disable
+snapshot_times="0.25 0.5 0.75 1.0"
 
 time="00:05:00"
 cpus_per_task="2"
@@ -89,6 +97,12 @@ if [[ "${linearized_fp}" == "true" ]]; then
     fi
 fi
 
+snapshot_args=""
+if [[ -n "${snapshot_mode}" ]]; then
+    snapshot_args+=" --snapshot-mode ${snapshot_mode}"
+    snapshot_args+=" --snapshot-times ${snapshot_times}"
+fi
+
 geometry_args=""
 if [[ -n "${source_x}" ]]; then
     geometry_args+=" --source-x ${source_x}"
@@ -124,8 +138,17 @@ elif [[ "${logk_source}" == "synthetic" ]]; then
     logk_args+=" --synthetic-offset ${synthetic_offset}"
     job_suffix="synthetic_amp${synthetic_amplitude}_fx${synthetic_frequency_x}_fy${synthetic_frequency_y}"
     output_dir="${run_root}/synthetic_size${field_size}_amp${synthetic_amplitude}_fx${synthetic_frequency_x}_fy${synthetic_frequency_y}_offset${synthetic_offset}"
+elif [[ "${logk_source}" == "grf" ]]; then
+    logk_args+=" --grf-std ${grf_std}"
+    logk_args+=" --grf-seed ${grf_seed}"
+    logk_args+=" --grf-minpadding ${grf_minpadding}"
+    if [[ -n "${grf_length_scale}" ]]; then
+        logk_args+=" --grf-length-scale ${grf_length_scale}"
+    fi
+    job_suffix="grf_std${grf_std}_seed${grf_seed}"
+    output_dir="${run_root}/grf_size${field_size}_std${grf_std}_seed${grf_seed}"
 else
-    echo "Unsupported logk_source=${logk_source}; expected dataset or synthetic." >&2
+    echo "Unsupported logk_source=${logk_source}; expected dataset, synthetic, or grf." >&2
     exit 1
 fi
 
@@ -151,6 +174,7 @@ echo "Linearized FP: ${linearized_fp}"
 echo "Linearized scheme: ${linearized_scheme}"
 echo "Check path geometry: ${check_path_geometry}"
 echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window})"
+echo "Snapshot mode: ${snapshot_mode:-disabled}, times: ${snapshot_times:-n/a}"
 echo "Curvature field smoothing: method=${curvature_field_smooth_method}, sigma=${curvature_field_smooth_sigma}"
 echo "Step5 geometry overrides: source_x=${source_x:-default}, target_x=${target_x:-default}, source_y=[${source_y_start:-default}, ${source_y_end:-default}), target_y=[${target_y_start:-default}, ${target_y_end:-default})"
 if [[ "${logk_source}" == "dataset" ]]; then
@@ -188,8 +212,8 @@ python ./scripts/step5_single_field_paths.py \\
   --num-particles "${num_particles}" \\
   --velocity-location face \\
   --no-align-with-modflow-velocity \\
-  --fmm-backtracking continuous \\ 
-#   --fmm-continuous-step-size 0.1 \\
+  --fmm-backtracking continuous \\
+  --fmm-continuous-step-size 0.1 \\
   ${linearized_args} \\
   ${check_path_geometry_args} \\
   ${geometry_args} \\
@@ -199,7 +223,8 @@ python ./scripts/step5_single_field_paths.py \\
   --curvature-spline-degree "${curvature_spline_degree}" \\
   --curvature-field-smooth-method "${curvature_field_smooth_method}" \\
   --curvature-field-smooth-sigma "${curvature_field_smooth_sigma}" \\
-  --curvature-circle-window "${curvature_circle_window}"
+  --curvature-circle-window "${curvature_circle_window}" \\
+  ${snapshot_args}
 
 echo "End Time: \$(date)"
 EOF

@@ -21,7 +21,7 @@ if str(SRC_ROOT) not in os.sys.path:
 
 from fmm_core import compute_fmm_path
 from fmm_core.metrics import distance_distribution
-from fmm_core.speed import _face_to_cell_speed_full, prepare_fmm_speed
+from fmm_core.speed import prepare_fmm_speed
 from simulation import grf_generation as sim_grf
 from simulation import hydraulic as sim_hyd
 from simulation import particle_tracking as sim_pt
@@ -34,7 +34,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 8
+MC_SCHEMA_VERSION = 9
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -53,8 +53,6 @@ MC_FIELDS = [
     "travel_time_fmm",
     "resistance_lrp",
     "resistance_lrp_fmm",
-    "shannon_entropy_vmag",
-    "shannon_entropy_angle",
     "endpoint_dy_fp_vs_lrp",
     "endpoint_dy_fp_vs_lrp_fmm",
     "endpoint_dy_fp_vs_dijkstra",
@@ -160,24 +158,36 @@ def _hausdorff_detail(D: np.ndarray) -> dict[str, Any]:
     }
 
 
-def _shannon_entropy_vmag(vx: np.ndarray, vy: np.ndarray) -> float:
-    v_mag = np.sqrt(vx**2 + vy**2)
-    v_mag_sum = v_mag.sum()
-    if v_mag_sum <= 0:
-        return float("nan")
-    p = v_mag / v_mag_sum
+def _renyi_entropy_vx_profile(vx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Compute Renyi entropy profiles S_1(x) and S_2(x) from |v_x(y)| at each x-column.
+
+    For each column i, the probability distribution is p_j = |vx[j,i]| / sum_j |vx[j,i]|.
+    S_1 (order 1, Shannon) = -sum_j p_j * log(p_j).
+    S_2 (order 2)          = -log(sum_j p_j^2).
+
+    Returns arrays of shape (n_columns,).  Columns where sum |vx| <= 0 yield NaN.
+    """
+    abs_vx = np.abs(vx)
+    col_sums = abs_vx.sum(axis=0)
+    valid = col_sums > 0
+
+    n_cols = vx.shape[1]
+    s1 = np.full(n_cols, np.nan, dtype=np.float64)
+    s2 = np.full(n_cols, np.nan, dtype=np.float64)
+
+    if not np.any(valid):
+        return s1, s2
+
+    p = abs_vx[:, valid] / col_sums[valid]
     mask = p > 0
-    return float(-np.sum(p[mask] * np.log(p[mask])))
 
+    log_p = np.zeros_like(p)
+    log_p[mask] = np.log(p[mask])
 
-def _shannon_entropy_angle(vx: np.ndarray, vy: np.ndarray, n_bins: int = 360) -> float:
-    theta = np.arctan2(vy, vx) % (2 * np.pi)
-    counts, _ = np.histogram(theta.ravel(), bins=n_bins, range=(0, 2 * np.pi))
-    counts = counts[counts > 0]
-    if counts.sum() == 0:
-        return float("nan")
-    p = counts / counts.sum()
-    return float(-np.sum(p * np.log(p)))
+    s1[valid] = -np.sum(p * log_p, axis=0)
+    s2[valid] = -np.log(np.sum(p ** 2, axis=0))
+
+    return s1, s2
 
 
 def save_mc_consolidated(
@@ -708,10 +718,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             D_fp_fmm, _, _ = distance_distribution(fp, fp_fmm, ds=1.0)
 
             vx_pt = np.asarray(_pt_velocity["vx"])
-            vy_pt = np.asarray(_pt_velocity["vy"])
-            vx_cell, vy_cell = _face_to_cell_speed_full(vx_pt, vy_pt, return_vector=True)
-            entropy_vmag = _shannon_entropy_vmag(vx_cell, vy_cell)
-            entropy_angle = _shannon_entropy_angle(vx_cell, vy_cell)
+            renyi_s1, renyi_s2 = _renyi_entropy_vx_profile(vx_pt)
 
             y_end_fp = endpoint_y_at_x(fp, x_ref=x_ref)
             y_end_lrp = endpoint_y_at_x(lrp, x_ref=x_ref)
@@ -815,9 +822,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp_vs_dijkstra": _hausdorff_detail(D_fp_dij),
                     "fp_vs_fmm": _hausdorff_detail(D_fp_fmm),
                 },
-                "shannon_entropy": {
-                    "vmag": entropy_vmag,
-                    "angle": entropy_angle,
+                "renyi_entropy": {
+                    "S1": renyi_s1,
+                    "S2": renyi_s2,
                 },
             }
 
@@ -837,8 +844,6 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "travel_time_fmm": consolidated["paths"]["fp_fmm"]["travel_time"],
                     "resistance_lrp": consolidated["paths"]["lrp"]["resistance"],
                     "resistance_lrp_fmm": consolidated["paths"]["lrp_fmm"]["resistance"],
-                    "shannon_entropy_vmag": entropy_vmag,
-                    "shannon_entropy_angle": entropy_angle,
                     "endpoint_method": "interp_at_xref",
                     "endpoint_x_ref": float(x_ref),
                     "x_end_fp": consolidated["endpoint"]["fp"]["x"],

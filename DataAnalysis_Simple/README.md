@@ -7,10 +7,11 @@
 3. `scripts/step3_stats.py`
 4. `scripts/step4_plot.py`
 
-Additional standalone utility:
+Additional standalone utilities:
 
 - `scripts/step5_single_field_paths.py`: solve and plot particle-tracking `FP`, `FP (FMM)`, `LRP (FMM)`, and optional linearized `FP^i` paths for one selected logK realization.
 - `scripts/step6_single_field_arrival_hist.py`: generate one GRF logK field, solve flow/particle tracking, and compare empirical arrival-time CDF of all successful particles against analytical `_g_tau`.
+- `scripts/visualize_single_logk_paths.py`: load a consolidated per-MC `.npy` file and visualize the logK field with all saved paths overlaid.
 
 All implementation logic is inside the step scripts (no `visualization/` package).
 
@@ -24,6 +25,7 @@ All implementation logic is inside the step scripts (no `visualization/` package
 - `scripts/run_all.py`: one-shot runner for all four stages
 - `scripts/step5_single_field_paths.py`: single-realization path solving + overlay figures (`logK`, minimal arrival time, and speed/streamlines)
 - `scripts/step6_single_field_arrival_hist.py`: single-realization arrival-time CDF analysis (`status==0` particles) vs analytical `_g_tau`
+- `scripts/visualize_single_logk_paths.py`: quick visualization of a consolidated per-MC `.npy` file (logK + paths overlay + summary table)
 - `tests/`: focused tests for each stage and end-to-end smoke run
 
 ## Agent Workflow
@@ -52,13 +54,13 @@ PYTHONPATH=./scripts python scripts/run_all.py --config configs/visualization.de
 ## Stage-by-Stage Run
 
 ```bash
-CACHE_DIR=project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run9_newoutput_fmmconti/cache
-FIGURE_DIR=project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run9_newoutput_fmmconti/visualization
+CACHE_DIR=/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run9_newoutput_fmmconti/cache
+FIGURE_DIR=outputs/run9_newoutput_fmmconti
 
 PYTHONPATH=./scripts python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --hausdorff-compute-method custom 
 PYTHONPATH=./scripts python scripts/step3_stats.py   --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
-PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR" --plot-variances 0.1 --scatter-mode mean,all_points --hausdorff-cdf
+PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR" --plot-variances 0.1 --scatter-mode mean,all_points --hausdorff-cdf --entropy-hausdorff
 ```
 
 `configs/visualization.default.yaml` no longer specifies `output_dir`.  
@@ -169,6 +171,43 @@ Notes:
 - Solver imports require both `Algorithm/src` and the sibling `FlowSimulation` repo.
 - The linearized Eikonal iteration additionally loads `scripts/fp_and_lrp/linear_eikonal_solver.py`.
 - Override FlowSimulation path with `FLOWSIM_PATH=/path/to/FlowSimulation` if needed.
+
+## Quick Single-MC Visualization
+
+Use `visualize_single_logk_paths.py` to load a consolidated per-MC `.npy` file and plot the logK field with all saved paths overlaid. No solver re-execution is needed — it reads paths directly from the saved data.
+
+Direct mode (provide the `.npy` file):
+
+```bash
+PYTHONPATH=./scripts python scripts/visualize_single_logk_paths.py \
+  --npy-file /path/to/LengthScale0.05_Size200/size200_mc5.npy \
+  --output-dir "$FIGURE_DIR"
+```
+
+Discovery mode (find the file via config):
+
+```bash
+PYTHONPATH=./scripts python scripts/visualize_single_logk_paths.py \
+  --config configs/visualization.default.yaml \
+  --sweep variance \
+  --value 5.0 \
+  --field-size 200 \
+  --mc-index 5 \
+  --output-dir "$FIGURE_DIR"
+```
+
+Options:
+
+- `--paths fp lrp lrp_fmm`: select a subset of paths to show
+- `--format pdf`: save as PDF instead of PNG
+- `--dpi 300`: increase resolution
+- `--cmap cmc.vik`: colormap for logK field (default: `cmc.vik`)
+- `--no-legend`: hide legend
+
+Outputs:
+
+- `<output_dir>/logk_paths_mc<idx>.png` (or `.pdf`)
+- Summary table printed to stdout: path lengths, travel times, Hausdorff stats, Shannon entropy
 
 ## Single-Field Arrival-Time CDF vs Analytical
 
@@ -301,6 +340,27 @@ Use `--hausdorff-cdf` to generate ensemble-averaged empirical CDF plots of Hausd
 - Stage 3 loads every MC consolidated `.npy` file, extracts the full `['hausdorff'][pair_key]['distances']` array (symmetric nearest-neighbor distances between path pairs), and computes per-MC empirical CDFs evaluated on a common 500-point grid.
 - Stage 4 plots the mean CDF curve (solid line) with a shaded +/- 1 std region for each of the 4 distance pairs (FP vs LRP, FP vs LRP(FMM), FP vs FP(Dijkstra), FP vs FP(FMM)).
 - Output: `run<id>_hausdorff_cdf_var<value>.png`
+
+### Entropy vs Hausdorff Per-MC Plot
+
+Use `--entropy-hausdorff` to generate per-MC scatter/line plots comparing Shannon entropy of the velocity field with Hausdorff distance summary statistics. For each selected `--plot-variances` value:
+
+- Stage 3 loads every MC consolidated `.npy` file and extracts per-MC Shannon entropy (vmag and angle) and Hausdorff `max`, `mean`, `median` for all 4 path pairs.
+- Stage 4 renders 5 vertically stacked panels sharing the x-axis (MC realization index):
+  - Panel 1: Shannon entropy H(|v|) and H(θ)
+  - Panel 2: Hausdorff max/mean/median for FP vs FP(FMM)
+  - Panel 3: Hausdorff max/mean/median for FP vs FP(Dijkstra)
+  - Panel 4: Hausdorff max/mean/median for FP vs LRP(FMM)
+  - Panel 5: Hausdorff max/mean/median for FP vs LRP
+- Output: `run<id>_entropy_hausdorff_var<value>.png`
+
+```bash
+PYTHONPATH=./scripts python scripts/step4_plot.py \
+  --config configs/visualization.default.yaml \
+  --cache-dir "$CACHE_DIR" \
+  --plot-variances 0.1,1.0,5.0 \
+  --entropy-hausdorff
+```
 
 ## Cache Contracts
 

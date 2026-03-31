@@ -527,3 +527,30 @@
 - Limitations/follow-up:
   - Full Stage 3/4 runtime with the new feature was not executed here; validated by compile check and code-path review.
   - The ensemble CDF uses only the reference field size (`field_size_ref`) MC files; multi-size ensemble is not supported.
+
+## 2026-03-27
+- Agent/tool: Cursor (Claude)
+- Summary: Added `visualize_single_logk_paths.py` — a standalone script to load a consolidated per-MC `.npy` file and visualize the logK field with all saved paths overlaid. Supports both direct file path (`--npy-file`) and discovery mode (`--config` + sweep/value/field-size/mc-index). Prints a summary table of path lengths, travel times, Hausdorff stats, and Shannon entropy to stdout.
+- Files changed:
+  - `scripts/visualize_single_logk_paths.py` (new)
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/visualize_single_logk_paths.py`
+  - `python scripts/visualize_single_logk_paths.py --help`
+- Limitations/follow-up:
+  - Discovery mode depends on `step1_index` and `step2_metrics` imports being available on `PYTHONPATH`.
+
+## 2026-03-27
+- Agent/tool: Cursor (Claude)
+- Summary: Added per-MC entropy vs Hausdorff comparison figure. Stage 3 now collects per-MC Shannon entropy (vmag, angle) and Hausdorff summary stats (max, mean, median) for all 4 path pairs from consolidated `.npy` files. Stage 4 renders 5 vertically stacked panels (entropy, FP(FMM), FP(Dijkstra), LRP(FMM), LRP) sharing the MC-index x-axis, gated by `--entropy-hausdorff` CLI flag and `--plot-variances`.
+- Files changed:
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step3_stats.py scripts/step4_plot.py`
+- Limitations/follow-up:
+  - Full Stage 3/4 runtime with the new feature was not executed here; validated by compile check and code-path review.
+  - The entropy+Hausdorff samples use only the reference field size (`field_size_ref`) MC files.

@@ -152,9 +152,9 @@ def _consolidated_to_output_data(mc: dict[str, Any]) -> dict[str, Any]:
     out["endpoint_dy_fp_vs_lrp_fmm"] = dy.get("fp_vs_lrp_fmm", np.nan)
     out["endpoint_dy_fp_vs_dijkstra"] = dy.get("fp_vs_dijkstra", np.nan)
     out["endpoint_dy_fp_vs_fmm"] = dy.get("fp_vs_fmm", np.nan)
-    entropy = mc.get("shannon_entropy", {})
-    out["shannon_entropy_vmag"] = entropy.get("vmag", np.nan)
-    out["shannon_entropy_angle"] = entropy.get("angle", np.nan)
+    renyi = mc.get("renyi_entropy", {})
+    out["renyi_entropy_S1"] = np.asarray(renyi.get("S1", [np.nan]), dtype=float)
+    out["renyi_entropy_S2"] = np.asarray(renyi.get("S2", [np.nan]), dtype=float)
     return out
 
 

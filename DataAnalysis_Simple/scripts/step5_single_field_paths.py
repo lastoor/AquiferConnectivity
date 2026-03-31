@@ -27,11 +27,11 @@ import step4_plot as step4
 _MC_PATTERN = re.compile(r"(?:_mc|_)(-?\d+)$")
 
 COLORS = {
-    "fp": "#000000",
-    "fpFMM": "#000000",
-    "fpDijkstra": "#000000",
-    "lrp": "#00008B",
-    "lrpFMM": "#6A3FB6",
+    "fp": "#FF6B78",
+    "fpFMM": "#3F73B8",
+    "fpDijkstra": "#3F73B8",
+    "lrp": "#F9B43F",
+    "lrpFMM": "#F9B43F",
 }
 
 LINESTYLES = {
@@ -99,6 +99,7 @@ class PathSolveResult:
     fp_fmm: np.ndarray
     lrp_fmm: np.ndarray
     t_min: np.ndarray
+    t_min_lrp: np.ndarray
     linearized_fp_paths: list[np.ndarray] | None
     linearized_fp_indices: list[int] | None
     linearized_fp_final: np.ndarray | None
@@ -112,6 +113,7 @@ class PathSolveResult:
     vy: np.ndarray
     source_xy: np.ndarray
     target_xy: np.ndarray
+    snapshots: SnapshotData | None = None
 
 
 @dataclass(slots=True)
@@ -143,6 +145,13 @@ class LinearizedFpSeries:
     history: list[dict[str, float]]
     failed_path_indices: list[int]
     converged: bool
+
+
+@dataclass(slots=True)
+class SnapshotData:
+    times: np.ndarray  # (T,) float64 — resolved snapshot times in physical units
+    x: np.ndarray      # (N, T) float64 — x-positions; NaN if particle not active
+    y: np.ndarray      # (N, T) float64 — y-positions; NaN if particle not active
 
 
 def _validate_index_span(*, field_size: int, start: int, end: int, label: str) -> None:
@@ -335,14 +344,56 @@ def generate_synthetic_logk(
     y_norm = np.arange(field_size, dtype=float) / float(field_size)
     xx, yy = np.meshgrid(x_norm, y_norm, indexing="xy")
 
+    xc1, yc1, a1, b1 = 1/3, 3/4, 1/10, 1/10
+    xc2, yc2, a2, b2 = 2/3, 1/4, 1/10, 1/10
+    xc3, yc3, a3, b3 = 3/4, 3/4, 1/10, 1/10
+    xc4, yc4, a4, b4 = 1/4, 1/4, 1/10, 1/10
+
+    dx1, dy1 = (xx - xc1), (yy - yc1)
+    dx2, dy2 = (xx - xc2), (yy - yc2)
+    dx3, dy3 = (xx - xc3), (yy - yc3)
+    dx4, dy4 = (xx - xc4), (yy - yc4)
+
+    theta1 = 0
+    theta2 = 0
+    theta3 = np.pi/6
+    theta4 = np.pi/6
+
+    ecllipse1 = (dx1 * np.cos(theta1) + dy1 * np.sin(theta1)) ** 2 / a1**2 + (dx1 * np.sin(theta1) - dy1 * np.cos(theta1)) ** 2 / b1**2
+    ecllipse2 = (dx2 * np.cos(theta2) + dy2 * np.sin(theta2)) ** 2 / a2**2 + (dx2 * np.sin(theta2) - dy2 * np.cos(theta2)) ** 2 / b2**2
+    ecllipse3 = (dx3 * np.cos(theta3) + dy3 * np.sin(theta3)) ** 2 / a3**2 + (dx3 * np.sin(theta3) - dy3 * np.cos(theta3)) ** 2 / b3**2
+    ecllipse4 = (dx4 * np.cos(theta4) + dy4 * np.sin(theta4)) ** 2 / a4**2 + (dx4 * np.sin(theta4) - dy4 * np.cos(theta4)) ** 2 / b4**2
+
     return np.asarray(
         offset
-        + amplitude * np.exp(- (xx ** 2 + yy ** 2) / field_size) * (
-            np.sin(2.0 * np.pi * frequency_x * xx)
-            * np.cos(2.0 * np.pi * frequency_y * yy)
+        + amplitude * (
+            np.exp(- ecllipse1)
+            + 0.75*np.exp(- ecllipse2)
+            # + 0.1*np.exp(- ecllipse3)
+            # + 0.1*np.exp(- ecllipse4)
         ),
         dtype=float,
     )
+
+    # return np.asarray(
+    #     offset
+    #     + amplitude * (
+    #         np.exp(- ( ((xx - 3/8)/(1/6)) ** 2 + ((yy - 3/4)/(1/10)) ** 2) )
+    #         + np.exp(- ( ((xx - 5/8)/(1/6)) ** 2 + ((yy - 1/4)/(1/10)) ** 2) )
+    #     ),
+    #     dtype=float,
+    # )
+
+    # return np.asarray(
+    #     offset
+    #     + amplitude * (
+    #         np.sin(2.0 * np.pi * frequency_x * xx)
+    #         * np.cos(2.0 * np.pi * frequency_y * yy)
+    #         + np.exp(- ((xx - 3/8) ** 2 + (yy - 3/4) ** 2) / (1/8) ** 2)
+    #         + np.exp(- ((xx - 5/8) ** 2 + (yy - 1/4) ** 2) / (1/8) ** 2)
+    #     ),
+    #     dtype=float,
+    # )
 
     # # Sine curve
     # y_sin = np.sin(xx)/2
@@ -424,6 +475,67 @@ def _import_curvature_module() -> Any:
     sys.modules[module_name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _import_grf_module() -> Any:
+    repo_root = Path(__file__).resolve().parents[2]
+    flowsim_path = Path(os.environ.get("FLOWSIM_PATH", str(repo_root.parent / "FlowSimulation"))).expanduser().resolve()
+    if not flowsim_path.is_dir():
+        raise RuntimeError(
+            f"FlowSimulation path does not exist: {flowsim_path}. "
+            "Set FLOWSIM_PATH to your FlowSimulation repository root."
+        )
+    _add_search_path(flowsim_path)
+    try:
+        from simulation import grf_generation as sim_grf
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to import grf_generation from FlowSimulation. "
+            "Ensure FlowSimulation is available and dependencies are installed."
+        ) from exc
+    return sim_grf
+
+
+def generate_grf_logk(
+    *,
+    field_size: int,
+    std: float,
+    length_scale: float,
+    seed: int,
+    minpadding: int = 0,
+) -> np.ndarray:
+    """Generate a logK field as a Gaussian Random Field with exponential covariance.
+
+    Uses the same generation pattern as the Monte Carlo runs:
+    ``ExpCov(sigma=std, length_scale=length_scale)`` with circulant embedding.
+
+    Parameters
+    ----------
+    field_size : int
+        Grid resolution (field will be field_size × field_size).
+    std : float
+        Standard deviation of the GRF (must be > 0).
+    length_scale : float
+        Correlation length of the exponential covariance (must be > 0).
+    seed : int
+        Random seed for reproducibility.
+    minpadding : int
+        Minimum padding for the circulant embedding FFT (default 0).
+    """
+    if field_size < 2:
+        raise ValueError(f"field_size must be at least 2; got {field_size}.")
+    if not (np.isfinite(float(std)) and float(std) > 0):
+        raise ValueError(f"std must be a positive finite number; got {std}.")
+    if not (np.isfinite(float(length_scale)) and float(length_scale) > 0):
+        raise ValueError(f"length_scale must be a positive finite number; got {length_scale}.")
+
+    sim_grf = _import_grf_module()
+    np.random.seed(int(seed))
+    cov = sim_grf.ExpCov(sigma=float(std), length_scale=float(length_scale))
+    pts = (np.linspace(0, 1, field_size),) * 2
+    mean = np.zeros((field_size, field_size))
+    grf_gen = sim_grf.GaussianRandomFieldCircEmbed(mean, cov, pts, minpadding=int(minpadding))
+    return np.asarray(grf_gen.sample(), dtype=float)
 
 
 def build_face_coordinates_from_centers(coord_centers: np.ndarray) -> np.ndarray:
@@ -711,8 +823,19 @@ def _run_particle_tracking(
     max_iters: int,
     rk45_min_success_frac: float,
     rk45_max_bad_frac: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    snapshot_mode: str | None = None,
+    snapshot_times: Any = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, SnapshotData | None]:
     _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location, backend=backend)
+    if snapshot_mode is not None and not (solver == "pollock" and backend == "gpu"):
+        import warnings
+        warnings.warn(
+            "snapshot_mode is only supported with solver='pollock' and backend='gpu'; "
+            "snapshots will be skipped.",
+            stacklevel=2,
+        )
+        snapshot_mode = None
+        snapshot_times = None
     n_particles = _resolve_particle_count(
         num_particles=num_particles,
         density_particle=density_particle,
@@ -762,6 +885,9 @@ def _run_particle_tracking(
                 "max_steps": max_iters,
             }
         )
+        if snapshot_mode is not None and snapshot_times is not None:
+            summary_params["snapshot_mode"] = snapshot_mode
+            summary_params["snapshot_times"] = snapshot_times
     else:
         vx, vy = sim_hyd.compute_velocity(
             k_field,
@@ -801,7 +927,17 @@ def _run_particle_tracking(
     if result is None:
         raise RuntimeError("Particle tracking summary did not return the fastest trajectory.")
     fp = np.vstack((result["x"], result["y"])).T
-    return fp, np.asarray(vx, dtype=float), np.asarray(vy, dtype=float)
+
+    snap_raw = summary.get("snapshots")
+    snapshot_data: SnapshotData | None = None
+    if snap_raw is not None:
+        snapshot_data = SnapshotData(
+            times=np.asarray(snap_raw["snapshot_times"], dtype=float),
+            x=np.asarray(snap_raw["x"], dtype=float),
+            y=np.asarray(snap_raw["y"], dtype=float),
+        )
+
+    return fp, np.asarray(vx, dtype=float), np.asarray(vy, dtype=float), snapshot_data
 
 
 def _compute_linearized_fp_series(
@@ -982,6 +1118,8 @@ def solve_single_field(
     max_iters: int,
     rk45_min_success_frac: float,
     rk45_max_bad_frac: float,
+    snapshot_mode: str | None = None,
+    snapshot_times: Any = None,
 ) -> PathSolveResult:
     modules = _import_solver_modules()
     linear_solver = _import_linear_eikonal_solver() if linearized_fp else None
@@ -1021,7 +1159,7 @@ def solve_single_field(
         raise ValueError(f"Invalid mean hydraulic gradient dh={dh}; expected positive finite magnitude.")
     slowness_unperturbed = 1.0 / np.maximum(k_field * dh_mean, 1e-12)
     slowness_true = 1.0 / np.maximum(k_field * grad_h_mag, 1e-12)
-    lrp_fmm, _r_min_field = _compute_fmm_path(
+    lrp_fmm, t_min_lrp = _compute_fmm_path(
         1/slowness_unperturbed,
         geometry=geometry,
         grid_spacing=1.0,
@@ -1096,7 +1234,7 @@ def solve_single_field(
                 check_path_geometry=check_path_geometry,
             )
 
-    fp, vx_pt, vy_pt = _run_particle_tracking(
+    fp, vx_pt, vy_pt, snapshot_data = _run_particle_tracking(
         sim_hyd=sim_hyd,
         sim_pt=sim_pt,
         k_field=k_field,
@@ -1119,6 +1257,8 @@ def solve_single_field(
         max_iters=max_iters,
         rk45_min_success_frac=rk45_min_success_frac,
         rk45_max_bad_frac=rk45_max_bad_frac,
+        snapshot_mode=snapshot_mode,
+        snapshot_times=snapshot_times,
     )
     fp = fp[fp[:, 0] <= geometry.target_x]
     _maybe_require_path_valid(
@@ -1136,6 +1276,7 @@ def solve_single_field(
         fp_fmm=fp_fmm,
         lrp_fmm=lrp_fmm,
         t_min=t_min,
+        t_min_lrp=t_min_lrp,
         linearized_fp_paths=None if linearized_series is None else linearized_series.paths,
         linearized_fp_indices=None if linearized_series is None else linearized_series.path_indices,
         linearized_fp_final=None if linearized_series is None or not linearized_series.paths else linearized_series.paths[-1],
@@ -1149,6 +1290,7 @@ def solve_single_field(
         vy=vy_pt,
         source_xy=geometry.source_xy,
         target_xy=geometry.target_xy,
+        snapshots=snapshot_data,
     )
 
 
@@ -1182,27 +1324,27 @@ def _plot_common_overlays(
     )
     ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label="FP (Particle)", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label="FP (FMM)", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label="LRP (FMM)", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    if fp_diag is not None:
-        ax.plot(
-            fp_diag.spline_points[:, 0] / i_y,
-            fp_diag.spline_points[:, 1] / i_y,
-            color=to_rgba(COLORS["fpFMM"], alpha=0.75),
-            linestyle="-",
-            linewidth=1.0,
-            label=fp_spline_label,
-        )
-    if lrp_diag is not None:
-        ax.plot(
-            lrp_diag.spline_points[:, 0] / i_y,
-            lrp_diag.spline_points[:, 1] / i_y,
-            color=to_rgba(COLORS["lrpFMM"], alpha=0.75),
-            linestyle="-",
-            linewidth=1.0,
-            label=lrp_spline_label,
-        )
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^*$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    # if fp_diag is not None:
+    #     ax.plot(
+    #         fp_diag.spline_points[:, 0] / i_y,
+    #         fp_diag.spline_points[:, 1] / i_y,
+    #         color=to_rgba(COLORS["fpFMM"], alpha=0.75),
+    #         linestyle="-",
+    #         linewidth=1.0,
+    #         label=fp_spline_label,
+    #     )
+    # if lrp_diag is not None:
+    #     ax.plot(
+    #         lrp_diag.spline_points[:, 0] / i_y,
+    #         lrp_diag.spline_points[:, 1] / i_y,
+    #         color=to_rgba(COLORS["lrpFMM"], alpha=0.75),
+    #         linestyle="-",
+    #         linewidth=1.0,
+    #         label=lrp_spline_label,
+    #     )
     if result.linearized_fp_final is not None:
         ax.plot(
             result.linearized_fp_final[:, 0] / i_y,
@@ -1502,13 +1644,13 @@ def plot_paths_over_speed_with_streamlines(
     i_y: float,
     fp_diag: PathBalanceDiagnostics | None = None,
     lrp_diag: PathBalanceDiagnostics | None = None,
-    colorbar_label: str = r"$|v|/q_{\mathrm{ref}}$",
+    colorbar_label: str = r"$\| \mathbf{v} \|/U$",
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     im = ax.imshow(
         speed_field,
         origin="lower",
-        cmap=cmc.lajolla,
+        cmap=cmc.batlowW_r,
         interpolation="nearest",
         extent=_normalized_extent(result.x, result.y, i_y),
     )
@@ -1580,7 +1722,7 @@ def plot_curvature_balance(
     fp_diag: PathBalanceDiagnostics,
     lrp_diag: PathBalanceDiagnostics,
 ) -> Any:
-    fig, axes = plt.subplots(5, 1, figsize=(6, 12), sharex=True)
+    fig, axes = plt.subplots(3, 1, figsize=(6, 6), sharex=True)
     lw = 1#LINEWIDTHS
     alpha = 0.5
 
@@ -1589,7 +1731,7 @@ def plot_curvature_balance(
         fp_diag.curvature,
         color=COLORS["fpFMM"],
         linewidth=lw,
-        label=rf"$\kappa$ FP (FMM) [{fp_diag.curvature_method}]",
+        label=r"$\kappa^*_{\mathcal{E}}$",
     )
     axes[0].plot(
         fp_diag.s_norm,
@@ -1597,85 +1739,93 @@ def plot_curvature_balance(
         color=COLORS["fpFMM"],
         alpha=alpha,
         linewidth=lw,
-        label=r"$-\partial_N \ln |v|$ on FP (FMM)",
+        label=r"$-\partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{E}}$",
     )
     axes[0].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[0].set_ylabel("FP Spline")
+    axes[0].set_ylabel("FP")
     axes[0].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
 
-    axes[1].plot(
-        fp_diag.s_norm,
-        fp_diag.curvature_circle,
-        color=COLORS["fpFMM"],
-        linewidth=lw,
-        label=r"$\kappa_{\mathrm{circle}}$ FP (FMM)",
-    )
-    axes[1].plot(
-        fp_diag.s_norm,
-        -fp_diag.dlogv_dn,
-        color=COLORS["fpFMM"],
-        alpha=alpha,
-        linewidth=lw,
-        label=r"$-\partial_N \ln |v|$ on FP (FMM)",
-    )
-    axes[1].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[1].set_ylabel("FP Circle")
-    axes[1].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+    # axes[1].plot(
+    #     fp_diag.s_norm,
+    #     fp_diag.curvature_circle,
+    #     color=COLORS["fpFMM"],
+    #     linewidth=lw,
+    #     label=r"$\kappa_{\mathrm{circle}}$ FP (FMM)",
+    # )
+    # axes[1].plot(
+    #     fp_diag.s_norm,
+    #     -fp_diag.dlogv_dn,
+    #     color=COLORS["fpFMM"],
+    #     alpha=alpha,
+    #     linewidth=lw,
+    #     label=r"$-\partial_N \ln |v|$ on FP (FMM)",
+    # )
+    # axes[1].axhline(0.0, color="0.7", linewidth=1.0)
+    # axes[1].set_ylabel("FP Circle")
+    # axes[1].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
 
-    axes[2].plot(
+    axes[1].plot(
         lrp_diag.s_norm,
         lrp_diag.curvature,
         color=COLORS["lrpFMM"],
         linewidth=lw,
-        label=rf"$\kappa$ LRP (FMM) [{lrp_diag.curvature_method}]",
+        label=r"$\kappa^*_{\mathcal{R}}$",
     )
+    axes[1].plot(
+        lrp_diag.s_norm,
+        -lrp_diag.dlogk_dn,
+        color=COLORS["lrpFMM"],
+        alpha=alpha,
+        linewidth=lw,
+        label=r"$-\partial_{\mathbf{n}} \ln K$ along $\gamma^*_{\mathcal{R}}$",
+    )
+    axes[1].plot(
+        lrp_diag.s_norm,
+        - lrp_diag.dlogk_dn - lrp_diag.dloggradh_dn,
+        color=COLORS["lrpFMM"],
+        linestyle=":",
+        linewidth=lw,
+        label=r"$- \partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{R}}$",
+    )
+    axes[1].axhline(0.0, color="0.7", linewidth=1.0)
+    axes[1].set_ylabel("LRP")
+    axes[1].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+
+    # axes[3].plot(
+    #     lrp_diag.s_norm,
+    #     lrp_diag.curvature_circle,
+    #     color=COLORS["lrpFMM"],
+    #     linewidth=lw,
+    #     label=r"$\kappa_{\mathrm{circle}}$ LRP (FMM)",
+    # )
+    # axes[3].plot(
+    #     lrp_diag.s_norm,
+    #     -lrp_diag.dlogk_dn,
+    #     color=COLORS["lrpFMM"],
+    #     alpha=alpha,
+    #     linewidth=lw,
+    #     label=r"$-\partial_N \ln K$ on LRP (FMM)",
+    # )
+    # axes[3].axhline(0.0, color="0.7", linewidth=1.0)
+    # axes[3].set_ylabel("LRP Circle")
+    # axes[3].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+
     axes[2].plot(
-        lrp_diag.s_norm,
-        -lrp_diag.dlogk_dn,
-        color=COLORS["lrpFMM"],
-        alpha=alpha,
-        linewidth=lw,
-        label=r"$-\partial_N \ln K$ on LRP (FMM)",
-    )
-    axes[2].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[2].set_ylabel("LRP Spline")
-    axes[2].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
-
-    axes[3].plot(
-        lrp_diag.s_norm,
-        lrp_diag.curvature_circle,
-        color=COLORS["lrpFMM"],
-        linewidth=lw,
-        label=r"$\kappa_{\mathrm{circle}}$ LRP (FMM)",
-    )
-    axes[3].plot(
-        lrp_diag.s_norm,
-        -lrp_diag.dlogk_dn,
-        color=COLORS["lrpFMM"],
-        alpha=alpha,
-        linewidth=lw,
-        label=r"$-\partial_N \ln K$ on LRP (FMM)",
-    )
-    axes[3].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[3].set_ylabel("LRP Circle")
-    axes[3].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
-
-    axes[4].plot(
         fp_diag.s_norm,
         fp_diag.residual,
         color=COLORS["fpFMM"],
         linewidth=lw,
-        label=r"$R_{\mathrm{FP}}=\kappa + \partial_N \ln |v|$",
+        label=r"$\kappa^*_{\mathcal{E}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{E}}$",
     )
-    axes[4].plot(
+    axes[2].plot(
         lrp_diag.s_norm,
         lrp_diag.residual,
         color=COLORS["lrpFMM"],
         alpha=alpha,
         linewidth=lw,
-        label=r"$R_{\mathrm{LRP}}=\kappa + \partial_N \ln K$",
+        label=r"$\kappa^*_{\mathcal{R}} + \partial_{\mathbf{n}} \ln K$ along $\gamma^*_{\mathcal{R}}$",
     )
-    # axes[4].plot(
+    # axes[2].plot(
     #     lrp_diag.s_norm,
     #     lrp_diag.curvature + lrp_diag.dlogv_dn,
     #     color=COLORS["lrpFMM"],
@@ -1683,24 +1833,227 @@ def plot_curvature_balance(
     #     linewidth=lw,
     #     label=r"$R_{\mathrm{LRP},v}=\kappa + \partial_N \ln |v|$",
     # )
-    axes[4].plot(
+    axes[2].plot(
         lrp_diag.s_norm,
         lrp_diag.curvature + lrp_diag.dlogk_dn + lrp_diag.dloggradh_dn,
         color=COLORS["lrpFMM"],
         linestyle=":",
         linewidth=lw,
-        label=r"$R_{\mathrm{LRP},K+\nabla h}=\kappa + \partial_N \ln K + \partial_N \ln |\nabla h|$",
+        label=r"$\kappa^*_{\mathcal{R}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{R}}$",
     )
-    axes[4].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[4].set_xlabel(r"Normalized arclength $s/L$")
-    axes[4].set_ylabel("Residual")
-    axes[4].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+    axes[2].axhline(0.0, color="0.7", linewidth=1.0)
+    axes[2].set_xlabel(r"Normalized arclength $\ell/L$")
+    axes[2].set_ylabel("Residual")
+    axes[2].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
 
     for ax in axes:
         ax.set_xlim(0.0, 1.0)
         ax.grid(True, color="0.9", linewidth=0.8)
+    
+    ymin = min(ax.get_ylim()[0] for ax in axes.flat)
+    ymax = max(ax.get_ylim()[1] for ax in axes.flat)
+    for ax in axes.flat:
+        ax.set_ylim(ymin, ymax)
 
     fig.tight_layout()
+    return fig
+
+
+def plot_isochrones_with_plume(
+    logk_field: np.ndarray,
+    t_min_dimless: np.ndarray,
+    t_min_lrp_dimless: np.ndarray,
+    snap_fractions: np.ndarray,
+    *,
+    result: PathSolveResult,
+    i_y: float,
+) -> plt.Figure | None:
+    """Multi-panel figure: one panel per snapshot time showing isochrone + particle plume.
+
+    Each panel shows:
+    - logK field as a semi-transparent background
+    - White isochrone contour of the FP FMM field at fraction f of its own first arrival time
+    - LRP isochrone contour of the LRP FMM field at fraction f of its own first arrival time
+    - Particle plume scatter (all particle positions at that snapshot time)
+    - FP (FMM) and LRP (FMM) paths as thin overlays
+    - Source line
+
+    Parameters
+    ----------
+    logk_field : ndarray (ny, nx)
+        2-D logK field.
+    t_min_dimless : ndarray (ny, nx)
+        FP travel-time field divided by t_ref (NaN where unreachable).
+    t_min_lrp_dimless : ndarray (ny, nx)
+        LRP travel-time field divided by t_ref (NaN where unreachable).
+    snap_fractions : ndarray (T,)
+        Fractions of first arrival time for each snapshot panel (e.g. 0.25, 0.5, 0.75, 1.0).
+        Each isochrone is drawn at ``f * t_fp_arrival`` and ``f * t_lrp_arrival``
+        respectively, so the two contours are relative to their own FMM first arrival.
+    result : PathSolveResult
+    i_y : float
+        Characteristic length for axis normalisation.
+
+    Returns None if result.snapshots is None or has no snapshots.
+    """
+    if result.snapshots is None:
+        return None
+
+    snaps = result.snapshots
+    n_snaps = len(snaps.times)
+    if n_snaps == 0:
+        return None
+
+    ncols = min(4, n_snaps)
+    nrows = int(np.ceil(n_snaps / ncols))
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4.0 * nrows), squeeze=False)
+    axes_flat = axes.flatten()
+
+    extent = _normalized_extent(result.x, result.y, i_y)
+    x_norm = result.x / i_y
+    y_norm = result.y / i_y
+
+    # First arrival time at target for FP and LRP FMM fields
+    ix_target = int(np.argmin(np.abs(result.x - result.target_xy[0, 0])))
+    t_fp_arrival = float(np.nanmin(t_min_dimless[:, ix_target]))
+    t_lrp_arrival = float(np.nanmin(t_min_lrp_dimless[:, ix_target]))
+
+    t_valid = t_min_dimless[np.isfinite(t_min_dimless)]
+    t_min_val = float(np.nanmin(t_valid)) if t_valid.size > 0 else 0.0
+    t_max_val = float(np.nanmax(t_valid)) if t_valid.size > 0 else 1.0
+
+    t_lrp_valid = t_min_lrp_dimless[np.isfinite(t_min_lrp_dimless)]
+    t_lrp_min = float(np.nanmin(t_lrp_valid)) if t_lrp_valid.size > 0 else 0.0
+    t_lrp_max = float(np.nanmax(t_lrp_valid)) if t_lrp_valid.size > 0 else 1.0
+
+    from matplotlib.lines import Line2D
+
+    im_ref = None
+    for j in range(n_snaps):
+        ax = axes_flat[j]
+
+        # Background: logK field
+        im_ref = ax.imshow(
+            logk_field, origin="lower", cmap=cmc.batlowW_r,
+            interpolation="nearest", extent=extent, alpha=0.7,
+        )
+
+        f = float(snap_fractions[j])
+        t_level_fp = f * t_fp_arrival
+        t_level_lrp = f * t_lrp_arrival
+
+        # FP isochrone contour (white) — relative to FP first arrival
+        if t_min_val <= t_level_fp <= t_max_val:
+            ax.contour(
+                x_norm, y_norm, t_min_dimless,
+                levels=[t_level_fp], linewidths=LINEWIDTHS, colors=COLORS["fpFMM"],
+            )
+
+        # LRP isochrone contour (lrpFMM color, dashed) — relative to LRP first arrival
+        if t_lrp_min <= t_level_lrp <= t_lrp_max:
+            ax.contour(
+                x_norm, y_norm, t_min_lrp_dimless,
+                levels=[t_level_lrp], linewidths=LINEWIDTHS, colors=COLORS["lrpFMM"],
+            )
+
+        # Particle plume scatter
+        x_j = snaps.x[:, j]
+        y_j = snaps.y[:, j]
+        mask = np.isfinite(x_j) & np.isfinite(y_j)
+        if np.any(mask):
+            ax.scatter(
+                x_j[mask] / i_y, y_j[mask] / i_y,
+                s=LINEWIDTHS, color=COLORS["fp"], linewidths=0, rasterized=True,
+            )
+
+        # FP path
+        line, = ax.plot(
+            result.fp[:, 0] / i_y, result.fp[:, 1] / i_y,
+            color=COLORS["fp"], linestyle=LINESTYLES["fp"],
+            linewidth=LINEWIDTHS,
+        )
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        line.set_solid_capstyle("round")
+        line.set_dash_capstyle("round")
+
+        # FP (FMM) path
+        line, = ax.plot(
+            result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y,
+            color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"],
+            linewidth=LINEWIDTHS,
+        )
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        line.set_solid_capstyle("round")
+        line.set_dash_capstyle("round")
+
+        # LRP (FMM) path
+        line, = ax.plot(
+            result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y,
+            color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"],
+            linewidth=LINEWIDTHS,
+        )
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        line.set_solid_capstyle("round")
+        line.set_dash_capstyle("round")
+
+        # Source line
+        ax.plot(
+            result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y,
+            color="purple", linewidth=LINEWIDTHS,
+        )
+
+        # Target line
+        ax.plot(
+            result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y,
+            color="purple", linewidth=LINEWIDTHS,
+        )
+
+        # Legend on first panel only
+        if j == 0:
+            h_fp = Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, ls=LINESTYLES["fp"],
+                          label=r"$\gamma^*$")
+            h_fp.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            h_fp.set_solid_capstyle("round")
+            h_fp.set_dash_capstyle("round")
+
+            h_fp_fmm = Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFMM"],
+                              label=r"$\gamma^*_\mathcal{E}$")
+            h_fp_fmm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            h_fp_fmm.set_solid_capstyle("round")
+            h_fp_fmm.set_dash_capstyle("round")
+
+            h_lrp_fmm = Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, ls=LINESTYLES["lrpFMM"],
+                               label=r"$\gamma^*_\mathcal{R}$")
+            h_lrp_fmm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            h_lrp_fmm.set_solid_capstyle("round")
+            h_lrp_fmm.set_dash_capstyle("round")
+
+            handles = [
+                h_fp, h_fp_fmm, h_lrp_fmm,
+                Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*$ isochrone"),
+                Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{E}$ isochrone"),
+                Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{R}$ isochrone"),
+            ]
+            ax.legend(handles=handles, fontsize=6, loc="upper left", framealpha=0.5)
+
+        ax.set_title(r"$f = {:.2f}$".format(f), fontsize=9)
+        ax.set_aspect("equal", adjustable="box")
+        if j % ncols == 0:
+            ax.set_ylabel(r"$y/I_Y$")
+        if j >= (nrows - 1) * ncols:
+            ax.set_xlabel(r"$x/I_Y$")
+
+    # Turn off unused axes
+    for j in range(n_snaps, len(axes_flat)):
+        axes_flat[j].set_visible(False)
+
+    # Shared colorbar for logK
+    if im_ref is not None:
+        fig.colorbar(
+            im_ref, ax=axes_flat[:n_snaps].tolist(),
+            label=r"$\ln K$", fraction=0.02, pad=0.02,
+        )
+    # fig.tight_layout()
     return fig
 
 
@@ -1721,7 +2074,11 @@ def run_step5(
     synthetic_frequency_x: float,
     synthetic_frequency_y: float,
     synthetic_offset: float,
-    dh: float | None,
+    grf_std: float = 1.0,
+    grf_length_scale: float | None = None,
+    grf_seed: int = 0,
+    grf_minpadding: int = 0,
+    dh: float | None = None,
     solver: str,
     backend: str = "cpu",
     velocity_location: str,
@@ -1763,7 +2120,9 @@ def run_step5(
     max_iters: int,
     rk45_min_success_frac: float,
     rk45_max_bad_frac: float,
-) -> tuple[Path, Path, Path, Path, Path | None]:
+    snapshot_mode: str | None = None,
+    snapshot_times: Any = None,
+) -> tuple[Path, Path, Path, Path, Path | None, Path | None]:
     selected: SelectedRun | None = None
     if logk_source == "dataset":
         if sweep is None or value is None or mc_index is None:
@@ -1789,8 +2148,21 @@ def run_step5(
             f"fy{_value_slug(synthetic_frequency_y)}_"
             f"offset{_value_slug(synthetic_offset)}"
         )
+    elif logk_source == "grf":
+        ls = cfg.length_scale if grf_length_scale is None else grf_length_scale
+        logk_field = generate_grf_logk(
+            field_size=field_size,
+            std=grf_std,
+            length_scale=ls,
+            seed=grf_seed,
+            minpadding=grf_minpadding,
+        )
+        stem = (
+            f"grf_size{field_size}_std{_value_slug(grf_std)}_"
+            f"ls{_value_slug(ls)}_seed{grf_seed}"
+        )
     else:
-        raise ValueError(f"Unsupported logk_source={logk_source!r}; expected 'dataset' or 'synthetic'.")
+        raise ValueError(f"Unsupported logk_source={logk_source!r}; expected 'dataset', 'synthetic', or 'grf'.")
 
     dh_eff = cfg.dh if dh is None else dh
     result = solve_single_field(
@@ -1831,6 +2203,8 @@ def run_step5(
         max_iters=max_iters,
         rk45_min_success_frac=rk45_min_success_frac,
         rk45_max_bad_frac=rk45_max_bad_frac,
+        snapshot_mode=snapshot_mode,
+        snapshot_times=snapshot_times,
     )
     if linearized_fp:
         successful_indices = result.linearized_fp_indices or []
@@ -1872,7 +2246,7 @@ def run_step5(
 
     fig_logk = plot_paths_over_field(
         logk_field,
-        cmap=cmc.lajolla,
+        cmap=cmc.batlowW_r,
         colorbar_label=r"$\ln K$",
         result=result,
         i_y=i_y,
@@ -1885,8 +2259,8 @@ def run_step5(
     tmin_plot = np.where(np.isfinite(result.t_min), result.t_min / t_ref, np.nan)
     fig_tmin = plot_paths_over_field(
         tmin_plot,
-        cmap=cmc.lajolla,
-        colorbar_label=r"$T_{\min} U/I_Y$",
+        cmap=cmc.batlowW_r,
+        colorbar_label=r"$\mathcal{T}^* U/I_Y$",
         result=result,
         i_y=i_y,
         fp_diag=fp_diag,
@@ -1917,7 +2291,7 @@ def run_step5(
     if linearized_fp:
         fig_progression = plot_linearized_fp_progression(
             tmin_plot,
-            cmap=cmc.lajolla,
+            cmap=cmc.batlowW_r,
             colorbar_label=r"$T_{\min} U/I_Y$",
             result=result,
             i_y=i_y,
@@ -1925,7 +2299,26 @@ def run_step5(
         fig_progression.savefig(progression_path, dpi=cfg.figure_dpi, bbox_inches="tight")
         plt.close(fig_progression)
         progression_path_out = progression_path
-    return logk_path, tmin_path, stream_path, balance_path, progression_path_out
+
+    isochrone_plume_path_out: Path | None = None
+    if result.snapshots is not None:
+        snap_fracs = np.asarray(snapshot_times, dtype=float)
+        tmin_lrp_plot = np.where(np.isfinite(result.t_min_lrp), result.t_min_lrp / t_ref, np.nan)
+        isochrone_plume_path = out_dir / f"{stem}_isochrone_plume.png"
+        fig_plume = plot_isochrones_with_plume(
+            logk_field,
+            tmin_plot,
+            tmin_lrp_plot,
+            snap_fracs,
+            result=result,
+            i_y=i_y,
+        )
+        if fig_plume is not None:
+            fig_plume.savefig(isochrone_plume_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+            plt.close(fig_plume)
+            isochrone_plume_path_out = isochrone_plume_path
+
+    return logk_path, tmin_path, stream_path, balance_path, progression_path_out, isochrone_plume_path_out
 
 
 def parse_args() -> argparse.Namespace:
@@ -1933,7 +2326,7 @@ def parse_args() -> argparse.Namespace:
         description="Stage 5: solve and visualize particle-tracking FP, FP(FMM), LRP(FMM), and optional linearized FP^i for one logK field"
     )
     parser.add_argument("--config", required=True, type=Path)
-    parser.add_argument("--logk-source", choices=["dataset", "synthetic"], default="dataset")
+    parser.add_argument("--logk-source", choices=["dataset", "synthetic", "grf"], default="dataset")
     parser.add_argument("--sweep", choices=["variance", "std"])
     parser.add_argument("--value", type=float)
     parser.add_argument("--field-size", required=True, type=int)
@@ -1943,6 +2336,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--synthetic-frequency-x", type=float, default=1.0)
     parser.add_argument("--synthetic-frequency-y", type=float, default=1.0)
     parser.add_argument("--synthetic-offset", type=float, default=0.0)
+
+    parser.add_argument("--grf-std", type=float, default=1.0,
+        help="Standard deviation for GRF logK generation.")
+    parser.add_argument("--grf-length-scale", type=float, default=None,
+        help="Correlation length for GRF logK. Defaults to cfg.length_scale.")
+    parser.add_argument("--grf-seed", type=int, default=0,
+        help="Random seed for GRF logK generation.")
+    parser.add_argument("--grf-minpadding", type=int, default=0,
+        help="Minimum padding for circulant embedding in GRF generation.")
 
     parser.add_argument("--dh", type=float, default=None)
     parser.add_argument("--solver", choices=["pollock", "rk45"], default="pollock")
@@ -2017,6 +2419,27 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iters", type=int, default=1000000)
     parser.add_argument("--rk45-min-success-frac", type=float, default=0.5)
     parser.add_argument("--rk45-max-bad-frac", type=float, default=0.1)
+    parser.add_argument(
+        "--snapshot-mode",
+        choices=["fraction_of_first_arrival", "dt_interval", "physical"],
+        default=None,
+        help=(
+            "Particle-tracking snapshot mode for plume visualization. "
+            "Only supported with --backend=gpu --solver=pollock."
+        ),
+    )
+    parser.add_argument(
+        "--snapshot-times",
+        type=float,
+        nargs="+",
+        default=None,
+        help=(
+            "Snapshot time specification. "
+            "For 'fraction_of_first_arrival': fractions e.g. 0.1 0.3 0.5 1.0. "
+            "For 'dt_interval': single scalar dt. "
+            "For 'physical': absolute physical times."
+        ),
+    )
     args = parser.parse_args()
     if args.logk_source == "dataset":
         missing = [
@@ -2030,7 +2453,7 @@ def parse_args() -> argparse.Namespace:
                 + ", ".join(f"--{name.replace('_', '-')}" for name in missing)
                 + "."
             )
-    else:
+    elif args.logk_source == "synthetic":
         generate_synthetic_logk(
             field_size=args.field_size,
             amplitude=args.synthetic_amplitude,
@@ -2038,14 +2461,28 @@ def parse_args() -> argparse.Namespace:
             frequency_y=args.synthetic_frequency_y,
             offset=args.synthetic_offset,
         )
+    elif args.logk_source == "grf":
+        if args.grf_std <= 0 or not np.isfinite(args.grf_std):
+            parser.error("--grf-std must be a positive finite number.")
+        if args.grf_length_scale is not None and (args.grf_length_scale <= 0 or not np.isfinite(args.grf_length_scale)):
+            parser.error("--grf-length-scale must be a positive finite number.")
+    else:
+        parser.error(f"Unsupported --logk-source={args.logk_source!r}; expected 'dataset', 'synthetic', or 'grf'.")
     _validate_particle_tracking_options(solver=args.solver, velocity_location=args.velocity_location, backend=args.backend)
+    if args.snapshot_mode is not None and args.snapshot_times is None:
+        parser.error("--snapshot-times is required when --snapshot-mode is specified.")
+    if args.snapshot_times is not None and args.snapshot_mode is None:
+        parser.error("--snapshot-mode is required when --snapshot-times is specified.")
+    if args.snapshot_mode == "dt_interval" and args.snapshot_times is not None and len(args.snapshot_times) != 1:
+        parser.error("--snapshot-times must be a single scalar when --snapshot-mode=dt_interval.")
     return args
 
 
 def main() -> int:
     args = parse_args()
     cfg = step1.load_config(args.config)
-    logk_path, tmin_path, stream_path, balance_path, progression_path = run_step5(
+    (logk_path, tmin_path, stream_path, balance_path,
+     progression_path, isochrone_plume_path) = run_step5(
         cfg,
         logk_source=args.logk_source,
         sweep=args.sweep,
@@ -2057,6 +2494,10 @@ def main() -> int:
         synthetic_frequency_x=args.synthetic_frequency_x,
         synthetic_frequency_y=args.synthetic_frequency_y,
         synthetic_offset=args.synthetic_offset,
+        grf_std=args.grf_std,
+        grf_length_scale=args.grf_length_scale,
+        grf_seed=args.grf_seed,
+        grf_minpadding=args.grf_minpadding,
         dh=args.dh,
         solver=args.solver,
         backend=args.backend,
@@ -2099,6 +2540,8 @@ def main() -> int:
         max_iters=args.max_iters,
         rk45_min_success_frac=args.rk45_min_success_frac,
         rk45_max_bad_frac=args.rk45_max_bad_frac,
+        snapshot_mode=args.snapshot_mode,
+        snapshot_times=args.snapshot_times,
     )
     print(f"Saved figure: {logk_path}")
     print(f"Saved figure: {tmin_path}")
@@ -2106,6 +2549,8 @@ def main() -> int:
     print(f"Saved figure: {balance_path}")
     if progression_path is not None:
         print(f"Saved figure: {progression_path}")
+    if isochrone_plume_path is not None:
+        print(f"Saved figure: {isochrone_plume_path}")
     return 0
 
 
