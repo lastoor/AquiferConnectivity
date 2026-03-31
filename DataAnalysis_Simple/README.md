@@ -159,7 +159,13 @@ Notes:
 - Use `--no-check-path-geometry` to disable all Step 5 path-geometry validation when exploratory linearized `FP^i` paths fail the current geometry checks.
 - Override shared Step 5 geometry with `--source-x`, `--target-x`, `--source-y-start`, `--source-y-end`, `--target-y-start`, and `--target-y-end`.
 - Curvature diagnostics now support explicit spline geometry modes with `--curvature-spline-mode {interpolation,approximation}` plus `--curvature-spline-smooth` and `--curvature-spline-degree`.
+- Use `--curvature-method savgol` (default) for a Savitzky-Golay-based curvature estimate: arc-length-uniform resampling + `dθ/ds` via 1D SG filter (controls: `--curvature-savgol-window`, `--curvature-savgol-poly`). Use `--curvature-method spline` for the original spline-geometry approach.
 - Normal-derivative diagnostics can be smoothed independently with `--curvature-field-smooth-method {none,gaussian}` and `--curvature-field-smooth-sigma`.
+- Four `--normal-deriv-method` options are available:
+  - `direct` (default): cubic `RegularGridInterpolator` field sampling at `p ± δ·n̂`, finite difference, then 1D SG post-smooth (linear fallback for scipy < 1.9).
+  - `savgol2d`: separable 2D Savitzky-Golay gradient on the full field grid, then dot with path normal (window controlled by `--curvature-savgol-window`/`--curvature-savgol-poly`).
+  - `spline2d`: `RectBivariateSpline` fitted to the field with analytic ∂/∂n at path points — no finite-difference offset needed (smoothing controlled by `--normal-deriv-spline2d-smooth`; `s=0` is interpolating, `s>0` smoothing).
+  - `mls_frenet`: Moving Least Squares quadratic polynomial `f(s,n) ≈ c₁s²+c₂n²+c₃sn+c₄s+c₅n+c₆` fitted in the Frenet-Serret frame at each path point — the `c₅` coefficient gives ∂f/∂n directly. Patch half-widths controlled by `--normal-deriv-mls-ns` (tangent direction) and `--normal-deriv-mls-nn` (normal direction).
 - Step 5 now evaluates curvature, normals, and normal-derivative terms on the same spline curve, and the residual panel includes FP `\kappa+\partial_N \ln|v|` together with multiple LRP comparisons (`\kappa+\partial_N \ln K`, `\kappa+\partial_N \ln|v|`, and `\kappa+\partial_N \ln K+\partial_N \ln|\nabla h|`).
 - The local linearized-FP backtracking now ranks neighbors by travel-time drop per unit step length, reducing diagonal bias in the discrete descent path.
 - Spatial axes are normalized as `x/I_Y` and `y/I_Y`.

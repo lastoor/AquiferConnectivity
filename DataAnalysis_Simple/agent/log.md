@@ -541,6 +541,24 @@
 - Limitations/follow-up:
   - Discovery mode depends on `step1_index` and `step2_metrics` imports being available on `PYTHONPATH`.
 
+## 2026-03-31
+- Agent/tool: Claude Code (claude-sonnet-4-6)
+- Summary: Added Savitzky-Golay curvature method and four normal-derivative methods (`direct` cubic, `savgol2d`, `spline2d`, `mls_frenet`) to Step 5 curvature/balance diagnostics.
+  - `curvature.py`: added `compute_savgol_geometry` (dθ/ds via Savitzky-Golay filter on arc-length-uniform tangent angle); extended `compute_curvature_bundle` to support `method="savgol"` with `savgol_window` and `savgol_poly` params.
+  - `step5_single_field_paths.py`: upgraded `"direct"` normal derivative to cubic `RegularGridInterpolator` (linear fallback for older scipy); added `_savgol_gradient_2d` (separable 2D SG), `_spline2d_normal_derivative` (`RectBivariateSpline` analytic ∂/∂n), and `_mls_frenet_normal_derivative` (Moving Least Squares quadratic polynomial in the Frenet-Serret (s,n) frame — design matrix precomputed once, O(N·m) vectorized field sampling via `RegularGridInterpolator`); threaded `normal_deriv_method`, `normal_deriv_spline2d_smooth`, `normal_deriv_mls_ns`, `normal_deriv_mls_nn` through the full call chain (`_build_path_balance_diagnostics` → `compute_balance_diagnostics` → `run_step5` → `parse_args` → `main`).
+  - `submit_step5_gpu.sh`: added all new curvature/normal-deriv parameters; default changed to `normal_deriv_method="mls_frenet"`.
+  - `tests/test_step5_single_field_paths.py`: added 5 tests — `test_compute_savgol_geometry_on_parabola`, `test_normal_derivative_direct_on_linear_field`, `test_savgol_gradient_2d_on_linear_field`, `test_spline2d_normal_derivative_on_linear_field`, `test_mls_frenet_normal_derivative_on_linear_field`; all 5 pass.
+- Files changed:
+  - `scripts/fp_and_lrp/curvature.py`
+  - `scripts/step5_single_field_paths.py`
+  - `submit_step5_gpu.sh`
+  - `tests/test_step5_single_field_paths.py`
+- Validation:
+  - `pytest tests/test_step5_single_field_paths.py::test_compute_savgol_geometry_on_parabola tests/test_step5_single_field_paths.py::test_normal_derivative_direct_on_linear_field tests/test_step5_single_field_paths.py::test_savgol_gradient_2d_on_linear_field tests/test_step5_single_field_paths.py::test_spline2d_normal_derivative_on_linear_field tests/test_step5_single_field_paths.py::test_mls_frenet_normal_derivative_on_linear_field` — 5 passed
+- Limitations/follow-up:
+  - MLS Frenet is exact for linear fields to ~2e-6 (pseudoinverse rounding); tolerance set to `atol=1e-5` in test.
+  - End-to-end Step 5 figure generation with the new methods has not been rerun.
+
 ## 2026-03-27
 - Agent/tool: Cursor (Claude)
 - Summary: Added per-MC entropy vs Hausdorff comparison figure. Stage 3 now collects per-MC Shannon entropy (vmag, angle) and Hausdorff summary stats (max, mean, median) for all 4 path pairs from consolidated `.npy` files. Stage 4 renders 5 vertically stacked panels (entropy, FP(FMM), FP(Dijkstra), LRP(FMM), LRP) sharing the MC-index x-axis, gated by `--entropy-hausdorff` CLI flag and `--plot-variances`.
