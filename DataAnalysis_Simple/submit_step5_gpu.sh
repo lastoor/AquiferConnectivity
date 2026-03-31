@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-logk_source="grf" # Options: dataset, synthetic, grf
+logk_source="synthetic" # Options: dataset, synthetic, grf
 sweep="variance"
 value="5"
 field_size="200"
@@ -37,14 +37,20 @@ source_y_start=""
 source_y_end=""
 target_y_start=""
 target_y_end=""
-curvature_method="spline"
+curvature_method="savgol" # spline
 curvature_spline_mode="approximation" # Options: approximation, interpolation
 curvature_spline_smooth="2"
 curvature_spline_degree="3"
-curvature_field_smooth_method="none" # Options: none, gaussian
+curvature_field_smooth_method="gaussian" # Options: none, gaussian
 curvature_field_smooth_sigma="2.0"
 curvature_circle_window="10"
-snapshot_mode="fraction_of_first_arrival"  # Options: fraction_of_first_arrival, dt_interval, physical, or "" to disable
+curvature_savgol_window="19"
+curvature_savgol_poly="3"
+normal_deriv_method="mls_frenet"     # Options: direct, savgol2d, spline2d, mls_frenet
+normal_deriv_spline2d_smooth="1.0"   # s=0: interpolating spline; s>0: smoothing spline
+normal_deriv_mls_ns="2"              # MLS Frenet: half-width of patch in tangent direction
+normal_deriv_mls_nn="2"              # MLS Frenet: half-width of patch in normal direction
+snapshot_mode=""  # Options: fraction_of_first_arrival, dt_interval, physical, or "" to disable
 snapshot_times="0.25 0.5 0.75 1.0"
 
 time="00:05:00"
@@ -173,7 +179,7 @@ echo "logK source: ${logk_source}"
 echo "Linearized FP: ${linearized_fp}"
 echo "Linearized scheme: ${linearized_scheme}"
 echo "Check path geometry: ${check_path_geometry}"
-echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window})"
+echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window}, savgol_window=${curvature_savgol_window}, savgol_poly=${curvature_savgol_poly}), normal_deriv_method=${normal_deriv_method}"
 echo "Snapshot mode: ${snapshot_mode:-disabled}, times: ${snapshot_times:-n/a}"
 echo "Curvature field smoothing: method=${curvature_field_smooth_method}, sigma=${curvature_field_smooth_sigma}"
 echo "Step5 geometry overrides: source_x=${source_x:-default}, target_x=${target_x:-default}, source_y=[${source_y_start:-default}, ${source_y_end:-default}), target_y=[${target_y_start:-default}, ${target_y_end:-default})"
@@ -224,6 +230,12 @@ python ./scripts/step5_single_field_paths.py \\
   --curvature-field-smooth-method "${curvature_field_smooth_method}" \\
   --curvature-field-smooth-sigma "${curvature_field_smooth_sigma}" \\
   --curvature-circle-window "${curvature_circle_window}" \\
+  --curvature-savgol-window "${curvature_savgol_window}" \\
+  --curvature-savgol-poly "${curvature_savgol_poly}" \\
+  --normal-deriv-method "${normal_deriv_method}" \\
+  --normal-deriv-spline2d-smooth "${normal_deriv_spline2d_smooth}" \\
+  --normal-deriv-mls-ns "${normal_deriv_mls_ns}" \\
+  --normal-deriv-mls-nn "${normal_deriv_mls_nn}" \\
   ${snapshot_args}
 
 echo "End Time: \$(date)"

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import matplotlib.pyplot as plt
 import numpy as np
 from scipy.interpolate import UnivariateSpline
+from scipy.signal import savgol_filter
 
 
 @dataclass(slots=True)
@@ -173,6 +174,47 @@ def compute_spline_geometry(
     return s_eval, np.asarray(spline_points, dtype=float), tangent, normal, curvature
 
 
+def compute_savgol_geometry(
+    points: np.ndarray,
+    *,
+    window: int = 11,
+    poly_order: int = 3,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compute path geometry via tangent-angle Savitzky-Golay differentiation.
+
+    The curvature identity κ = dθ/ds (where θ is the tangent angle) reduces
+    curvature estimation to differentiating a single scalar signal, avoiding the
+    poorly-conditioned (x'y'' − y'x'') / |r'|³ formula that amplifies spline
+    second-derivative noise.
+
+    Returns (s, pts, tangent, normal, curvature).
+    """
+    pts = np.asarray(points, dtype=float)
+    s = arclength_parameter(pts)
+    n = len(pts)
+
+    # Average arc-length spacing (near-uniform after resample_by_arclength)
+    ds = s[-1] / (n - 1) if n > 1 else 1.0
+
+    # Raw tangent direction via central differences
+    dx = np.gradient(pts[:, 0], s, edge_order=2)
+    dy = np.gradient(pts[:, 1], s, edge_order=2)
+    theta_raw = np.unwrap(np.arctan2(dy, dx))
+
+    win = _coerce_odd_window(window, n)
+    if win >= poly_order + 2:
+        theta_smooth = savgol_filter(theta_raw, win, poly_order, deriv=0, delta=ds)
+        kappa = savgol_filter(theta_raw, win, poly_order, deriv=1, delta=ds)
+    else:
+        # Fallback when window cannot be satisfied (very short paths)
+        theta_smooth = theta_raw
+        kappa = np.gradient(theta_raw, s, edge_order=2)
+
+    tangent = np.column_stack([np.cos(theta_smooth), np.sin(theta_smooth)])
+    normal = np.column_stack([-np.sin(theta_smooth), np.cos(theta_smooth)])
+    return s, pts, tangent, normal, np.asarray(kappa, dtype=float)
+
+
 def _fit_circle(points: np.ndarray) -> tuple[float, float, float]:
     pts = np.asarray(points, dtype=float)
     x = pts[:, 0]
@@ -219,6 +261,8 @@ def compute_curvature_bundle(
     spline_smooth: float = 0.0,
     spline_degree: int = 3,
     circle_window: int = 7,
+    savgol_window: int = 11,
+    savgol_poly: int = 3,
 ) -> CurvatureGeometry:
     pts = np.asarray(points, dtype=float)
     if pts.ndim != 2 or pts.shape[1] != 2:
@@ -226,15 +270,23 @@ def compute_curvature_bundle(
     if pts.shape[0] < 3:
         raise ValueError("At least 3 points are required to compute curvature.")
 
-    if method != "spline":
-        raise ValueError(f"Unsupported curvature method {method!r}; expected 'spline'.")
+    if method not in {"spline", "savgol"}:
+        raise ValueError(f"Unsupported curvature method {method!r}; expected 'spline' or 'savgol'.")
 
-    s, spline_points, tangent, normal, curvature = compute_spline_geometry(
-        pts,
-        mode=spline_mode,
-        smooth=spline_smooth,
-        degree=spline_degree,
-    )
+    if method == "savgol":
+        s, spline_points, tangent, normal, curvature = compute_savgol_geometry(
+            pts,
+            window=savgol_window,
+            poly_order=savgol_poly,
+        )
+    else:
+        s, spline_points, tangent, normal, curvature = compute_spline_geometry(
+            pts,
+            mode=spline_mode,
+            smooth=spline_smooth,
+            degree=spline_degree,
+        )
+
     tangent_raw, normal_raw, curvature_raw = compute_raw_geometry(spline_points)
     curvature_circle = compute_circle_curvature(spline_points, window=circle_window)
     finite = np.isfinite(curvature)

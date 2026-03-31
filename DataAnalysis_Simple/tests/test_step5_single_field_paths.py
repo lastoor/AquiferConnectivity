@@ -463,6 +463,117 @@ def test_extract_linearized_path_from_start_cell_prefers_drop_per_distance() -> 
     np.testing.assert_allclose(path[-1], np.array([1.0, 1.0]))
 
 
+def test_compute_savgol_geometry_on_parabola() -> None:
+    """Savitzky-Golay curvature should approximate the analytical curvature of y=x²."""
+    import step2_metrics as step2
+
+    curvature_module = step5._import_curvature_module()
+    # Dense parabola, then resample at uniform arc length (as done in the pipeline)
+    t = np.linspace(-1.0, 1.0, 2001)
+    raw_points = np.column_stack([t, t * t])
+    points = step2.resample_by_arclength(raw_points, ds=0.01)
+
+    s, pts, tangent, normal, curvature = curvature_module.compute_savgol_geometry(
+        points, window=21, poly_order=3
+    )
+
+    # Analytical curvature of y = x²: κ(x) = 2 / (1 + 4x²)^1.5
+    x_pts = pts[:, 0]
+    kappa_exact = 2.0 / (1.0 + 4.0 * x_pts ** 2) ** 1.5
+
+    # Interior only (avoid edge effects of SG filter)
+    interior = slice(20, -20)
+    rms_savgol = float(np.sqrt(np.mean((curvature[interior] - kappa_exact[interior]) ** 2)))
+    assert rms_savgol < 0.05, f"SG curvature RMS error {rms_savgol:.4f} too large"
+    assert tangent.shape == pts.shape
+    assert normal.shape == pts.shape
+    # Normal should be perpendicular to tangent
+    dot = np.einsum("ij,ij->i", tangent, normal)
+    np.testing.assert_allclose(dot, 0.0, atol=1e-12)
+
+
+def test_normal_derivative_direct_on_linear_field() -> None:
+    """_normal_derivative_direct should be exact for a linear field f(x,y) = ax + by."""
+    x = np.linspace(0.0, 10.0, 50)
+    y = np.linspace(0.0, 10.0, 50)
+    xx, yy = np.meshgrid(x, y)
+    a, b = 2.0, 3.0
+    field = a * xx + b * yy  # linear field: ∇f = (a, b) everywhere
+
+    # Path points and normals inside the domain
+    pts = np.array([[3.0, 4.0], [5.0, 5.0], [7.0, 6.0]], dtype=float)
+    # Normal pointing at 45 degrees
+    angle = np.pi / 4.0
+    normal = np.tile([np.cos(angle), np.sin(angle)], (3, 1))
+
+    result = step5._normal_derivative_direct(field, x, y, pts, normal)
+    expected = a * normal[:, 0] + b * normal[:, 1]  # dot(∇f, n) = a*nx + b*ny
+
+    np.testing.assert_allclose(result, expected, rtol=1e-4)
+
+
+def test_savgol_gradient_2d_on_linear_field() -> None:
+    """_savgol_gradient_2d should recover the exact gradient of a linear field f=ax+by."""
+    x = np.linspace(0.0, 10.0, 50)
+    y = np.linspace(0.0, 10.0, 50)
+    xx, yy = np.meshgrid(x, y)
+    a, b = 2.0, 3.0
+    field = a * xx + b * yy  # ∇f = (a, b) everywhere
+
+    grad_x, grad_y = step5._savgol_gradient_2d(field, x, y, window=11, poly=3)
+
+    # Interior only (avoid SG edge effects)
+    interior = np.s_[5:-5, 5:-5]
+    np.testing.assert_allclose(grad_x[interior], a, rtol=1e-6)
+    np.testing.assert_allclose(grad_y[interior], b, rtol=1e-6)
+
+    # Path points and normals
+    pts = np.array([[3.0, 4.0], [5.0, 5.0], [7.0, 6.0]], dtype=float)
+    angle = np.pi / 4.0
+    normal = np.tile([np.cos(angle), np.sin(angle)], (3, 1))
+    expected = a * normal[:, 0] + b * normal[:, 1]
+
+    sampled_x = step5._bilinear_sample(grad_x, x, y, pts)
+    sampled_y = step5._bilinear_sample(grad_y, x, y, pts)
+    result = sampled_x * normal[:, 0] + sampled_y * normal[:, 1]
+    np.testing.assert_allclose(result, expected, rtol=1e-4)
+
+
+def test_spline2d_normal_derivative_on_linear_field() -> None:
+    """_spline2d_normal_derivative should be exact for a linear field f(x,y) = ax + by."""
+    x = np.linspace(0.0, 10.0, 50)
+    y = np.linspace(0.0, 10.0, 50)
+    xx, yy = np.meshgrid(x, y)
+    a, b = 2.0, 3.0
+    field = a * xx + b * yy
+
+    pts = np.array([[3.0, 4.0], [5.0, 5.0], [7.0, 6.0]], dtype=float)
+    angle = np.pi / 4.0
+    normal = np.tile([np.cos(angle), np.sin(angle)], (3, 1))
+    expected = a * normal[:, 0] + b * normal[:, 1]
+
+    result = step5._spline2d_normal_derivative(field, x, y, pts, normal, smooth=0.0)
+    np.testing.assert_allclose(result, expected, rtol=1e-6)
+
+
+def test_mls_frenet_normal_derivative_on_linear_field() -> None:
+    """_mls_frenet_normal_derivative should recover ∂f/∂n exactly for f(x,y) = ax + by."""
+    x = np.linspace(0.0, 10.0, 50)
+    y = np.linspace(0.0, 10.0, 50)
+    xx, yy = np.meshgrid(x, y)
+    a, b = 2.0, 3.0
+    field = a * xx + b * yy
+
+    pts = np.array([[3.0, 4.0], [5.0, 5.0], [7.0, 6.0]], dtype=float)
+    angle = np.pi / 4.0
+    tangent = np.tile([-np.sin(angle), np.cos(angle)], (3, 1))
+    normal = np.tile([np.cos(angle), np.sin(angle)], (3, 1))
+    expected = a * normal[:, 0] + b * normal[:, 1]
+
+    result = step5._mls_frenet_normal_derivative(field, x, y, pts, tangent, normal, ns=2, nn=2)
+    np.testing.assert_allclose(result, expected, atol=1e-5)
+
+
 def test_compute_raw_geometry_uses_full_curvature_denominator() -> None:
     curvature_module = step5._import_curvature_module()
     t = np.linspace(-1.0, 1.0, 21)

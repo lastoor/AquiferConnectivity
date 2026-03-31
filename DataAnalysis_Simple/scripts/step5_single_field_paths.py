@@ -16,7 +16,9 @@ import numpy as np
 import cmcrameri.cm as cmc
 from matplotlib.colors import to_rgba
 import matplotlib.patheffects as pe
+from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
+from scipy.signal import savgol_filter as _savgol_filter
 
 import step1_index as step1
 import step2_metrics as step2
@@ -1448,23 +1450,209 @@ def _bilinear_sample(field: np.ndarray, x: np.ndarray, y: np.ndarray, points: np
     )
 
 
+def _normal_derivative_direct(
+    log_field: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    spline_points: np.ndarray,
+    normal: np.ndarray,
+    *,
+    delta: float | None = None,
+) -> np.ndarray:
+    """Estimate ∂(log_field)/∂n at each path point via centered finite difference.
+
+    Samples the scalar log_field at p ± δ·n̂ using bilinear interpolation, then
+    divides by 2δ.  This avoids the compound error of first computing a 2-D
+    gradient array with finite differences and then bilinearly sampling that
+    gradient — instead the smoother scalar field is sampled directly.
+    """
+    xg = np.asarray(x, dtype=float)
+    yg = np.asarray(y, dtype=float)
+    if delta is None:
+        dx = xg[1] - xg[0] if xg.size > 1 else 1.0
+        dy = yg[1] - yg[0] if yg.size > 1 else 1.0
+        delta = 0.5 * max(float(dx), float(dy))
+
+    try:
+        interp = RegularGridInterpolator(
+            (yg, xg), np.asarray(log_field, dtype=float),
+            method="cubic", bounds_error=False, fill_value=np.nan,
+        )
+    except ValueError:
+        # scipy < 1.9 does not support method="cubic" for RegularGridInterpolator
+        interp = RegularGridInterpolator(
+            (yg, xg), np.asarray(log_field, dtype=float),
+            method="linear", bounds_error=False, fill_value=np.nan,
+        )
+
+    def _sample(pts: np.ndarray) -> np.ndarray:
+        yx = np.column_stack([
+            np.clip(pts[:, 1], yg[0], yg[-1]),
+            np.clip(pts[:, 0], xg[0], xg[-1]),
+        ])
+        return interp(yx)
+
+    p_plus = spline_points + delta * normal
+    p_minus = spline_points - delta * normal
+    return (_sample(p_plus) - _sample(p_minus)) / (2.0 * delta)
+
+
+def _savgol_gradient_2d(
+    field: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    window: int,
+    poly: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Smooth gradient of a 2D field via separable Savitzky-Golay.
+
+    field shape: (ny, nx), axis=1 is x, axis=0 is y.
+    Returns (grad_x, grad_y) arrays of the same shape as field.
+    """
+    arr = np.asarray(field, dtype=float)
+    ny, nx = arr.shape
+    dx = float(x[1] - x[0]) if len(x) > 1 else 1.0
+    dy = float(y[1] - y[0]) if len(y) > 1 else 1.0
+
+    min_dim = min(nx, ny)
+    win = window if window % 2 == 1 else window + 1
+    win = min(win, min_dim if min_dim % 2 == 1 else min_dim - 1)
+    min_win = poly + 2 if (poly + 2) % 2 == 1 else poly + 3
+    win = max(win, min_win)
+
+    # ∂f/∂x: differentiate along axis=1 (x), smooth along axis=0 (y)
+    grad_x = _savgol_filter(arr,    win, poly, deriv=1, delta=dx, axis=1)
+    grad_x = _savgol_filter(grad_x, win, poly, deriv=0,           axis=0)
+
+    # ∂f/∂y: smooth along axis=1 (x), differentiate along axis=0 (y)
+    grad_y = _savgol_filter(arr,    win, poly, deriv=1, delta=dy, axis=0)
+    grad_y = _savgol_filter(grad_y, win, poly, deriv=0,           axis=1)
+
+    return np.asarray(grad_x, dtype=float), np.asarray(grad_y, dtype=float)
+
+
+def _spline2d_normal_derivative(
+    log_field: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    spline_points: np.ndarray,
+    normal: np.ndarray,
+    *,
+    smooth: float = 0.0,
+) -> np.ndarray:
+    """Estimate ∂(log_field)/∂n via 2D bicubic spline analytic derivative.
+
+    Fits RectBivariateSpline to the field (s=smooth controls smoothing),
+    then evaluates ∂f/∂x and ∂f/∂y analytically at path points.
+    No δ-offset finite difference is needed.
+    """
+    xg = np.asarray(x, dtype=float)
+    yg = np.asarray(y, dtype=float)
+    field = np.asarray(log_field, dtype=float)
+    pts_y = np.clip(spline_points[:, 1], yg[0], yg[-1])
+    pts_x = np.clip(spline_points[:, 0], xg[0], xg[-1])
+
+    spl = RectBivariateSpline(yg, xg, field, kx=3, ky=3, s=smooth)
+    # RectBivariateSpline(y, x, z): dx=1 → ∂/∂y, dy=1 → ∂/∂x
+    grad_x = spl.ev(pts_y, pts_x, dx=0, dy=1)
+    grad_y = spl.ev(pts_y, pts_x, dx=1, dy=0)
+    return np.asarray(grad_x * normal[:, 0] + grad_y * normal[:, 1], dtype=float)
+
+
+def _mls_frenet_normal_derivative(
+    log_field: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    spline_points: np.ndarray,
+    tangent: np.ndarray,
+    normal: np.ndarray,
+    *,
+    ns: int = 2,
+    nn: int = 2,
+) -> np.ndarray:
+    """Estimate ∂(log_field)/∂n via 2D Moving Least Squares in the Frenet-Serret frame.
+
+    At each path point, samples a (2ns+1)×(2nn+1) patch of field values on a grid
+    aligned with the local tangent t̂ and normal n̂.  Fits the degree-2 polynomial
+
+        f(s, n) ≈ c1·s² + c2·n² + c3·s·n + c4·s + c5·n + c6
+
+    via least squares.  The normal derivative at the centre (s=0, n=0) is c5.
+
+    The design matrix depends only on the patch geometry, so its pseudoinverse is
+    precomputed once.  All patch points across all path points are sampled in a
+    single vectorised interpolator call.
+    """
+    xg = np.asarray(x, dtype=float)
+    yg = np.asarray(y, dtype=float)
+    dx = float(xg[1] - xg[0]) if xg.size > 1 else 1.0
+    dy = float(yg[1] - yg[0]) if yg.size > 1 else 1.0
+    delta = max(dx, dy)
+
+    # Patch offsets in (s, n) frame — same for every path point
+    s_offsets = np.arange(-ns, ns + 1) * delta
+    n_offsets = np.arange(-nn, nn + 1) * delta
+    SS, NN = np.meshgrid(s_offsets, n_offsets)
+    SS_flat = SS.ravel()
+    NN_flat = NN.ravel()
+    m = len(SS_flat)
+
+    # Design matrix A: degree-2 polynomial in (s, n), 6 coefficients
+    A = np.column_stack([
+        SS_flat ** 2, NN_flat ** 2, SS_flat * NN_flat,
+        SS_flat, NN_flat, np.ones(m),
+    ])
+    # Precompute extraction weight vector for c5 = ∂f/∂n at (s=0, n=0)
+    A_pinv = np.linalg.lstsq(A, np.eye(m), rcond=None)[0]  # shape (6, m)
+    w = A_pinv[4, :]  # shape (m,)
+
+    # Patch (x, y) coordinates for all path points — vectorised: shape (N, m)
+    patch_x = (spline_points[:, 0:1]
+                + SS_flat[None, :] * tangent[:, 0:1]
+                + NN_flat[None, :] * normal[:, 0:1])
+    patch_y = (spline_points[:, 1:2]
+                + SS_flat[None, :] * tangent[:, 1:2]
+                + NN_flat[None, :] * normal[:, 1:2])
+    patch_x = np.clip(patch_x, xg[0], xg[-1])
+    patch_y = np.clip(patch_y, yg[0], yg[-1])
+
+    try:
+        interp = RegularGridInterpolator(
+            (yg, xg), np.asarray(log_field, dtype=float),
+            method="cubic", bounds_error=False, fill_value=np.nan,
+        )
+    except ValueError:
+        interp = RegularGridInterpolator(
+            (yg, xg), np.asarray(log_field, dtype=float),
+            method="linear", bounds_error=False, fill_value=np.nan,
+        )
+
+    yx_query = np.column_stack([patch_y.ravel(), patch_x.ravel()])
+    f_vals = interp(yx_query).reshape(len(spline_points), m)  # shape (N, m)
+
+    return np.asarray(f_vals @ w, dtype=float)
+
+
 def _build_path_balance_diagnostics(
     path: np.ndarray,
     *,
     label: str,
     x: np.ndarray,
     y: np.ndarray,
-    grad_logk_x: np.ndarray,
-    grad_logk_y: np.ndarray,
-    grad_loggradh_x: np.ndarray,
-    grad_loggradh_y: np.ndarray,
-    grad_logv_x: np.ndarray,
-    grad_logv_y: np.ndarray,
+    logk_field: np.ndarray,
+    log_grad_h_field: np.ndarray,
+    log_v_field: np.ndarray,
     curvature_method: str,
     spline_mode: str,
     spline_smooth: float,
     spline_degree: int,
     circle_window: int,
+    savgol_window: int = 11,
+    savgol_poly: int = 3,
+    normal_deriv_method: str = "direct",
+    normal_deriv_spline2d_smooth: float = 0.0,
+    normal_deriv_mls_ns: int = 2,
+    normal_deriv_mls_nn: int = 2,
     ds: float = 1.0,
 ) -> PathBalanceDiagnostics:
     pts = step2.resample_by_arclength(np.asarray(path, dtype=float), ds=ds)
@@ -1479,6 +1667,8 @@ def _build_path_balance_diagnostics(
         spline_smooth=spline_smooth,
         spline_degree=spline_degree,
         circle_window=circle_window,
+        savgol_window=savgol_window,
+        savgol_poly=savgol_poly,
     )
 
     s = np.asarray(geometry.s, dtype=float)
@@ -1492,22 +1682,42 @@ def _build_path_balance_diagnostics(
     if length <= 0.0:
         raise ValueError(f"{label} path has zero arclength.")
 
-    grad_logk = np.column_stack([
-        _bilinear_sample(grad_logk_x, x, y, spline_points),
-        _bilinear_sample(grad_logk_y, x, y, spline_points),
-    ])
-    grad_loggradh = np.column_stack([
-        _bilinear_sample(grad_loggradh_x, x, y, spline_points),
-        _bilinear_sample(grad_loggradh_y, x, y, spline_points),
-    ])
-    grad_logv = np.column_stack([
-        _bilinear_sample(grad_logv_x, x, y, spline_points),
-        _bilinear_sample(grad_logv_y, x, y, spline_points),
-    ])
+    if normal_deriv_method == "mls_frenet":
+        dlogk_dn = _mls_frenet_normal_derivative(logk_field, x, y, spline_points, tangent, normal, ns=normal_deriv_mls_ns, nn=normal_deriv_mls_nn)
+        dloggradh_dn = _mls_frenet_normal_derivative(log_grad_h_field, x, y, spline_points, tangent, normal, ns=normal_deriv_mls_ns, nn=normal_deriv_mls_nn)
+        dlogv_dn = _mls_frenet_normal_derivative(log_v_field, x, y, spline_points, tangent, normal, ns=normal_deriv_mls_ns, nn=normal_deriv_mls_nn)
+    elif normal_deriv_method == "spline2d":
+        dlogk_dn = _spline2d_normal_derivative(logk_field, x, y, spline_points, normal, smooth=normal_deriv_spline2d_smooth)
+        dloggradh_dn = _spline2d_normal_derivative(log_grad_h_field, x, y, spline_points, normal, smooth=normal_deriv_spline2d_smooth)
+        dlogv_dn = _spline2d_normal_derivative(log_v_field, x, y, spline_points, normal, smooth=normal_deriv_spline2d_smooth)
+    elif normal_deriv_method == "savgol2d":
+        grad_logk_x, grad_logk_y = _savgol_gradient_2d(logk_field, x, y, savgol_window, savgol_poly)
+        grad_loggradh_x, grad_loggradh_y = _savgol_gradient_2d(log_grad_h_field, x, y, savgol_window, savgol_poly)
+        grad_logv_x, grad_logv_y = _savgol_gradient_2d(log_v_field, x, y, savgol_window, savgol_poly)
+        dlogk_dn = np.einsum("ij,ij->i", np.column_stack([
+            _bilinear_sample(grad_logk_x, x, y, spline_points),
+            _bilinear_sample(grad_logk_y, x, y, spline_points),
+        ]), normal)
+        dloggradh_dn = np.einsum("ij,ij->i", np.column_stack([
+            _bilinear_sample(grad_loggradh_x, x, y, spline_points),
+            _bilinear_sample(grad_loggradh_y, x, y, spline_points),
+        ]), normal)
+        dlogv_dn = np.einsum("ij,ij->i", np.column_stack([
+            _bilinear_sample(grad_logv_x, x, y, spline_points),
+            _bilinear_sample(grad_logv_y, x, y, spline_points),
+        ]), normal)
+    else:  # "direct"
+        dlogk_dn = _normal_derivative_direct(logk_field, x, y, spline_points, normal)
+        dloggradh_dn = _normal_derivative_direct(log_grad_h_field, x, y, spline_points, normal)
+        dlogv_dn = _normal_derivative_direct(log_v_field, x, y, spline_points, normal)
+        n_pts = len(spline_points)
+        win = curvature_module._coerce_odd_window(savgol_window, n_pts)
+        if win >= savgol_poly + 2:
+            ds_path = length / (n_pts - 1) if n_pts > 1 else 1.0
+            dlogk_dn = _savgol_filter(dlogk_dn, win, savgol_poly, deriv=0, delta=ds_path)
+            dloggradh_dn = _savgol_filter(dloggradh_dn, win, savgol_poly, deriv=0, delta=ds_path)
+            dlogv_dn = _savgol_filter(dlogv_dn, win, savgol_poly, deriv=0, delta=ds_path)
 
-    dlogk_dn = np.einsum("ij,ij->i", grad_logk, normal)
-    dloggradh_dn = np.einsum("ij,ij->i", grad_loggradh, normal)
-    dlogv_dn = np.einsum("ij,ij->i", grad_logv, normal)
     residual_term = dlogv_dn if label == "FP (FMM)" else dlogk_dn
 
     return PathBalanceDiagnostics(
@@ -1542,6 +1752,12 @@ def compute_balance_diagnostics(
     curvature_field_smooth_method: str = "none",
     curvature_field_smooth_sigma: float = 0.0,
     curvature_circle_window: int = 7,
+    curvature_savgol_window: int = 11,
+    curvature_savgol_poly: int = 3,
+    normal_deriv_method: str = "direct",
+    normal_deriv_spline2d_smooth: float = 0.0,
+    normal_deriv_mls_ns: int = 2,
+    normal_deriv_mls_nn: int = 2,
     ds: float = 1.0,
 ) -> tuple[PathBalanceDiagnostics, PathBalanceDiagnostics]:
     h = np.asarray(result.h, dtype=float)
@@ -1573,26 +1789,25 @@ def compute_balance_diagnostics(
     log_grad_h = _safe_log(grad_h_mag_smoothed)
     log_v = _safe_log(v_mag_smoothed)
 
-    grad_logk_x, grad_logk_y = _compute_centered_gradient(logk_smoothed, x, y)
-    grad_loggradh_x, grad_loggradh_y = _compute_centered_gradient(log_grad_h, x, y)
-    grad_logv_x, grad_logv_y = _compute_centered_gradient(log_v, x, y)
-
     fp_diag = _build_path_balance_diagnostics(
         result.fp_fmm,
         label="FP (FMM)",
         x=x,
         y=y,
-        grad_logk_x=grad_logk_x,
-        grad_logk_y=grad_logk_y,
-        grad_loggradh_x=grad_loggradh_x,
-        grad_loggradh_y=grad_loggradh_y,
-        grad_logv_x=grad_logv_x,
-        grad_logv_y=grad_logv_y,
+        logk_field=logk_smoothed,
+        log_grad_h_field=log_grad_h,
+        log_v_field=log_v,
         curvature_method=curvature_method,
         spline_mode=curvature_spline_mode,
         spline_smooth=curvature_spline_smooth,
         spline_degree=curvature_spline_degree,
         circle_window=curvature_circle_window,
+        savgol_window=curvature_savgol_window,
+        savgol_poly=curvature_savgol_poly,
+        normal_deriv_method=normal_deriv_method,
+        normal_deriv_spline2d_smooth=normal_deriv_spline2d_smooth,
+        normal_deriv_mls_ns=normal_deriv_mls_ns,
+        normal_deriv_mls_nn=normal_deriv_mls_nn,
         ds=ds,
     )
     lrp_diag = _build_path_balance_diagnostics(
@@ -1600,17 +1815,20 @@ def compute_balance_diagnostics(
         label="LRP (FMM)",
         x=x,
         y=y,
-        grad_logk_x=grad_logk_x,
-        grad_logk_y=grad_logk_y,
-        grad_loggradh_x=grad_loggradh_x,
-        grad_loggradh_y=grad_loggradh_y,
-        grad_logv_x=grad_logv_x,
-        grad_logv_y=grad_logv_y,
+        logk_field=logk_smoothed,
+        log_grad_h_field=log_grad_h,
+        log_v_field=log_v,
         curvature_method=curvature_method,
         spline_mode=curvature_spline_mode,
         spline_smooth=curvature_spline_smooth,
         spline_degree=curvature_spline_degree,
         circle_window=curvature_circle_window,
+        savgol_window=curvature_savgol_window,
+        savgol_poly=curvature_savgol_poly,
+        normal_deriv_method=normal_deriv_method,
+        normal_deriv_spline2d_smooth=normal_deriv_spline2d_smooth,
+        normal_deriv_mls_ns=normal_deriv_mls_ns,
+        normal_deriv_mls_nn=normal_deriv_mls_nn,
         ds=ds,
     )
     return fp_diag, lrp_diag
@@ -2064,16 +2282,16 @@ def _value_slug(value: float) -> str:
 def run_step5(
     cfg: step1.VisualizationConfig,
     *,
-    logk_source: str,
-    sweep: str | None,
-    value: float | None,
-    field_size: int,
-    mc_index: int | None,
-    output_dir: Path | None,
-    synthetic_amplitude: float,
-    synthetic_frequency_x: float,
-    synthetic_frequency_y: float,
-    synthetic_offset: float,
+    logk_source: str = "dataset",
+    sweep: str | None = None,
+    value: float | None = None,
+    field_size: int = 200,
+    mc_index: int | None = None,
+    output_dir: Path | None = None,
+    synthetic_amplitude: float = 1.0,
+    synthetic_frequency_x: float = 1.0,
+    synthetic_frequency_y: float = 1.0,
+    synthetic_offset: float = 0.0,
     grf_std: float = 1.0,
     grf_length_scale: float | None = None,
     grf_seed: int = 0,
@@ -2102,14 +2320,20 @@ def run_step5(
     source_y_end: int | None = None,
     target_y_start: int | None = None,
     target_y_end: int | None = None,
-    curvature_method: str,
-    curvature_spline_mode: str,
-    curvature_spline_smooth: float,
-    curvature_spline_degree: int,
-    curvature_field_smooth_method: str,
-    curvature_field_smooth_sigma: float,
-    curvature_circle_window: int,
-    density_particle: int,
+    curvature_method: str = "savgol",
+    curvature_spline_mode: str = "interpolation",
+    curvature_spline_smooth: float = 0.0,
+    curvature_spline_degree: int = 3,
+    curvature_field_smooth_method: str = "none",
+    curvature_field_smooth_sigma: float = 0.0,
+    curvature_circle_window: int = 11,
+    curvature_savgol_window: int = 11,
+    curvature_savgol_poly: int = 3,
+    normal_deriv_method: str = "direct",
+    normal_deriv_spline2d_smooth: float = 0.0,
+    normal_deriv_mls_ns: int = 2,
+    normal_deriv_mls_nn: int = 2,
+    density_particle: int = 20,
     num_particles: int | None = None,
     eps_speed: float,
     ds_min: float,
@@ -2241,6 +2465,12 @@ def run_step5(
         curvature_field_smooth_method=curvature_field_smooth_method,
         curvature_field_smooth_sigma=curvature_field_smooth_sigma,
         curvature_circle_window=curvature_circle_window,
+        curvature_savgol_window=curvature_savgol_window,
+        curvature_savgol_poly=curvature_savgol_poly,
+        normal_deriv_method=normal_deriv_method,
+        normal_deriv_spline2d_smooth=normal_deriv_spline2d_smooth,
+        normal_deriv_mls_ns=normal_deriv_mls_ns,
+        normal_deriv_mls_nn=normal_deriv_mls_nn,
         ds=1.0,
     )
 
@@ -2400,13 +2630,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-y-end", type=int, default=None)
     parser.add_argument("--target-y-start", type=int, default=None)
     parser.add_argument("--target-y-end", type=int, default=None)
-    parser.add_argument("--curvature-method", choices=["spline"], default="spline")
+    parser.add_argument("--curvature-method", choices=["spline", "savgol"], default="spline")
     parser.add_argument("--curvature-spline-mode", choices=["interpolation", "approximation"], default="interpolation")
     parser.add_argument("--curvature-spline-smooth", type=float, default=0.0)
     parser.add_argument("--curvature-spline-degree", type=int, default=3)
     parser.add_argument("--curvature-field-smooth-method", choices=["none", "gaussian"], default="none")
     parser.add_argument("--curvature-field-smooth-sigma", type=float, default=0.0)
     parser.add_argument("--curvature-circle-window", type=int, default=11)
+    parser.add_argument("--curvature-savgol-window", type=int, default=11)
+    parser.add_argument("--curvature-savgol-poly", type=int, default=3)
+    parser.add_argument("--normal-deriv-method", choices=["direct", "savgol2d", "spline2d", "mls_frenet"], default="direct")
+    parser.add_argument("--normal-deriv-spline2d-smooth", type=float, default=0.0)
+    parser.add_argument("--normal-deriv-mls-ns", type=int, default=2)
+    parser.add_argument("--normal-deriv-mls-nn", type=int, default=2)
 
     parser.add_argument("--density-particle", type=int, default=20)
     parser.add_argument("--num-particles", type=int, default=None)
@@ -2529,6 +2765,12 @@ def main() -> int:
         curvature_field_smooth_method=args.curvature_field_smooth_method,
         curvature_field_smooth_sigma=args.curvature_field_smooth_sigma,
         curvature_circle_window=args.curvature_circle_window,
+        curvature_savgol_window=args.curvature_savgol_window,
+        curvature_savgol_poly=args.curvature_savgol_poly,
+        normal_deriv_method=args.normal_deriv_method,
+        normal_deriv_spline2d_smooth=args.normal_deriv_spline2d_smooth,
+        normal_deriv_mls_ns=args.normal_deriv_mls_ns,
+        normal_deriv_mls_nn=args.normal_deriv_mls_nn,
         density_particle=args.density_particle,
         num_particles=args.num_particles,
         eps_speed=args.eps_speed,
