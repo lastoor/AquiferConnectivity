@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-logk_source="synthetic" # Options: dataset, synthetic, grf
+logk_source="grf" # Options: dataset, synthetic, grf
 sweep="variance"
 value="5"
 field_size="200"
@@ -37,20 +37,24 @@ source_y_start=""
 source_y_end=""
 target_y_start=""
 target_y_end=""
-curvature_method="savgol" # spline
+curvature_resample_ds="1.0"  # Arc-length resampling interval (grid cells) before curvature; smaller = denser points
+curvature_method="savgol" # Options: spline, savgol, circle
 curvature_spline_mode="approximation" # Options: approximation, interpolation
-curvature_spline_smooth="2"
-curvature_spline_degree="3"
-curvature_field_smooth_method="gaussian" # Options: none, gaussian
+curvature_spline_smooth="1"
+curvature_spline_degree="4"
+curvature_field_smooth_method="none" # Options: none, gaussian
 curvature_field_smooth_sigma="2.0"
-curvature_circle_window="10"
-curvature_savgol_window="19"
-curvature_savgol_poly="3"
-normal_deriv_method="mls_frenet"     # Options: direct, savgol2d, spline2d, mls_frenet
+curvature_circle_window="20"
+curvature_savgol_window="3"
+curvature_savgol_poly="2"
+normal_deriv_method="hessian_T"     # Options: direct, savgol2d, spline2d, mls_frenet, hessian_T
 normal_deriv_spline2d_smooth="1.0"   # s=0: interpolating spline; s>0: smoothing spline
 normal_deriv_mls_ns="2"              # MLS Frenet: half-width of patch in tangent direction
 normal_deriv_mls_nn="2"              # MLS Frenet: half-width of patch in normal direction
-snapshot_mode=""  # Options: fraction_of_first_arrival, dt_interval, physical, or "" to disable
+normal_deriv_hessian_smooth="0.0"    # hessian_T: Gaussian pre-smooth sigma in grid cells (0=none)
+normal_deriv_hessian_window="5"      # hessian_T: SG stencil window (odd, >= 3; window=3 = original Sobel)
+normal_deriv_hessian_poly="3"        # hessian_T: SG polynomial degree (>= 2)
+snapshot_mode="fraction_of_first_arrival"  # Options: fraction_of_first_arrival, dt_interval, physical, or "" to disable
 snapshot_times="0.25 0.5 0.75 1.0"
 
 time="00:05:00"
@@ -223,6 +227,7 @@ python ./scripts/step5_single_field_paths.py \\
   ${linearized_args} \\
   ${check_path_geometry_args} \\
   ${geometry_args} \\
+  --curvature-resample-ds "${curvature_resample_ds}" \\
   --curvature-method "${curvature_method}" \\
   --curvature-spline-mode "${curvature_spline_mode}" \\
   --curvature-spline-smooth "${curvature_spline_smooth}" \\
@@ -236,6 +241,9 @@ python ./scripts/step5_single_field_paths.py \\
   --normal-deriv-spline2d-smooth "${normal_deriv_spline2d_smooth}" \\
   --normal-deriv-mls-ns "${normal_deriv_mls_ns}" \\
   --normal-deriv-mls-nn "${normal_deriv_mls_nn}" \\
+  --normal-deriv-hessian-smooth "${normal_deriv_hessian_smooth}" \\
+  --normal-deriv-hessian-window "${normal_deriv_hessian_window}" \\
+  --normal-deriv-hessian-poly "${normal_deriv_hessian_poly}" \\
   ${snapshot_args}
 
 echo "End Time: \$(date)"

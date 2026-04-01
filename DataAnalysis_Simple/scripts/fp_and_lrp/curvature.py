@@ -180,12 +180,13 @@ def compute_savgol_geometry(
     window: int = 11,
     poly_order: int = 3,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Compute path geometry via tangent-angle Savitzky-Golay differentiation.
+    """Compute path geometry via Savitzky-Golay differentiation of coordinates.
 
-    The curvature identity κ = dθ/ds (where θ is the tangent angle) reduces
-    curvature estimation to differentiating a single scalar signal, avoiding the
-    poorly-conditioned (x'y'' − y'x'') / |r'|³ formula that amplifies spline
-    second-derivative noise.
+    Applies SG directly to x(s) and y(s) to obtain smooth first and second
+    arc-length derivatives, then computes curvature as
+        κ = (x'y'' − y'x'') / (x'² + y'²)^(3/2)
+    This avoids the np.gradient → arctan2 → unwrap pipeline of the previous
+    formulation, which injected np.gradient noise before SG differentiation.
 
     Returns (s, pts, tangent, normal, curvature).
     """
@@ -196,22 +197,23 @@ def compute_savgol_geometry(
     # Average arc-length spacing (near-uniform after resample_by_arclength)
     ds = s[-1] / (n - 1) if n > 1 else 1.0
 
-    # Raw tangent direction via central differences
-    dx = np.gradient(pts[:, 0], s, edge_order=2)
-    dy = np.gradient(pts[:, 1], s, edge_order=2)
-    theta_raw = np.unwrap(np.arctan2(dy, dx))
-
     win = _coerce_odd_window(window, n)
     if win >= poly_order + 2:
-        theta_smooth = savgol_filter(theta_raw, win, poly_order, deriv=0, delta=ds)
-        kappa = savgol_filter(theta_raw, win, poly_order, deriv=1, delta=ds)
+        xs  = savgol_filter(pts[:, 0], win, poly_order, deriv=1, delta=ds)
+        ys  = savgol_filter(pts[:, 1], win, poly_order, deriv=1, delta=ds)
+        xss = savgol_filter(pts[:, 0], win, poly_order, deriv=2, delta=ds)
+        yss = savgol_filter(pts[:, 1], win, poly_order, deriv=2, delta=ds)
     else:
         # Fallback when window cannot be satisfied (very short paths)
-        theta_smooth = theta_raw
-        kappa = np.gradient(theta_raw, s, edge_order=2)
+        xs  = np.gradient(pts[:, 0], s, edge_order=2)
+        ys  = np.gradient(pts[:, 1], s, edge_order=2)
+        xss = np.gradient(xs, s, edge_order=2)
+        yss = np.gradient(ys, s, edge_order=2)
 
-    tangent = np.column_stack([np.cos(theta_smooth), np.sin(theta_smooth)])
-    normal = np.column_stack([-np.sin(theta_smooth), np.cos(theta_smooth)])
+    denom = (xs * xs + ys * ys) ** 1.5
+    kappa = np.where(denom > 1e-14, (xs * yss - ys * xss) / np.maximum(denom, 1e-14), 0.0)
+    tangent = _normalize_tangent(np.column_stack([xs, ys]))
+    normal = np.column_stack([-tangent[:, 1], tangent[:, 0]])
     return s, pts, tangent, normal, np.asarray(kappa, dtype=float)
 
 
@@ -270,8 +272,11 @@ def compute_curvature_bundle(
     if pts.shape[0] < 3:
         raise ValueError("At least 3 points are required to compute curvature.")
 
-    if method not in {"spline", "savgol"}:
-        raise ValueError(f"Unsupported curvature method {method!r}; expected 'spline' or 'savgol'.")
+    if method not in {"spline", "savgol", "circle"}:
+        raise ValueError(
+            f"Unsupported curvature method {method!r}; "
+            "expected 'spline', 'savgol', or 'circle'."
+        )
 
     if method == "savgol":
         s, spline_points, tangent, normal, curvature = compute_savgol_geometry(
@@ -279,7 +284,13 @@ def compute_curvature_bundle(
             window=savgol_window,
             poly_order=savgol_poly,
         )
-    else:
+    elif method == "circle":
+        # Use savgol geometry for tangent/normal; circle fit for curvature.
+        s, spline_points, tangent, normal, _ = compute_savgol_geometry(
+            pts, window=savgol_window, poly_order=savgol_poly,
+        )
+        curvature = compute_circle_curvature(spline_points, window=circle_window)
+    else:  # "spline"
         s, spline_points, tangent, normal, curvature = compute_spline_geometry(
             pts,
             mode=spline_mode,

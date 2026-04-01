@@ -16,6 +16,8 @@ import numpy as np
 import cmcrameri.cm as cmc
 from matplotlib.colors import to_rgba
 import matplotlib.patheffects as pe
+from matplotlib.colors import LogNorm
+from matplotlib.ticker import LogFormatterMathtext, LogLocator
 from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
 from scipy.signal import savgol_filter as _savgol_filter
@@ -366,16 +368,16 @@ def generate_synthetic_logk(
     ecllipse3 = (dx3 * np.cos(theta3) + dy3 * np.sin(theta3)) ** 2 / a3**2 + (dx3 * np.sin(theta3) - dy3 * np.cos(theta3)) ** 2 / b3**2
     ecllipse4 = (dx4 * np.cos(theta4) + dy4 * np.sin(theta4)) ** 2 / a4**2 + (dx4 * np.sin(theta4) - dy4 * np.cos(theta4)) ** 2 / b4**2
 
-    return np.asarray(
-        offset
-        + amplitude * (
-            np.exp(- ecllipse1)
-            + 0.75*np.exp(- ecllipse2)
-            # + 0.1*np.exp(- ecllipse3)
-            # + 0.1*np.exp(- ecllipse4)
-        ),
-        dtype=float,
-    )
+    # return np.asarray(
+    #     offset
+    #     + amplitude * (
+    #         np.exp(- ecllipse1)
+    #         + 0.75*np.exp(- ecllipse2)
+    #         # + 0.1*np.exp(- ecllipse3)
+    #         # + 0.1*np.exp(- ecllipse4)
+    #     ),
+    #     dtype=float,
+    # )
 
     # return np.asarray(
     #     offset
@@ -386,16 +388,16 @@ def generate_synthetic_logk(
     #     dtype=float,
     # )
 
-    # return np.asarray(
-    #     offset
-    #     + amplitude * (
-    #         np.sin(2.0 * np.pi * frequency_x * xx)
-    #         * np.cos(2.0 * np.pi * frequency_y * yy)
-    #         + np.exp(- ((xx - 3/8) ** 2 + (yy - 3/4) ** 2) / (1/8) ** 2)
-    #         + np.exp(- ((xx - 5/8) ** 2 + (yy - 1/4) ** 2) / (1/8) ** 2)
-    #     ),
-    #     dtype=float,
-    # )
+    return np.asarray(
+        offset
+        + amplitude * (
+            np.sin(2.0 * np.pi * frequency_x * xx)
+            * np.cos(2.0 * np.pi * frequency_y * yy)
+            + np.exp(- ((xx - 3/8) ** 2 + (yy - 3/4) ** 2) / (1/8) ** 2)
+            + np.exp(- ((xx - 5/8) ** 2 + (yy - 1/4) ** 2) / (1/8) ** 2)
+        ),
+        dtype=float,
+    )
 
     # # Sine curve
     # y_sin = np.sin(xx)/2
@@ -1633,6 +1635,97 @@ def _mls_frenet_normal_derivative(
     return np.asarray(f_vals @ w, dtype=float)
 
 
+def _hessian_T_speed_normal_derivative(
+    T: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    spline_points: np.ndarray,
+    *,
+    pre_smooth_sigma: float = 0.0,
+    stencil_window: int = 3,
+    stencil_poly: int = 2,
+) -> np.ndarray:
+    """Estimate ∂(ln s)/∂n = -∂(ln c)/∂n along the path from the Hessian of T.
+
+    Uses the identity  κ = T_nt / s  derived from the eikonal equation
+    (∇(|∇T|²) = ∇(s²)  ⟹  (D²T)·t̂ = ∇s  ⟹  κ = n̂·(D²T)·t̂ / s),
+    where κ = ∂(ln s)/∂n is the normal derivative of log-slowness, equal to
+    the negative normal derivative of log-speed.
+
+    All five partial derivatives (Tx, Ty, Txx, Tyy, Txy) are estimated with
+    separable Savitzky-Golay filters, generalising the 3×3 Sobel approach:
+    stencil_window=3, stencil_poly=2 reproduces the original Sobel result
+    exactly; larger windows suppress the noise in the second derivatives.
+
+    Parameters
+    ----------
+    T                : (ny, nx) travel-time field (inf for unreachable cells).
+    x, y             : 1-D physical coordinate arrays (uniform spacing).
+    spline_points    : (N, 2) path points as (x, y) at which to sample.
+    pre_smooth_sigma : Gaussian sigma in grid cells applied to T before
+                       differencing (0 = no smoothing).
+    stencil_window   : SG window length (odd integer >= 3).  Larger values
+                       give smoother second-derivative estimates at the cost
+                       of spatial resolution.
+    stencil_poly     : SG polynomial degree (>= 2, enforced internally).
+
+    Returns
+    -------
+    kappa : (N,) array  = ∂(ln s)/∂n = -∂(ln c)/∂n  at each path point.
+    """
+    from scipy.ndimage import gaussian_filter
+    from scipy.signal import savgol_filter as _sg
+
+    T = np.asarray(T, dtype=float)
+    valid = np.isfinite(T)
+    h_x = float(x[1] - x[0]) if len(x) > 1 else 1.0
+    h_y = float(y[1] - y[0]) if len(y) > 1 else 1.0
+
+    T_work = np.where(valid, T, 0.0)
+    if pre_smooth_sigma > 0.0:
+        T_num = gaussian_filter(T_work, pre_smooth_sigma)
+        T_den = gaussian_filter(np.where(valid, 1.0, 0.0), pre_smooth_sigma)
+        T_work = np.where(valid, T_num / np.maximum(T_den, 1e-12), 0.0)
+
+    # Coerce window: odd, fits in the grid, and large enough for 2nd derivatives.
+    poly = max(stencil_poly, 2)  # second derivatives need degree >= 2
+    win = stencil_window if stencil_window % 2 == 1 else stencil_window + 1
+    min_dim = min(T_work.shape)
+    win = min(win, min_dim if min_dim % 2 == 1 else min_dim - 1)
+    min_win = poly + 2 if (poly + 2) % 2 == 1 else poly + 3
+    win = max(win, min_win)
+
+    def sg(arr: np.ndarray, deriv: int, delta: float, axis: int) -> np.ndarray:
+        return np.asarray(
+            _sg(arr, win, poly, deriv=deriv, delta=float(delta), axis=axis, mode='nearest'),
+            dtype=float,
+        )
+
+    # Each derivative: differentiate along its axis, then smooth perpendicularly.
+    # For the cross term: differentiate in x first, then in y.
+    Tx  = sg(sg(T_work, 1, h_x, 1), 0, 1.0, 0)
+    Ty  = sg(sg(T_work, 1, h_y, 0), 0, 1.0, 1)
+    Txx = sg(sg(T_work, 2, h_x, 1), 0, 1.0, 0)
+    Tyy = sg(sg(T_work, 2, h_y, 0), 0, 1.0, 1)
+    Txy = sg(sg(T_work, 1, h_x, 1), 1, h_y, 0)
+
+    grad2 = Tx**2 + Ty**2
+
+    # Mask only cells where T is not finite or the SG stencil spans the T=0
+    # source boundary (T smaller than one stencil half-width of travel time).
+    # Do NOT use a relative threshold: inside the FMM domain |∇T| = 1/speed
+    # is legitimately small in high-speed regions, which are exactly the cells
+    # the FP path passes through.
+    t_boundary = float(np.nanpercentile(T[valid], 2.0)) if np.any(valid) else 0.0
+    near_source = valid & (T <= max(t_boundary, 0.0))
+    reliable = valid & ~near_source & (grad2 > 0.0)
+
+    numerator = Tx * Ty * (Tyy - Txx) + (Tx**2 - Ty**2) * Txy
+    kappa_field = np.where(reliable, numerator / np.where(reliable, grad2**1.5, 1.0), np.nan)
+
+    return _bilinear_sample(kappa_field, x, y, spline_points)
+
+
 def _build_path_balance_diagnostics(
     path: np.ndarray,
     *,
@@ -1653,6 +1746,10 @@ def _build_path_balance_diagnostics(
     normal_deriv_spline2d_smooth: float = 0.0,
     normal_deriv_mls_ns: int = 2,
     normal_deriv_mls_nn: int = 2,
+    normal_deriv_hessian_smooth: float = 0.0,
+    normal_deriv_hessian_window: int = 3,
+    normal_deriv_hessian_poly: int = 2,
+    t_field: np.ndarray | None = None,
     ds: float = 1.0,
 ) -> PathBalanceDiagnostics:
     pts = step2.resample_by_arclength(np.asarray(path, dtype=float), ds=ds)
@@ -1706,6 +1803,33 @@ def _build_path_balance_diagnostics(
             _bilinear_sample(grad_logv_x, x, y, spline_points),
             _bilinear_sample(grad_logv_y, x, y, spline_points),
         ]), normal)
+    elif normal_deriv_method == "hessian_T":
+        # κ = T_nt/s  ⟹  ∂(ln s)/∂n = -∂(ln c)/∂n = kappa_T
+        # Replace only the "primary" combined term for this path's eikonal field;
+        # use the direct method for the individually decomposed components.
+        kappa_T = (
+            _hessian_T_speed_normal_derivative(
+                t_field, x, y, spline_points,
+                pre_smooth_sigma=normal_deriv_hessian_smooth,
+                stencil_window=normal_deriv_hessian_window,
+                stencil_poly=normal_deriv_hessian_poly,
+            )
+            if t_field is not None
+            else np.full(len(spline_points), np.nan)
+        )
+        dlogk_dn_d    = _normal_derivative_direct(logk_field,       x, y, spline_points, normal)
+        dloggradh_dn_d = _normal_derivative_direct(log_grad_h_field, x, y, spline_points, normal)
+        dlogv_dn_d    = _normal_derivative_direct(log_v_field,      x, y, spline_points, normal)
+        if label == "FP (FMM)":
+            # speed = v = k·|∇h|  →  ∂(ln s)/∂n = -dlogv_dn
+            dlogk_dn    = dlogk_dn_d
+            dloggradh_dn = dloggradh_dn_d
+            dlogv_dn    = -kappa_T
+        else:
+            # LRP: speed = k·dh_mean  →  ∂(ln s)/∂n = -dlogk_dn
+            dlogk_dn    = -kappa_T
+            dloggradh_dn = dloggradh_dn_d
+            dlogv_dn    = dlogv_dn_d
     else:  # "direct"
         dlogk_dn = _normal_derivative_direct(logk_field, x, y, spline_points, normal)
         dloggradh_dn = _normal_derivative_direct(log_grad_h_field, x, y, spline_points, normal)
@@ -1758,6 +1882,9 @@ def compute_balance_diagnostics(
     normal_deriv_spline2d_smooth: float = 0.0,
     normal_deriv_mls_ns: int = 2,
     normal_deriv_mls_nn: int = 2,
+    normal_deriv_hessian_smooth: float = 0.0,
+    normal_deriv_hessian_window: int = 3,
+    normal_deriv_hessian_poly: int = 2,
     ds: float = 1.0,
 ) -> tuple[PathBalanceDiagnostics, PathBalanceDiagnostics]:
     h = np.asarray(result.h, dtype=float)
@@ -1808,6 +1935,10 @@ def compute_balance_diagnostics(
         normal_deriv_spline2d_smooth=normal_deriv_spline2d_smooth,
         normal_deriv_mls_ns=normal_deriv_mls_ns,
         normal_deriv_mls_nn=normal_deriv_mls_nn,
+        normal_deriv_hessian_smooth=normal_deriv_hessian_smooth,
+        normal_deriv_hessian_window=normal_deriv_hessian_window,
+        normal_deriv_hessian_poly=normal_deriv_hessian_poly,
+        t_field=result.t_min,
         ds=ds,
     )
     lrp_diag = _build_path_balance_diagnostics(
@@ -1829,6 +1960,10 @@ def compute_balance_diagnostics(
         normal_deriv_spline2d_smooth=normal_deriv_spline2d_smooth,
         normal_deriv_mls_ns=normal_deriv_mls_ns,
         normal_deriv_mls_nn=normal_deriv_mls_nn,
+        normal_deriv_hessian_smooth=normal_deriv_hessian_smooth,
+        normal_deriv_hessian_window=normal_deriv_hessian_window,
+        normal_deriv_hessian_poly=normal_deriv_hessian_poly,
+        t_field=result.t_min_lrp,
         ds=ds,
     )
     return fp_diag, lrp_diag
@@ -1843,11 +1978,17 @@ def plot_paths_over_field(
     i_y: float,
     fp_diag: PathBalanceDiagnostics | None = None,
     lrp_diag: PathBalanceDiagnostics | None = None,
+    log_scale: bool = False,
 ):
+    norm = LogNorm() if log_scale else None
     fig, ax = plt.subplots(figsize=[5, 4])
-    im = ax.imshow(field, origin="lower", cmap=cmap, interpolation="nearest", extent=_normalized_extent(result.x, result.y, i_y))
+    im = ax.imshow(field, origin="lower", norm=norm, cmap=cmap, interpolation="nearest", extent=_normalized_extent(result.x, result.y, i_y))
     _plot_common_overlays(ax, result, i_y, fp_diag=fp_diag, lrp_diag=lrp_diag)
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    if isinstance(im.norm, LogNorm):
+        cbar.locator = LogLocator(base=10)
+        cbar.formatter = LogFormatterMathtext(base=10)
+        cbar.update_ticks()
     cbar.set_label(colorbar_label)
     fig.tight_layout()
     return fig
@@ -1939,40 +2080,59 @@ def plot_linearized_fp_progression(
 def plot_curvature_balance(
     fp_diag: PathBalanceDiagnostics,
     lrp_diag: PathBalanceDiagnostics,
+    *,
+    i_y: float = 1.0,
 ) -> Any:
     fig, axes = plt.subplots(3, 1, figsize=(6, 6), sharex=True)
     lw = 1#LINEWIDTHS
     alpha = 0.5
 
+    def _pearson_r(a, b):
+        mask = np.isfinite(a) & np.isfinite(b)
+        if mask.sum() < 2:
+            return float("nan")
+        return float(np.corrcoef(a[mask], b[mask])[0, 1])
+
+    r_fp    = _pearson_r(fp_diag.curvature,  -fp_diag.dlogv_dn)
+    r_lrp_k = _pearson_r(lrp_diag.curvature, -lrp_diag.dlogk_dn)
+    r_lrp_v = _pearson_r(lrp_diag.curvature, -lrp_diag.dlogv_dn)
+
     axes[0].plot(
         fp_diag.s_norm,
-        fp_diag.curvature,
+        fp_diag.curvature * i_y,
         color=COLORS["fpFMM"],
         linewidth=lw,
         label=r"$\kappa^*_{\mathcal{E}}$",
     )
     axes[0].plot(
         fp_diag.s_norm,
-        -fp_diag.dlogv_dn,
+        -fp_diag.dlogv_dn * i_y,
         color=COLORS["fpFMM"],
         alpha=alpha,
         linewidth=lw,
         label=r"$-\partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{E}}$",
     )
     axes[0].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[0].set_ylabel("FP")
-    axes[0].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+    axes[0].set_ylabel(r"FP $[\times I_Y]$")
+    axes[0].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
+    axes[0].text(
+        0.97, 0.97,
+        rf"$r = {r_fp:.2f}$",
+        transform=axes[0].transAxes,
+        ha="right", va="top", fontsize=8,
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=1.0),
+    )
 
     # axes[1].plot(
     #     fp_diag.s_norm,
-    #     fp_diag.curvature_circle,
+    #     fp_diag.curvature_circle * i_y,
     #     color=COLORS["fpFMM"],
     #     linewidth=lw,
     #     label=r"$\kappa_{\mathrm{circle}}$ FP (FMM)",
     # )
     # axes[1].plot(
     #     fp_diag.s_norm,
-    #     -fp_diag.dlogv_dn,
+    #     -fp_diag.dlogv_dn * i_y,
     #     color=COLORS["fpFMM"],
     #     alpha=alpha,
     #     linewidth=lw,
@@ -1984,14 +2144,14 @@ def plot_curvature_balance(
 
     axes[1].plot(
         lrp_diag.s_norm,
-        lrp_diag.curvature,
+        lrp_diag.curvature * i_y,
         color=COLORS["lrpFMM"],
         linewidth=lw,
         label=r"$\kappa^*_{\mathcal{R}}$",
     )
     axes[1].plot(
         lrp_diag.s_norm,
-        -lrp_diag.dlogk_dn,
+        -lrp_diag.dlogk_dn * i_y,
         color=COLORS["lrpFMM"],
         alpha=alpha,
         linewidth=lw,
@@ -1999,26 +2159,34 @@ def plot_curvature_balance(
     )
     axes[1].plot(
         lrp_diag.s_norm,
-        - lrp_diag.dlogk_dn - lrp_diag.dloggradh_dn,
+        (- lrp_diag.dlogk_dn - lrp_diag.dloggradh_dn) * i_y,
         color=COLORS["lrpFMM"],
         linestyle=":",
         linewidth=lw,
         label=r"$- \partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{R}}$",
     )
     axes[1].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[1].set_ylabel("LRP")
-    axes[1].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+    axes[1].set_ylabel(r"LRP $[\times I_Y]$")
+    axes[1].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
+    axes[1].text(
+        0.98, 0.97,
+        rf"$r(\kappa,\,-\partial_n\ln K) = {r_lrp_k:.2f}$" + "\n" +
+        rf"$r(\kappa,\,-\partial_n\ln v) = {r_lrp_v:.2f}$",
+        transform=axes[1].transAxes,
+        ha="right", va="top", fontsize=8,
+        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=1.0),
+    )
 
     # axes[3].plot(
     #     lrp_diag.s_norm,
-    #     lrp_diag.curvature_circle,
+    #     lrp_diag.curvature_circle * i_y,
     #     color=COLORS["lrpFMM"],
     #     linewidth=lw,
     #     label=r"$\kappa_{\mathrm{circle}}$ LRP (FMM)",
     # )
     # axes[3].plot(
     #     lrp_diag.s_norm,
-    #     -lrp_diag.dlogk_dn,
+    #     -lrp_diag.dlogk_dn * i_y,
     #     color=COLORS["lrpFMM"],
     #     alpha=alpha,
     #     linewidth=lw,
@@ -2030,14 +2198,14 @@ def plot_curvature_balance(
 
     axes[2].plot(
         fp_diag.s_norm,
-        fp_diag.residual,
+        fp_diag.residual * i_y,
         color=COLORS["fpFMM"],
         linewidth=lw,
         label=r"$\kappa^*_{\mathcal{E}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{E}}$",
     )
     axes[2].plot(
         lrp_diag.s_norm,
-        lrp_diag.residual,
+        lrp_diag.residual * i_y,
         color=COLORS["lrpFMM"],
         alpha=alpha,
         linewidth=lw,
@@ -2045,7 +2213,7 @@ def plot_curvature_balance(
     )
     # axes[2].plot(
     #     lrp_diag.s_norm,
-    #     lrp_diag.curvature + lrp_diag.dlogv_dn,
+    #     (lrp_diag.curvature + lrp_diag.dlogv_dn) * i_y,
     #     color=COLORS["lrpFMM"],
     #     linestyle="--",
     #     linewidth=lw,
@@ -2053,7 +2221,7 @@ def plot_curvature_balance(
     # )
     axes[2].plot(
         lrp_diag.s_norm,
-        lrp_diag.curvature + lrp_diag.dlogk_dn + lrp_diag.dloggradh_dn,
+        (lrp_diag.curvature + lrp_diag.dlogk_dn + lrp_diag.dloggradh_dn) * i_y,
         color=COLORS["lrpFMM"],
         linestyle=":",
         linewidth=lw,
@@ -2061,8 +2229,8 @@ def plot_curvature_balance(
     )
     axes[2].axhline(0.0, color="0.7", linewidth=1.0)
     axes[2].set_xlabel(r"Normalized arclength $\ell/L$")
-    axes[2].set_ylabel("Residual")
-    axes[2].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+    axes[2].set_ylabel(r"Residual $[\times I_Y]$")
+    axes[2].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
 
     for ax in axes:
         ax.set_xlim(0.0, 1.0)
@@ -2152,7 +2320,7 @@ def plot_isochrones_with_plume(
 
         # Background: logK field
         im_ref = ax.imshow(
-            logk_field, origin="lower", cmap=cmc.batlowW_r,
+            np.exp(logk_field), norm=LogNorm(), origin="lower", cmap=cmc.batlowW_r,
             interpolation="nearest", extent=extent, alpha=0.7,
         )
 
@@ -2265,12 +2433,15 @@ def plot_isochrones_with_plume(
     for j in range(n_snaps, len(axes_flat)):
         axes_flat[j].set_visible(False)
 
-    # Shared colorbar for logK
+    # Shared colorbar for K (log scale)
     if im_ref is not None:
-        fig.colorbar(
+        cbar = fig.colorbar(
             im_ref, ax=axes_flat[:n_snaps].tolist(),
-            label=r"$\ln K$", fraction=0.02, pad=0.02,
+            label=r"$K$", fraction=0.02, pad=0.02,
         )
+        cbar.locator = LogLocator(base=10)
+        cbar.formatter = LogFormatterMathtext(base=10)
+        cbar.update_ticks()
     # fig.tight_layout()
     return fig
 
@@ -2333,6 +2504,10 @@ def run_step5(
     normal_deriv_spline2d_smooth: float = 0.0,
     normal_deriv_mls_ns: int = 2,
     normal_deriv_mls_nn: int = 2,
+    normal_deriv_hessian_smooth: float = 0.0,
+    normal_deriv_hessian_window: int = 3,
+    normal_deriv_hessian_poly: int = 2,
+    curvature_resample_ds: float = 0.5,
     density_particle: int = 20,
     num_particles: int | None = None,
     eps_speed: float,
@@ -2471,17 +2646,21 @@ def run_step5(
         normal_deriv_spline2d_smooth=normal_deriv_spline2d_smooth,
         normal_deriv_mls_ns=normal_deriv_mls_ns,
         normal_deriv_mls_nn=normal_deriv_mls_nn,
-        ds=1.0,
+        normal_deriv_hessian_smooth=normal_deriv_hessian_smooth,
+        normal_deriv_hessian_window=normal_deriv_hessian_window,
+        normal_deriv_hessian_poly=normal_deriv_hessian_poly,
+        ds=curvature_resample_ds,
     )
 
     fig_logk = plot_paths_over_field(
-        logk_field,
+        np.exp(logk_field),
         cmap=cmc.batlowW_r,
-        colorbar_label=r"$\ln K$",
+        colorbar_label=r"$K$",
         result=result,
         i_y=i_y,
         fp_diag=fp_diag,
         lrp_diag=lrp_diag,
+        log_scale=True,
     )
     fig_logk.savefig(logk_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_logk)
@@ -2495,6 +2674,7 @@ def run_step5(
         i_y=i_y,
         fp_diag=fp_diag,
         lrp_diag=lrp_diag,
+        log_scale=True,
     )
     fig_tmin.savefig(tmin_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_tmin)
@@ -2514,7 +2694,7 @@ def run_step5(
     fig_stream.savefig(stream_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_stream)
 
-    fig_balance = plot_curvature_balance(fp_diag, lrp_diag)
+    fig_balance = plot_curvature_balance(fp_diag, lrp_diag, i_y=i_y)
     fig_balance.savefig(balance_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_balance)
     progression_path_out: Path | None = None
@@ -2630,7 +2810,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--source-y-end", type=int, default=None)
     parser.add_argument("--target-y-start", type=int, default=None)
     parser.add_argument("--target-y-end", type=int, default=None)
-    parser.add_argument("--curvature-method", choices=["spline", "savgol"], default="spline")
+    parser.add_argument("--curvature-method", choices=["spline", "savgol", "circle"], default="spline")
     parser.add_argument("--curvature-spline-mode", choices=["interpolation", "approximation"], default="interpolation")
     parser.add_argument("--curvature-spline-smooth", type=float, default=0.0)
     parser.add_argument("--curvature-spline-degree", type=int, default=3)
@@ -2639,10 +2819,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--curvature-circle-window", type=int, default=11)
     parser.add_argument("--curvature-savgol-window", type=int, default=11)
     parser.add_argument("--curvature-savgol-poly", type=int, default=3)
-    parser.add_argument("--normal-deriv-method", choices=["direct", "savgol2d", "spline2d", "mls_frenet"], default="direct")
+    parser.add_argument("--normal-deriv-method", choices=["direct", "savgol2d", "spline2d", "mls_frenet", "hessian_T"], default="direct")
     parser.add_argument("--normal-deriv-spline2d-smooth", type=float, default=0.0)
     parser.add_argument("--normal-deriv-mls-ns", type=int, default=2)
     parser.add_argument("--normal-deriv-mls-nn", type=int, default=2)
+    parser.add_argument("--normal-deriv-hessian-smooth", type=float, default=0.0,
+                        help="Gaussian pre-smoothing sigma (grid cells) for hessian_T normal-deriv method.")
+    parser.add_argument("--normal-deriv-hessian-window", type=int, default=3,
+                        help="SG stencil window for hessian_T (odd, >= 3); window=3 reproduces original Sobel.")
+    parser.add_argument("--normal-deriv-hessian-poly", type=int, default=2,
+                        help="SG polynomial degree for hessian_T (>= 2 enforced internally).")
+    parser.add_argument("--curvature-resample-ds", type=float, default=0.5,
+                        help="Arc-length resampling interval (grid cells) applied to FP/LRP paths before curvature computation.")
 
     parser.add_argument("--density-particle", type=int, default=20)
     parser.add_argument("--num-particles", type=int, default=None)
@@ -2771,6 +2959,10 @@ def main() -> int:
         normal_deriv_spline2d_smooth=args.normal_deriv_spline2d_smooth,
         normal_deriv_mls_ns=args.normal_deriv_mls_ns,
         normal_deriv_mls_nn=args.normal_deriv_mls_nn,
+        normal_deriv_hessian_smooth=args.normal_deriv_hessian_smooth,
+        normal_deriv_hessian_window=args.normal_deriv_hessian_window,
+        normal_deriv_hessian_poly=args.normal_deriv_hessian_poly,
+        curvature_resample_ds=args.curvature_resample_ds,
         density_particle=args.density_particle,
         num_particles=args.num_particles,
         eps_speed=args.eps_speed,
