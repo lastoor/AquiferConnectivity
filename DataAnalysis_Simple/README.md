@@ -185,6 +185,7 @@ Notes:
   - `--fsm-dt`: RK45 output step target for FSM backtracking
   - `--fsm-max-steps`: maximum accepted backtracking points
 - `submit_step5_gpu.sh` now passes the FSM convergence options through to `step5_single_field_paths.py`, so batch runs can use the same update/MSE stopping controls as interactive runs.
+- The current `submit_step5_gpu.sh` defaults are slightly stricter than the interactive CLI defaults: it sets `fsm_tol="1e-8"` while leaving residual-MSE checking optional unless `fsm_mse_tol` is set explicitly.
 - Step 5 FMM backtracking still defaults to `--fmm-backtracking discrete`.
 - Solver imports require both `Algorithm/src` and the sibling `FlowSimulation` repo.
 - The linearized Eikonal iteration additionally loads `scripts/fp_and_lrp/linear_eikonal_solver.py`.

@@ -612,3 +612,15 @@
 - Limitations/follow-up:
   - End-to-end Stage 4 and Step 5 figure generation was not rerun here.
   - `pytest` is not installed in the active environment, so test files were not executed in this session.
+
+## 2026-04-13
+- Agent/tool: Codex (GPT-5)
+- Summary: Tightened the batch Step 5 FSM submit-wrapper default from `fsm_tol=1e-6` to `fsm_tol=1e-8` so Slurm runs use a stricter update-based convergence target by default while keeping the new residual-MSE controls optional.
+- Files changed:
+  - `submit_step5_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `bash -n submit_step5_gpu.sh`
+- Limitations/follow-up:
+  - This changes only the batch-wrapper default; the `step5_single_field_paths.py` CLI default remains `1e-6` unless overridden explicitly.
