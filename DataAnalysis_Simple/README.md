@@ -54,8 +54,8 @@ PYTHONPATH=./scripts python scripts/run_all.py --config configs/visualization.de
 ## Stage-by-Stage Run
 
 ```bash
-CACHE_DIR=/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run9_newoutput_fmmconti/cache
-FIGURE_DIR=outputs/run9_newoutput_fmmconti
+CACHE_DIR=/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run10_fsm/cache
+FIGURE_DIR=outputs/run10_fsm
 
 PYTHONPATH=./scripts python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --hausdorff-compute-method custom 
@@ -173,6 +173,18 @@ Notes:
 - Speed/streamline background uses dimensionless velocity magnitude `|v|/(k_g*dh)` and streamlines from `v/(k_g*dh)`.
 - Particle tracking now supports `--solver pollock` or `--solver rk45`; defaults mirror the Algorithm runner: `--solver pollock`, `--velocity-location face`, `--no-align-with-modflow-velocity`.
 - Pollock requires `--velocity-location face`; the plotted particle-tracking `FP` remains solver-neutral and reflects the selected particle-tracking backend.
+- `--fsm-fp` enables the Fast Sweeping Method (FSM) path `γ*_S` (green, dash-dot-dot). Step 5 now imports the shared implementation from `Algorithm/src/fmm_core/fsm.py` instead of carrying a local duplicate solver. FSM solves the advection equation `v·∇T = 1` directly using cell-centred Darcy velocity `vx = -K·∂h/∂x`, `vy = -K·∂h/∂y` via upwind finite differences + 4-direction Gauss-Seidel sweeping, then backtracks the path from the target by RK45 against `-v(x)`. This is physically distinct from the Eikonal-FMM paths, which use a scalar slowness field `1/(K·|∇h|)`. FSM is off by default (`--no-fsm-fp`).
+- FSM convergence controls:
+  - `--fsm-max-sweeps`: hard sweep cap (default `100`)
+  - `--fsm-tol`: update-based stopping tolerance on per-sweep `max_change` (default `1e-6`)
+  - `--fsm-mse-tol`: optional mean-squared discrete PDE residual tolerance for `v·∇T - 1`
+  - `--fsm-convergence-mode`: `update`, `mse`, `update_or_mse`, or `update_and_mse`
+  - `--fsm-mse-check-every`: only evaluate the residual MSE every N eligible sweeps (default `5`)
+  - `--fsm-mse-activation-factor`: gate residual checks until `max_change` is near `--fsm-tol` (default `10.0`)
+  - `--fsm-consecutive-passes`: require the convergence rule to pass multiple consecutive eligible checks (default `2`)
+  - `--fsm-dt`: RK45 output step target for FSM backtracking
+  - `--fsm-max-steps`: maximum accepted backtracking points
+- `submit_step5_gpu.sh` now passes the FSM convergence options through to `step5_single_field_paths.py`, so batch runs can use the same update/MSE stopping controls as interactive runs.
 - Step 5 FMM backtracking still defaults to `--fmm-backtracking discrete`.
 - Solver imports require both `Algorithm/src` and the sibling `FlowSimulation` repo.
 - The linearized Eikonal iteration additionally loads `scripts/fp_and_lrp/linear_eikonal_solver.py`.
@@ -316,25 +328,22 @@ Default `sections` now include:
 
 - `times`
 - `times_box`
-- `taylor`
 - `scatter`
 - `hausdorff`
 - `hausdorff_box`
 - `frechet`
 - `endpoint`
-- `std_hausdorff`
-- `std_endpoint`
-- `ratio_mean`: plots `mean(t_min/(R_min/dh))` vs variance for FP, FP(FMM), FP(Dijkstra)
-- `ratio_var`: plots `var(t_min/(R_min/dh))` vs variance for FP, FP(FMM), FP(Dijkstra)
-- `wasserstein_len`: plots normalized Wasserstein-1 distance between path-length distributions (CDF proxy) for FP-LRP, FP-FMM, FP-Dijkstra
+- `ratio_mean`: plots `mean(t_min/(R_min/dh))` vs variance for FP, FP(FMM), FP(Dijkstra), and FSM when available
+- `ratio_var`: plots `var(t_min/(R_min/dh))` vs variance for FP, FP(FMM), FP(Dijkstra), and FSM when available
+- `wasserstein_len`: plots normalized Wasserstein-1 distance between path-length distributions (CDF proxy) for FP-LRP, FP-FMM, FP-Dijkstra, and FP-FSM
   - also writes separate path-length CDF figure(s) `run<id>_cdf_len_var<value>.png` for selected variance values
   - use `--plot-variances` (comma-separated) to choose variance values; default is the first available variance
 - `times`: keeps the summary/error-bar characteristic-time figure, including the analytical `t_min` overlay
-- `times_box`: writes a separate grouped box-plot figure of raw FP/LRP/LRP(FMM)/FP(FMM)/FP(Dijkstra) time samples across variances
-- `hausdorff`: keeps the summary/error-bar Hausdorff figure
+- `times_box`: writes a separate grouped box-plot figure of raw FP/LRP/LRP(FMM)/FP(FMM)/FP(Dijkstra)/FSM time samples across variances when FSM samples are available
+- `hausdorff`: keeps the summary/error-bar Hausdorff figure and includes FSM comparisons where available
 - `hausdorff_box`: writes a separate grouped box-plot figure of raw Hausdorff-distance samples across variances
-- `endpoint`: writes a grouped box-plot figure of raw endpoint-distance samples across variances
-- `scatter`: supports `--scatter-mode mean`, `--scatter-mode all_points`, or `--scatter-mode mean,all_points`
+- `endpoint`: writes a grouped box-plot figure of raw endpoint-distance samples across variances, including FSM when available
+- `scatter`: supports `--scatter-mode mean`, `--scatter-mode all_points`, or `--scatter-mode mean,all_points`; both scatter modes include FSM when Stage 3 provides FSM samples
   - all-points mode writes `run<id>_scatter_var<value>.png` for selected `--plot-variances`
 
 When enabled, the Frechet section is saved as `run<id>_frechet.png` (or corresponding configured format).

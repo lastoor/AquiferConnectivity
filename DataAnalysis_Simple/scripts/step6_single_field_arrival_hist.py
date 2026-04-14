@@ -31,6 +31,10 @@ class ArrivalSimulationResult:
     n_particles: int
     success_fraction: float
     bad_fraction: float
+    t_fmm_fp: float
+    t_fmm_lrp: float
+    fmm_fp_target_times: np.ndarray
+    fmm_lrp_target_times: np.ndarray
 
 
 @dataclass(slots=True)
@@ -68,6 +72,16 @@ class ArrivalSavedData:
     pdf_hist_range_low: float | None
     pdf_hist_range_high: float | None
     pdf_hist_bin_edges: np.ndarray | None
+    tau_pt_first_arrival_empirical: np.ndarray | None
+    cdf_pt_first_arrival: np.ndarray | None
+    tau_fmm_fp_empirical: np.ndarray | None
+    cdf_fmm_fp: np.ndarray | None
+    tau_fmm_lrp_empirical: np.ndarray | None
+    cdf_fmm_lrp: np.ndarray | None
+    tau_fmm_fp_target_empirical: np.ndarray | None
+    cdf_fmm_fp_target: np.ndarray | None
+    tau_fmm_lrp_target_empirical: np.ndarray | None
+    cdf_fmm_lrp_target: np.ndarray | None
 
 
 @dataclass(slots=True)
@@ -82,6 +96,16 @@ class ReloadPlotData:
     cdf_mc_band_high: np.ndarray | None
     title: str
     note: str | None
+    tau_pt_first_arrival_empirical: np.ndarray | None
+    cdf_pt_first_arrival: np.ndarray | None
+    tau_fmm_fp_empirical: np.ndarray | None
+    cdf_fmm_fp: np.ndarray | None
+    tau_fmm_lrp_empirical: np.ndarray | None
+    cdf_fmm_lrp: np.ndarray | None
+    tau_fmm_fp_target_empirical: np.ndarray | None
+    cdf_fmm_fp_target: np.ndarray | None
+    tau_fmm_lrp_target_empirical: np.ndarray | None
+    cdf_fmm_lrp_target: np.ndarray | None
 
 
 @dataclass(slots=True)
@@ -464,7 +488,17 @@ def _run_pollock_gpu_summary_single(payload: dict[str, Any]) -> dict[str, Any]:
         tracker.right_x = np.float32(right_x)
 
     tracker = global_pollock_tracker
-    raw_travel_times, status = tracker.run()
+    # FlowSimulation's Pollock GPU tracker may return either
+    # (travel_times, status) or (travel_times, status, snap_x, snap_y).
+    run_result = tracker.run()
+    if not isinstance(run_result, tuple):
+        raise RuntimeError(f"Unexpected Pollock GPU run() return type: {type(run_result).__name__}")
+    if len(run_result) == 2:
+        raw_travel_times, status = run_result
+    elif len(run_result) == 4:
+        raw_travel_times, status, _snap_x, _snap_y = run_result
+    else:
+        raise RuntimeError(f"Unexpected Pollock GPU run() return arity: {len(run_result)}")
     travel_times = np.where(status == sim_pt_pollock_gpu.STATUS_SUCCESS, raw_travel_times, np.nan).astype(np.float32)
     stop_mode = str(payload_local.get("stop_mode", "first"))
     arrival_fraction = float(payload_local.get("arrival_fraction", 1.0))
@@ -665,6 +699,33 @@ def _extract_success_arrival_times(travel_times: np.ndarray, status_arr: np.ndar
     return travel_times[idx]
 
 
+def _compute_fmm_target_arrivals(
+    velocity_field: np.ndarray,
+    *,
+    fast_marching_2d_regions: Any,
+    source_x: int,
+    target_x: int,
+    source_rows: np.ndarray,
+    target_rows: np.ndarray,
+) -> tuple[np.ndarray, float]:
+    """Run FMM and return all finite target-line arrivals and their minimum."""
+    n_y, n_x = velocity_field.shape
+    traversable = np.isfinite(velocity_field) & (velocity_field > 0.0)
+    source_mask = np.zeros((n_y, n_x), dtype=bool)
+    target_mask = np.zeros((n_y, n_x), dtype=bool)
+    source_mask[source_rows, source_x] = True
+    target_mask[target_rows, target_x] = True
+    source_mask &= traversable
+    target_mask &= traversable
+    t_field, _ = fast_marching_2d_regions(velocity_field, source_mask, h=1.0, traversable_mask=traversable)
+    finite = t_field[target_mask]
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return np.asarray([], dtype=float), float("nan")
+    finite = np.asarray(finite, dtype=float)
+    return finite, float(np.min(finite))
+
+
 def _analytical_cdf_on_tau_grid(
     tau_grid: np.ndarray,
     *,
@@ -797,6 +858,16 @@ def plot_arrival_cdf_comparison(
     cdf_mc_band_low: np.ndarray | None = None,
     cdf_mc_band_high: np.ndarray | None = None,
     cdf_lognormal: np.ndarray | None = None,
+    tau_pt_first_arrival_emp: np.ndarray | None = None,
+    ecdf_pt_first_arrival: np.ndarray | None = None,
+    tau_fmm_fp_emp: np.ndarray | None = None,
+    ecdf_fmm_fp: np.ndarray | None = None,
+    tau_fmm_lrp_emp: np.ndarray | None = None,
+    ecdf_fmm_lrp: np.ndarray | None = None,
+    tau_fmm_fp_target_emp: np.ndarray | None = None,
+    ecdf_fmm_fp_target: np.ndarray | None = None,
+    tau_fmm_lrp_target_emp: np.ndarray | None = None,
+    ecdf_fmm_lrp_target: np.ndarray | None = None,
     y_exp: float = 1.0,
 ) -> plt.Figure:
     fig, ax = plt.subplots(figsize=[5, 4])
@@ -817,6 +888,42 @@ def plot_arrival_cdf_comparison(
     ax.axhline(y=0.01, color="#C46552", linewidth=1.0, linestyle=":", label="1% quantile")
     if cdf_lognormal is not None:
         ax.plot(tau_grid, cdf_lognormal, color="#2A9D8F", linewidth=1.8, linestyle="-.", label="Lognormal CDF")
+    if tau_pt_first_arrival_emp is not None and ecdf_pt_first_arrival is not None and tau_pt_first_arrival_emp.size > 0:
+        ax.step(
+            tau_pt_first_arrival_emp,
+            ecdf_pt_first_arrival,
+            where="post",
+            color="#7A3E9D",
+            linewidth=1.8,
+            linestyle="-",
+            label="PT first-arrival CDF",
+        )
+    if tau_fmm_fp_emp is not None and ecdf_fmm_fp is not None and tau_fmm_fp_emp.size > 0:
+        ax.step(tau_fmm_fp_emp, ecdf_fmm_fp, where="post", color="#3F73B8", linewidth=1.8, linestyle="--",
+                label=r"FMM FP CDF $\gamma^*_{\mathcal{E}}$")
+    if tau_fmm_lrp_emp is not None and ecdf_fmm_lrp is not None and tau_fmm_lrp_emp.size > 0:
+        ax.step(tau_fmm_lrp_emp, ecdf_fmm_lrp, where="post", color="#F9B43F", linewidth=1.8, linestyle="-.",
+                label=r"FMM LRP CDF $\gamma^*_{\mathcal{R}}$")
+    if tau_fmm_fp_target_emp is not None and ecdf_fmm_fp_target is not None and tau_fmm_fp_target_emp.size > 0:
+        ax.step(
+            tau_fmm_fp_target_emp,
+            ecdf_fmm_fp_target,
+            where="post",
+            color="#0F6D8C",
+            linewidth=1.6,
+            linestyle=":",
+            label="FMM FP target-line CDF",
+        )
+    if tau_fmm_lrp_target_emp is not None and ecdf_fmm_lrp_target is not None and tau_fmm_lrp_target_emp.size > 0:
+        ax.step(
+            tau_fmm_lrp_target_emp,
+            ecdf_fmm_lrp_target,
+            where="post",
+            color="#C77D2B",
+            linewidth=1.6,
+            linestyle=(0, (5, 2)),
+            label="FMM LRP target-line CDF",
+        )
     ax.set_xlabel(r"$tU/I_Y$")
     ax.set_ylabel("CDF")
     ax.set_xscale("log")
@@ -1074,6 +1181,16 @@ def load_arrival_npz(npz_path: Path) -> ArrivalSavedData:
             pdf_hist_range_low=_optional_scalar_float(payload, "pdf_hist_range_low"),
             pdf_hist_range_high=_optional_scalar_float(payload, "pdf_hist_range_high"),
             pdf_hist_bin_edges=_optional_np_array(payload, "pdf_hist_bin_edges"),
+            tau_pt_first_arrival_empirical=_optional_np_array(payload, "tau_pt_first_arrival_empirical"),
+            cdf_pt_first_arrival=_optional_np_array(payload, "cdf_pt_first_arrival"),
+            tau_fmm_fp_empirical=_optional_np_array(payload, "tau_fmm_fp_empirical"),
+            cdf_fmm_fp=_optional_np_array(payload, "cdf_fmm_fp"),
+            tau_fmm_lrp_empirical=_optional_np_array(payload, "tau_fmm_lrp_empirical"),
+            cdf_fmm_lrp=_optional_np_array(payload, "cdf_fmm_lrp"),
+            tau_fmm_fp_target_empirical=_optional_np_array(payload, "tau_fmm_fp_target_empirical"),
+            cdf_fmm_fp_target=_optional_np_array(payload, "cdf_fmm_fp_target"),
+            tau_fmm_lrp_target_empirical=_optional_np_array(payload, "tau_fmm_lrp_target_empirical"),
+            cdf_fmm_lrp_target=_optional_np_array(payload, "cdf_fmm_lrp_target"),
         )
 
 
@@ -1167,6 +1284,16 @@ def _prepare_reload_plot_data(
             cdf_mc_band_high=saved.cdf_mc_band_high,
             title=title,
             note=note,
+            tau_pt_first_arrival_empirical=saved.tau_pt_first_arrival_empirical,
+            cdf_pt_first_arrival=saved.cdf_pt_first_arrival,
+            tau_fmm_fp_empirical=saved.tau_fmm_fp_empirical,
+            cdf_fmm_fp=saved.cdf_fmm_fp,
+            tau_fmm_lrp_empirical=saved.tau_fmm_lrp_empirical,
+            cdf_fmm_lrp=saved.cdf_fmm_lrp,
+            tau_fmm_fp_target_empirical=saved.tau_fmm_fp_target_empirical,
+            cdf_fmm_fp_target=saved.cdf_fmm_fp_target,
+            tau_fmm_lrp_target_empirical=saved.tau_fmm_lrp_target_empirical,
+            cdf_fmm_lrp_target=saved.cdf_fmm_lrp_target,
         )
 
     tau_emp = np.asarray(saved.tau_empirical, dtype=float)
@@ -1214,6 +1341,16 @@ def _prepare_reload_plot_data(
         cdf_mc_band_high=cdf_mc_band_high,
         title=title,
         note=None,
+        tau_pt_first_arrival_empirical=saved.tau_pt_first_arrival_empirical,
+        cdf_pt_first_arrival=saved.cdf_pt_first_arrival,
+        tau_fmm_fp_empirical=saved.tau_fmm_fp_empirical,
+        cdf_fmm_fp=saved.cdf_fmm_fp,
+        tau_fmm_lrp_empirical=saved.tau_fmm_lrp_empirical,
+        cdf_fmm_lrp=saved.cdf_fmm_lrp,
+        tau_fmm_fp_target_empirical=saved.tau_fmm_fp_target_empirical,
+        cdf_fmm_fp_target=saved.cdf_fmm_fp_target,
+        tau_fmm_lrp_target_empirical=saved.tau_fmm_lrp_target_empirical,
+        cdf_fmm_lrp_target=saved.cdf_fmm_lrp_target,
     )
 
 
@@ -1299,6 +1436,16 @@ def visualize_saved_arrival_npz(
         cdf_mc_band_low=plot_data.cdf_mc_band_low,
         cdf_mc_band_high=plot_data.cdf_mc_band_high,
         cdf_lognormal=plot_data.cdf_lognormal,
+        tau_pt_first_arrival_emp=plot_data.tau_pt_first_arrival_empirical,
+        ecdf_pt_first_arrival=plot_data.cdf_pt_first_arrival,
+        tau_fmm_fp_emp=plot_data.tau_fmm_fp_empirical,
+        ecdf_fmm_fp=plot_data.cdf_fmm_fp,
+        tau_fmm_lrp_emp=plot_data.tau_fmm_lrp_empirical,
+        ecdf_fmm_lrp=plot_data.cdf_fmm_lrp,
+        tau_fmm_fp_target_emp=plot_data.tau_fmm_fp_target_empirical,
+        ecdf_fmm_fp_target=plot_data.cdf_fmm_fp_target,
+        tau_fmm_lrp_target_emp=plot_data.tau_fmm_lrp_target_empirical,
+        ecdf_fmm_lrp_target=plot_data.cdf_fmm_lrp_target,
         y_exp=y_exp,
     )
     out_dir = Path(output_dir) if output_dir is not None else Path(npz_path).resolve().parent
@@ -1380,12 +1527,19 @@ def simulate_single_field_arrivals(
     rk45_max_bad_frac: float,
     seed: int,
     gpu_worker_ctx: PollockGpuWorker | None = None,
+    fast_marching_2d_regions: Any = None,
 ) -> ArrivalSimulationResult:
     _validate_particle_tracking_options(solver=solver, velocity_location=velocity_location, backend=backend)
     modules = _import_solver_modules()
     sim_grf = modules["sim_grf"]
     sim_hyd = modules["sim_hyd"]
     sim_pt = modules["sim_pt"]
+    if fast_marching_2d_regions is None:
+        try:
+            from fmm_core.fmm import fast_marching_2d_regions as _fmm_fn
+        except Exception as exc:
+            raise RuntimeError("Failed to import fmm_core.fmm. Ensure Algorithm/src is on sys.path.") from exc
+        fast_marching_2d_regions = _fmm_fn
 
     np.random.seed(seed)
     cov = sim_grf.ExpCov(sigma=std, length_scale=length_scale)
@@ -1401,6 +1555,30 @@ def simulate_single_field_arrivals(
     h, msg, is_success = sim_hyd.solve_head(k_field, x, y, dh=dh, rtol=1e-10, atol=1e-20, max_it=10000)
     if not is_success:
         raise RuntimeError(f"Head solver failed: {msg}")
+
+    # FMM arrival times
+    grad_h_y_arr, grad_h_x_arr = np.gradient(np.asarray(h, dtype=float), np.asarray(y, dtype=float), np.asarray(x, dtype=float), edge_order=2)
+    grad_h_mag = np.hypot(grad_h_x_arr, grad_h_y_arr)
+    velocity_fp = np.maximum(k_field * grad_h_mag, 1e-12)
+    velocity_lrp = np.maximum(k_field * abs(float(dh)), 1e-12)
+    fmm_source_rows = np.arange(geometry.source_y_start, geometry.source_y_end, dtype=int)
+    fmm_target_rows = np.arange(geometry.target_y_start, geometry.target_y_end, dtype=int)
+    fmm_fp_target_times, t_fmm_fp = _compute_fmm_target_arrivals(
+        velocity_fp,
+        fast_marching_2d_regions=fast_marching_2d_regions,
+        source_x=geometry.source_x,
+        target_x=geometry.target_x,
+        source_rows=fmm_source_rows,
+        target_rows=fmm_target_rows,
+    )
+    fmm_lrp_target_times, t_fmm_lrp = _compute_fmm_target_arrivals(
+        velocity_lrp,
+        fast_marching_2d_regions=fast_marching_2d_regions,
+        source_x=geometry.source_x,
+        target_x=geometry.target_x,
+        source_rows=fmm_source_rows,
+        target_rows=fmm_target_rows,
+    )
 
     n_particles = _resolve_particle_count(
         num_particles=num_particles,
@@ -1508,6 +1686,10 @@ def simulate_single_field_arrivals(
         n_particles=int(n_particles),
         success_fraction=float(frac_success),
         bad_fraction=float(frac_bad),
+        t_fmm_fp=t_fmm_fp,
+        t_fmm_lrp=t_fmm_lrp,
+        fmm_fp_target_times=np.asarray(fmm_fp_target_times, dtype=float),
+        fmm_lrp_target_times=np.asarray(fmm_lrp_target_times, dtype=float),
     )
 
 
@@ -1609,6 +1791,11 @@ def run_step6(
     success_fraction_by_mc: list[float] = []
     bad_fraction_by_mc: list[float] = []
     status_counts_by_mc: list[dict[str, int]] = []
+    tau_pt_first_arrival_by_mc: list[float] = []
+    t_fmm_fp_by_mc: list[float] = []
+    t_fmm_lrp_by_mc: list[float] = []
+    tau_fmm_fp_target_by_mc: list[np.ndarray] = []
+    tau_fmm_lrp_target_by_mc: list[np.ndarray] = []
 
     worker_cm: Any = PollockGpuWorker() if solver == "pollock" and backend == "gpu" else None
     if worker_cm is None:
@@ -1651,11 +1838,24 @@ def run_step6(
                 continue
             seeds_used.append(seed)
             tau_by_mc.append(tau_samples_mc)
+            tau_pt_first_arrival_by_mc.append(float(np.min(tau_samples_mc)))
             n_particles_by_mc.append(int(simulation.n_particles))
             n_success_by_mc.append(int(len(tau_samples_mc)))
             success_fraction_by_mc.append(float(simulation.success_fraction))
             bad_fraction_by_mc.append(float(simulation.bad_fraction))
             status_counts_by_mc.append({str(k): int(v) for k, v in simulation.status_counts.items()})
+            if np.isfinite(simulation.t_fmm_fp):
+                t_fmm_fp_by_mc.append(float(simulation.t_fmm_fp))
+            if np.isfinite(simulation.t_fmm_lrp):
+                t_fmm_lrp_by_mc.append(float(simulation.t_fmm_lrp))
+            tau_fmm_fp_target_mc = np.asarray(simulation.fmm_fp_target_times, dtype=float) * velocity / i_y
+            tau_fmm_fp_target_mc = tau_fmm_fp_target_mc[np.isfinite(tau_fmm_fp_target_mc) & (tau_fmm_fp_target_mc >= 0.0)]
+            if tau_fmm_fp_target_mc.size > 0:
+                tau_fmm_fp_target_by_mc.append(tau_fmm_fp_target_mc)
+            tau_fmm_lrp_target_mc = np.asarray(simulation.fmm_lrp_target_times, dtype=float) * velocity / i_y
+            tau_fmm_lrp_target_mc = tau_fmm_lrp_target_mc[np.isfinite(tau_fmm_lrp_target_mc) & (tau_fmm_lrp_target_mc >= 0.0)]
+            if tau_fmm_lrp_target_mc.size > 0:
+                tau_fmm_lrp_target_by_mc.append(tau_fmm_lrp_target_mc)
     finally:
         if manager is not None:
             manager.__exit__(None, None, None)
@@ -1668,6 +1868,20 @@ def run_step6(
         raise RuntimeError("No finite non-negative dimensionless arrival times available for CDF analysis.")
 
     tau_emp, ecdf = _empirical_cdf(tau_samples)
+    tau_pt_first_arr = np.asarray(tau_pt_first_arrival_by_mc, dtype=float)
+    tau_pt_first_emp, ecdf_pt_first = _empirical_cdf(tau_pt_first_arr)
+    tau_fmm_fp_arr = np.array(t_fmm_fp_by_mc, dtype=float) * velocity / i_y
+    tau_fmm_lrp_arr = np.array(t_fmm_lrp_by_mc, dtype=float) * velocity / i_y
+    tau_fmm_fp_emp, ecdf_fmm_fp = _empirical_cdf(tau_fmm_fp_arr)
+    tau_fmm_lrp_emp, ecdf_fmm_lrp = _empirical_cdf(tau_fmm_lrp_arr)
+    tau_fmm_fp_target = (
+        np.concatenate(tau_fmm_fp_target_by_mc) if tau_fmm_fp_target_by_mc else np.asarray([], dtype=float)
+    )
+    tau_fmm_lrp_target = (
+        np.concatenate(tau_fmm_lrp_target_by_mc) if tau_fmm_lrp_target_by_mc else np.asarray([], dtype=float)
+    )
+    tau_fmm_fp_target_emp, ecdf_fmm_fp_target = _empirical_cdf(tau_fmm_fp_target)
+    tau_fmm_lrp_target_emp, ecdf_fmm_lrp_target = _empirical_cdf(tau_fmm_lrp_target)
     tau_lo = max(0.0, float(tau_emp[0]) * 0.8)
     tau_hi = float(tau_emp[-1]) * 1.2 + 1e-12
     tau_grid = _build_tau_grid(
@@ -1764,6 +1978,9 @@ def run_step6(
         "n_success": int(len(tau_samples)),
         "n_particles_by_mc": n_particles_by_mc,
         "n_success_by_mc": n_success_by_mc,
+        "n_mc_pt_first_arrival": int(tau_pt_first_arr.size),
+        "n_fmm_fp_target_samples": int(tau_fmm_fp_target.size),
+        "n_fmm_lrp_target_samples": int(tau_fmm_lrp_target.size),
         "success_fraction_by_mc": success_fraction_by_mc,
         "bad_fraction_by_mc": bad_fraction_by_mc,
         "status_counts_by_mc": status_counts_by_mc,
@@ -1771,6 +1988,8 @@ def run_step6(
         "tau_median": float(np.median(tau_samples)),
         "tau_min": float(np.min(tau_samples)),
         "tau_max": float(np.max(tau_samples)),
+        "tau_pt_first_arrival_mean": float(np.mean(tau_pt_first_arr)),
+        "tau_pt_first_arrival_median": float(np.median(tau_pt_first_arr)),
         "ks_distance_empirical_vs_analytical": float(ks_dist),
         **lognormal_summary,
     }
@@ -1789,6 +2008,16 @@ def run_step6(
         cdf_mc_band_low=cdf_mc_band_low,
         cdf_mc_band_high=cdf_mc_band_high,
         cdf_lognormal=cdf_lognormal,
+        tau_pt_first_arrival_emp=tau_pt_first_emp if tau_pt_first_emp.size > 0 else None,
+        ecdf_pt_first_arrival=ecdf_pt_first if ecdf_pt_first.size > 0 else None,
+        tau_fmm_fp_emp=tau_fmm_fp_emp if tau_fmm_fp_emp.size > 0 else None,
+        ecdf_fmm_fp=ecdf_fmm_fp if ecdf_fmm_fp.size > 0 else None,
+        tau_fmm_lrp_emp=tau_fmm_lrp_emp if tau_fmm_lrp_emp.size > 0 else None,
+        ecdf_fmm_lrp=ecdf_fmm_lrp if ecdf_fmm_lrp.size > 0 else None,
+        tau_fmm_fp_target_emp=tau_fmm_fp_target_emp if tau_fmm_fp_target_emp.size > 0 else None,
+        ecdf_fmm_fp_target=ecdf_fmm_fp_target if ecdf_fmm_fp_target.size > 0 else None,
+        tau_fmm_lrp_target_emp=tau_fmm_lrp_target_emp if tau_fmm_lrp_target_emp.size > 0 else None,
+        ecdf_fmm_lrp_target=ecdf_fmm_lrp_target if ecdf_fmm_lrp_target.size > 0 else None,
         y_exp=y_exp,
     )
 
@@ -1861,6 +2090,16 @@ def run_step6(
             seeds_used=np.asarray(seeds_used, dtype=np.int32),
             n_success_by_mc=np.asarray(n_success_by_mc, dtype=np.int32),
             tau_samples_by_mc=np.asarray(tau_by_mc, dtype=object),
+            tau_pt_first_arrival_empirical=np.asarray(tau_pt_first_emp, dtype=float),
+            cdf_pt_first_arrival=np.asarray(ecdf_pt_first, dtype=float),
+            tau_fmm_fp_empirical=np.asarray(tau_fmm_fp_emp, dtype=float),
+            cdf_fmm_fp=np.asarray(ecdf_fmm_fp, dtype=float),
+            tau_fmm_lrp_empirical=np.asarray(tau_fmm_lrp_emp, dtype=float),
+            cdf_fmm_lrp=np.asarray(ecdf_fmm_lrp, dtype=float),
+            tau_fmm_fp_target_empirical=np.asarray(tau_fmm_fp_target_emp, dtype=float),
+            cdf_fmm_fp_target=np.asarray(ecdf_fmm_fp_target, dtype=float),
+            tau_fmm_lrp_target_empirical=np.asarray(tau_fmm_lrp_target_emp, dtype=float),
+            cdf_fmm_lrp_target=np.asarray(ecdf_fmm_lrp_target, dtype=float),
         )
         npz_path_out = npz_path
 

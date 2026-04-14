@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 DISTANCE_TYPES = ("end_point", "hausdorff", "frechet")
-DISTANCE_PAIRS = ("fp_lrp", "fp_lrpFMM", "fp_fpDijkstra", "fp_fpFMM")
+DISTANCE_PAIRS = ("fp_lrp", "fp_lrpFMM", "fp_fpDijkstra", "fp_fpFMM", "fp_fpFSM")
 DISTANCE_MODE_VALUES = ("load_from_main_output", "compute_from_paths")
 DISTANCE_FALLBACK_VALUES = ("compute_from_paths", "nan")
 DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
@@ -19,18 +19,21 @@ DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
         "fp_lrpFMM": "endpoint_dy_fp_vs_lrp_fmm",
         "fp_fpDijkstra": "endpoint_dy_fp_vs_dijkstra",
         "fp_fpFMM": "endpoint_dy_fp_vs_fmm",
+        "fp_fpFSM": "endpoint_dy_fp_vs_fsm",
     },
     "hausdorff": {
         "fp_lrp": "hausdorffDist_fp_lrp_m",
         "fp_lrpFMM": "hausdorffDist_fp_lrpFMM_m",
         "fp_fpDijkstra": "hausdorffDist_fp_fpDijkstra_m",
         "fp_fpFMM": "hausdorffDist_fp_fpFMM_m",
+        "fp_fpFSM": "hausdorffDist_fp_fpFSM_m",
     },
     "frechet": {
         "fp_lrp": "frechetDist_fp_lrp_m",
         "fp_lrpFMM": "frechetDist_fp_lrpFMM_m",
         "fp_fpDijkstra": "frechetDist_fp_fpDijkstra_m",
         "fp_fpFMM": "frechetDist_fp_fpFMM_m",
+        "fp_fpFSM": "frechetDist_fp_fpFSM_m",
     },
 }
 DISTANCE_MAIN_OUTPUT_KEY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
@@ -39,18 +42,21 @@ DISTANCE_MAIN_OUTPUT_KEY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "fp_lrpFMM": ("endpoint_dy_fp_vs_lrp_fmm", "endPointDist_fp_lrpFMM_m"),
         "fp_fpDijkstra": ("endpoint_dy_fp_vs_dijkstra", "endPointDist_fp_fpDijkstra_m"),
         "fp_fpFMM": ("endpoint_dy_fp_vs_fmm", "endPointDist_fp_fpFMM_m"),
+        "fp_fpFSM": ("endpoint_dy_fp_vs_fsm", "endPointDist_fp_fpFSM_m"),
     },
     "hausdorff": {
         "fp_lrp": ("hausdorff_fp_vs_lrp", "hausdorffDist_fp_lrp_m"),
         "fp_lrpFMM": ("hausdorff_fp_vs_lrp_fmm", "hausdorffDist_fp_lrpFMM_m"),
         "fp_fpDijkstra": ("hausdorff_fp_vs_dijkstra", "hausdorffDist_fp_fpDijkstra_m"),
         "fp_fpFMM": ("hausdorff_fp_vs_fmm", "hausdorffDist_fp_fpFMM_m"),
+        "fp_fpFSM": ("hausdorff_fp_vs_fsm", "hausdorffDist_fp_fpFSM_m"),
     },
     "frechet": {
         "fp_lrp": ("frechetDist_fp_lrp_m",),
         "fp_lrpFMM": ("frechetDist_fp_lrpFMM_m",),
         "fp_fpDijkstra": ("frechetDist_fp_fpDijkstra_m",),
         "fp_fpFMM": ("frechetDist_fp_fpFMM_m",),
+        "fp_fpFSM": ("frechetDist_fp_fpFSM_m",),
     },
 }
 
@@ -136,6 +142,7 @@ class RunPaths:
     lrp_fmm_files: list[Path] = field(default_factory=list)
     fp_dijkstra_files: list[Path] = field(default_factory=list)
     fp_fmm_files: list[Path] = field(default_factory=list)
+    fp_fsm_files: list[Path] = field(default_factory=list)
     logk_files: list[Path] = field(default_factory=list)
 
 
@@ -252,6 +259,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
                     raw_keys.get("end_point", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_fpDijkstra"])
                 ),
                 "fp_fpFMM": str(raw_keys.get("end_point", {}).get("fp_fpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_fpFMM"])),
+                "fp_fpFSM": str(raw_keys.get("end_point", {}).get("fp_fpFSM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_fpFSM"])),
             },
             "hausdorff": {
                 "fp_lrp": str(raw_keys.get("hausdorff", {}).get("fp_lrp", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_lrp"])),
@@ -260,6 +268,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
                     raw_keys.get("hausdorff", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_fpDijkstra"])
                 ),
                 "fp_fpFMM": str(raw_keys.get("hausdorff", {}).get("fp_fpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_fpFMM"])),
+                "fp_fpFSM": str(raw_keys.get("hausdorff", {}).get("fp_fpFSM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_fpFSM"])),
             },
             "frechet": {
                 "fp_lrp": str(raw_keys.get("frechet", {}).get("fp_lrp", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_lrp"])),
@@ -268,6 +277,7 @@ def load_config(path: str | Path) -> VisualizationConfig:
                     raw_keys.get("frechet", {}).get("fp_fpDijkstra", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fpDijkstra"])
                 ),
                 "fp_fpFMM": str(raw_keys.get("frechet", {}).get("fp_fpFMM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fpFMM"])),
+                "fp_fpFSM": str(raw_keys.get("frechet", {}).get("fp_fpFSM", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fpFSM"])),
             },
         },
         k_g=float(raw.get("k_g", 1.0)),
@@ -349,6 +359,7 @@ def _collect_run_paths(size_dir: Path, size_str: str) -> RunPaths:
         lrp_fmm_files=sorted(path_dir.glob(f"lrp_fmm_size{size_str}_mc*.npy")),
         fp_dijkstra_files=sorted(path_dir.glob(f"fp_dijkstra_size{size_str}_mc*.npy")),
         fp_fmm_files=sorted(path_dir.glob(f"fp_fmm_size{size_str}_mc*.npy")),
+        fp_fsm_files=sorted(path_dir.glob(f"fp_fsm_size{size_str}_mc*.npy")),
         logk_files=sorted((size_dir / "logk_field").glob("logKField_*.npy")),
     )
 
@@ -411,6 +422,7 @@ def runpaths_to_dict(rp: RunPaths) -> dict[str, Any]:
         "lrp_fmm_files": [str(p) for p in rp.lrp_fmm_files],
         "fp_dijkstra_files": [str(p) for p in rp.fp_dijkstra_files],
         "fp_fmm_files": [str(p) for p in rp.fp_fmm_files],
+        "fp_fsm_files": [str(p) for p in rp.fp_fsm_files],
         "logk_files": [str(p) for p in rp.logk_files],
     }
 

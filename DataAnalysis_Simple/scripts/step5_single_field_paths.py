@@ -18,6 +18,7 @@ from matplotlib.colors import to_rgba
 import matplotlib.patheffects as pe
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import LogFormatterMathtext, LogLocator
+from scipy.integrate import solve_ivp
 from scipy.interpolate import RectBivariateSpline, RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
 from scipy.signal import savgol_filter as _savgol_filter
@@ -36,6 +37,7 @@ COLORS = {
     "fpDijkstra": "#3F73B8",
     "lrp": "#F9B43F",
     "lrpFMM": "#F9B43F",
+    "fpFSM": "#2CA02C",
 }
 
 LINESTYLES = {
@@ -44,6 +46,7 @@ LINESTYLES = {
     "fpDijkstra": ":",
     "lrp": "-",
     "lrpFMM": "-.",
+    "fpFSM": (0, (3, 1, 1, 1)),
 }
 
 LINEWIDTHS = 2
@@ -104,6 +107,8 @@ class PathSolveResult:
     lrp_fmm: np.ndarray
     t_min: np.ndarray
     t_min_lrp: np.ndarray
+    fp_fsm: np.ndarray | None
+    t_min_fsm: np.ndarray | None
     linearized_fp_paths: list[np.ndarray] | None
     linearized_fp_indices: list[int] | None
     linearized_fp_final: np.ndarray | None
@@ -432,6 +437,7 @@ def _import_solver_modules() -> dict[str, Any]:
 
     try:
         from fmm_core.fmm import extract_path_continuous, extract_path_source_to_target, fast_marching_2d_regions
+        from fmm_core.fsm import compute_fsm_path as shared_compute_fsm_path
         from simulation import hydraulic as sim_hyd
         from simulation import particle_tracking as sim_pt
         from simulation import path_finding as sim_path
@@ -445,6 +451,7 @@ def _import_solver_modules() -> dict[str, Any]:
         "extract_path_continuous": extract_path_continuous,
         "extract_path_source_to_target": extract_path_source_to_target,
         "fast_marching_2d_regions": fast_marching_2d_regions,
+        "compute_fsm_path": shared_compute_fsm_path,
         "sim_hyd": sim_hyd,
         "sim_pt": sim_pt,
         "sim_path": sim_path,
@@ -1124,6 +1131,16 @@ def solve_single_field(
     rk45_max_bad_frac: float,
     snapshot_mode: str | None = None,
     snapshot_times: Any = None,
+    fsm_fp: bool = False,
+    fsm_max_sweeps: int = 100,
+    fsm_tol: float = 1e-6,
+    fsm_mse_tol: float | None = None,
+    fsm_convergence_mode: str | None = None,
+    fsm_mse_check_every: int = 5,
+    fsm_mse_activation_factor: float = 10.0,
+    fsm_consecutive_passes: int = 2,
+    fsm_dt: float = 0.5,
+    fsm_max_steps: int = 10_000,
 ) -> PathSolveResult:
     modules = _import_solver_modules()
     linear_solver = _import_linear_eikonal_solver() if linearized_fp else None
@@ -1133,6 +1150,7 @@ def solve_single_field(
     sim_path = modules["sim_path"]
     fast_marching_2d_regions = modules["fast_marching_2d_regions"]
     extract_path_source_to_target = modules["extract_path_source_to_target"]
+    compute_fsm_path = modules["compute_fsm_path"]
 
     if logk_field.shape != (field_size, field_size):
         raise ValueError(f"logK shape {logk_field.shape} does not match requested field-size={field_size}.")
@@ -1158,6 +1176,8 @@ def solve_single_field(
 
     grad_h_x, grad_h_y = _compute_centered_gradient(h, x, y)
     grad_h_mag = np.hypot(grad_h_x, grad_h_y)
+    vx_cell = -k_field * grad_h_x  # cell-centred Darcy velocity (x-component)
+    vy_cell = -k_field * grad_h_y  # cell-centred Darcy velocity (y-component)
     dh_mean = abs(float(dh))
     if dh_mean <= 0.0 or not np.isfinite(dh_mean):
         raise ValueError(f"Invalid mean hydraulic gradient dh={dh}; expected positive finite magnitude.")
@@ -1204,6 +1224,33 @@ def solve_single_field(
         "FP (FMM)",
         check_path_geometry=check_path_geometry,
     )
+
+    fp_fsm: np.ndarray | None = None
+    t_min_fsm: np.ndarray | None = None
+    if fsm_fp:
+        if fsm_convergence_mode is None:
+            fsm_convergence_mode = "update_and_mse" if fsm_mse_tol is not None else "update"
+        fsm_source_mask = np.zeros(vx_cell.shape, dtype=bool)
+        fsm_source_mask[geometry.source_rows, geometry.source_x] = True
+        fsm_target_mask = np.zeros(vx_cell.shape, dtype=bool)
+        fsm_target_mask[geometry.target_rows, geometry.target_x] = True
+        fp_fsm, t_min_fsm, _arrival_time_fsm = compute_fsm_path(
+            vx_cell,
+            vy_cell,
+            fsm_source_mask,
+            fsm_target_mask,
+            geometry.x,
+            geometry.y,
+            max_sweeps=fsm_max_sweeps,
+            tol=fsm_tol,
+            mse_tol=fsm_mse_tol,
+            convergence_mode=fsm_convergence_mode,
+            mse_check_every=fsm_mse_check_every,
+            mse_activation_factor=fsm_mse_activation_factor,
+            consecutive_passes=fsm_consecutive_passes,
+            dt=fsm_dt,
+            max_steps=fsm_max_steps,
+        )
 
     linearized_series: LinearizedFpSeries | None = None
     if linearized_fp:
@@ -1281,6 +1328,8 @@ def solve_single_field(
         lrp_fmm=lrp_fmm,
         t_min=t_min,
         t_min_lrp=t_min_lrp,
+        fp_fsm=fp_fsm,
+        t_min_fsm=t_min_fsm,
         linearized_fp_paths=None if linearized_series is None else linearized_series.paths,
         linearized_fp_indices=None if linearized_series is None else linearized_series.path_indices,
         linearized_fp_final=None if linearized_series is None or not linearized_series.paths else linearized_series.paths[-1],
@@ -1331,6 +1380,8 @@ def _plot_common_overlays(
     ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^*$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
+        ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if fp_diag is not None:
     #     ax.plot(
     #         fp_diag.spline_points[:, 0] / i_y,
@@ -2253,15 +2304,17 @@ def plot_isochrones_with_plume(
     *,
     result: PathSolveResult,
     i_y: float,
+    t_min_fsm_dimless: np.ndarray | None = None,
 ) -> plt.Figure | None:
     """Multi-panel figure: one panel per snapshot time showing isochrone + particle plume.
 
     Each panel shows:
     - logK field as a semi-transparent background
-    - White isochrone contour of the FP FMM field at fraction f of its own first arrival time
-    - LRP isochrone contour of the LRP FMM field at fraction f of its own first arrival time
+    - FP (FMM) isochrone contour at fraction f of its own first arrival time
+    - LRP isochrone contour at fraction f of its own first arrival time
+    - FSM isochrone contour at fraction f of its own first arrival time (when available)
     - Particle plume scatter (all particle positions at that snapshot time)
-    - FP (FMM) and LRP (FMM) paths as thin overlays
+    - FP (FMM), LRP (FMM), and FSM paths as thin overlays
     - Source line
 
     Parameters
@@ -2274,11 +2327,14 @@ def plot_isochrones_with_plume(
         LRP travel-time field divided by t_ref (NaN where unreachable).
     snap_fractions : ndarray (T,)
         Fractions of first arrival time for each snapshot panel (e.g. 0.25, 0.5, 0.75, 1.0).
-        Each isochrone is drawn at ``f * t_fp_arrival`` and ``f * t_lrp_arrival``
-        respectively, so the two contours are relative to their own FMM first arrival.
+        Each isochrone is drawn at ``f * t_fp_arrival``, ``f * t_lrp_arrival``, and
+        ``f * t_fsm_arrival`` respectively, so each contour is relative to its own first arrival.
     result : PathSolveResult
     i_y : float
         Characteristic length for axis normalisation.
+    t_min_fsm_dimless : ndarray (ny, nx) or None
+        FSM travel-time field divided by t_ref (NaN where unreachable). When None,
+        no FSM isochrone or path is drawn.
 
     Returns None if result.snapshots is None or has no snapshots.
     """
@@ -2299,7 +2355,7 @@ def plot_isochrones_with_plume(
     x_norm = result.x / i_y
     y_norm = result.y / i_y
 
-    # First arrival time at target for FP and LRP FMM fields
+    # First arrival time at target for FP, LRP, and FSM fields
     ix_target = int(np.argmin(np.abs(result.x - result.target_xy[0, 0])))
     t_fp_arrival = float(np.nanmin(t_min_dimless[:, ix_target]))
     t_lrp_arrival = float(np.nanmin(t_min_lrp_dimless[:, ix_target]))
@@ -2311,6 +2367,14 @@ def plot_isochrones_with_plume(
     t_lrp_valid = t_min_lrp_dimless[np.isfinite(t_min_lrp_dimless)]
     t_lrp_min = float(np.nanmin(t_lrp_valid)) if t_lrp_valid.size > 0 else 0.0
     t_lrp_max = float(np.nanmax(t_lrp_valid)) if t_lrp_valid.size > 0 else 1.0
+
+    if t_min_fsm_dimless is not None:
+        t_fsm_arrival = float(np.nanmin(t_min_fsm_dimless[:, ix_target]))
+        t_fsm_valid = t_min_fsm_dimless[np.isfinite(t_min_fsm_dimless)]
+        t_fsm_min = float(np.nanmin(t_fsm_valid)) if t_fsm_valid.size > 0 else 0.0
+        t_fsm_max = float(np.nanmax(t_fsm_valid)) if t_fsm_valid.size > 0 else 1.0
+    else:
+        t_fsm_arrival = t_fsm_min = t_fsm_max = 0.0
 
     from matplotlib.lines import Line2D
 
@@ -2341,6 +2405,16 @@ def plot_isochrones_with_plume(
                 x_norm, y_norm, t_min_lrp_dimless,
                 levels=[t_level_lrp], linewidths=LINEWIDTHS, colors=COLORS["lrpFMM"],
             )
+
+        # FSM isochrone contour — relative to FSM first arrival
+        if t_min_fsm_dimless is not None:
+            t_level_fsm = f * t_fsm_arrival
+            if t_fsm_min <= t_level_fsm <= t_fsm_max:
+                ax.contour(
+                    x_norm, y_norm, t_min_fsm_dimless,
+                    levels=[t_level_fsm], linewidths=LINEWIDTHS, colors=COLORS["fpFSM"],
+                    linestyles=["-"],
+                )
 
         # Particle plume scatter
         x_j = snaps.x[:, j]
@@ -2382,6 +2456,15 @@ def plot_isochrones_with_plume(
         line.set_solid_capstyle("round")
         line.set_dash_capstyle("round")
 
+        # FSM path
+        if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
+            line, = ax.plot(
+                result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y,
+                color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"],
+                linewidth=LINEWIDTHS,
+            )
+            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+
         # Source line
         ax.plot(
             result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y,
@@ -2420,6 +2503,14 @@ def plot_isochrones_with_plume(
                 Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{E}$ isochrone"),
                 Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{R}$ isochrone"),
             ]
+            if t_min_fsm_dimless is not None:
+                h_fp_fsm = Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFSM"],
+                                  label=r"$\gamma^*_\mathcal{S}$")
+                h_fp_fsm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+                handles += [
+                    h_fp_fsm,
+                    Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
+                ]
             ax.legend(handles=handles, fontsize=6, loc="upper left", framealpha=0.5)
 
         ax.set_title(r"$f = {:.2f}$".format(f), fontsize=9)
@@ -2521,6 +2612,16 @@ def run_step5(
     rk45_max_bad_frac: float,
     snapshot_mode: str | None = None,
     snapshot_times: Any = None,
+    fsm_fp: bool = False,
+    fsm_max_sweeps: int = 100,
+    fsm_tol: float = 1e-6,
+    fsm_mse_tol: float | None = None,
+    fsm_convergence_mode: str | None = None,
+    fsm_mse_check_every: int = 5,
+    fsm_mse_activation_factor: float = 10.0,
+    fsm_consecutive_passes: int = 2,
+    fsm_dt: float = 0.5,
+    fsm_max_steps: int = 10_000,
 ) -> tuple[Path, Path, Path, Path, Path | None, Path | None]:
     selected: SelectedRun | None = None
     if logk_source == "dataset":
@@ -2604,6 +2705,16 @@ def run_step5(
         rk45_max_bad_frac=rk45_max_bad_frac,
         snapshot_mode=snapshot_mode,
         snapshot_times=snapshot_times,
+        fsm_fp=fsm_fp,
+        fsm_max_sweeps=fsm_max_sweeps,
+        fsm_tol=fsm_tol,
+        fsm_mse_tol=fsm_mse_tol,
+        fsm_convergence_mode=fsm_convergence_mode,
+        fsm_mse_check_every=fsm_mse_check_every,
+        fsm_mse_activation_factor=fsm_mse_activation_factor,
+        fsm_consecutive_passes=fsm_consecutive_passes,
+        fsm_dt=fsm_dt,
+        fsm_max_steps=fsm_max_steps,
     )
     if linearized_fp:
         successful_indices = result.linearized_fp_indices or []
@@ -2714,6 +2825,10 @@ def run_step5(
     if result.snapshots is not None:
         snap_fracs = np.asarray(snapshot_times, dtype=float)
         tmin_lrp_plot = np.where(np.isfinite(result.t_min_lrp), result.t_min_lrp / t_ref, np.nan)
+        tmin_fsm_plot = (
+            np.where(np.isfinite(result.t_min_fsm), result.t_min_fsm / t_ref, np.nan)
+            if result.t_min_fsm is not None else None
+        )
         isochrone_plume_path = out_dir / f"{stem}_isochrone_plume.png"
         fig_plume = plot_isochrones_with_plume(
             logk_field,
@@ -2722,6 +2837,7 @@ def run_step5(
             snap_fracs,
             result=result,
             i_y=i_y,
+            t_min_fsm_dimless=tmin_fsm_plot,
         )
         if fig_plume is not None:
             fig_plume.savefig(isochrone_plume_path, dpi=cfg.figure_dpi, bbox_inches="tight")
@@ -2804,6 +2920,30 @@ def parse_args() -> argparse.Namespace:
         default=True,
         help="Whether to enforce Step 5 path-geometry validation for FP/LRP/FP^i paths.",
     )
+    parser.add_argument(
+        "--fsm-fp",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable FSM (upwind FD + fast sweeping) travel-time and Euler-backtracking path.",
+    )
+    parser.add_argument("--fsm-max-sweeps", type=int, default=100,
+        help="Maximum number of 4-direction sweep cycles for the FSM solver.")
+    parser.add_argument("--fsm-tol", type=float, default=1e-6,
+        help="Convergence tolerance for the FSM travel-time solver.")
+    parser.add_argument("--fsm-mse-tol", type=float, default=None,
+        help="Optional mean-squared residual tolerance for FSM convergence based on the discrete PDE residual v·∇T - 1.")
+    parser.add_argument("--fsm-convergence-mode", choices=["update", "mse", "update_or_mse", "update_and_mse"], default=None,
+        help="FSM convergence rule. Defaults to 'update' without --fsm-mse-tol and 'update_and_mse' when --fsm-mse-tol is set.")
+    parser.add_argument("--fsm-mse-check-every", type=int, default=5,
+        help="Evaluate FSM residual MSE at most every N sweeps when MSE checking is enabled.")
+    parser.add_argument("--fsm-mse-activation-factor", type=float, default=10.0,
+        help="Only start FSM residual-MSE checks once max_change falls below this factor times --fsm-tol for update-screened modes.")
+    parser.add_argument("--fsm-consecutive-passes", type=int, default=2,
+        help="Require the FSM convergence rule to pass this many consecutive eligible checks before stopping.")
+    parser.add_argument("--fsm-dt", type=float, default=0.5,
+        help="Euler step size (grid cells) for FSM path backtracking.")
+    parser.add_argument("--fsm-max-steps", type=int, default=10000,
+        help="Maximum Euler backtracking steps for FSM path extraction.")
     parser.add_argument("--source-x", type=int, default=None)
     parser.add_argument("--target-x", type=int, default=None)
     parser.add_argument("--source-y-start", type=int, default=None)
@@ -2976,6 +3116,16 @@ def main() -> int:
         rk45_max_bad_frac=args.rk45_max_bad_frac,
         snapshot_mode=args.snapshot_mode,
         snapshot_times=args.snapshot_times,
+        fsm_fp=args.fsm_fp,
+        fsm_max_sweeps=args.fsm_max_sweeps,
+        fsm_tol=args.fsm_tol,
+        fsm_mse_tol=args.fsm_mse_tol,
+        fsm_convergence_mode=args.fsm_convergence_mode,
+        fsm_mse_check_every=args.fsm_mse_check_every,
+        fsm_mse_activation_factor=args.fsm_mse_activation_factor,
+        fsm_consecutive_passes=args.fsm_consecutive_passes,
+        fsm_dt=args.fsm_dt,
+        fsm_max_steps=args.fsm_max_steps,
     )
     print(f"Saved figure: {logk_path}")
     print(f"Saved figure: {tmin_path}")

@@ -315,7 +315,12 @@ def _run_pollock_gpu_summary_single(payload: dict[str, Any]) -> dict[str, Any]:
         tracker.right_x = np.float32(right_x)
 
     tracker = global_pollock_tracker
-    raw_travel_times, status = tracker.run()
+    run_result = tracker.run()
+    if len(run_result) < 2:
+        raise RuntimeError(
+            f"PollockTracking2D.run() returned {len(run_result)} values; expected at least travel_times and status."
+        )
+    raw_travel_times, status = run_result[:2]
     travel_times = np.where(status == sim_pt_pollock_gpu.STATUS_SUCCESS, raw_travel_times, np.nan).astype(np.float32)
     stop_mode = str(payload_local.get("stop_mode", "first"))
     arrival_fraction = float(payload_local.get("arrival_fraction", 1.0))

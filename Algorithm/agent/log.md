@@ -105,3 +105,24 @@
 - Extended `_face_to_cell_speed_full` in `./src/fmm_core/speed.py` with a `return_vector` keyword option to return signed cell-centered `(vx_cell, vy_cell)` components instead of the scalar magnitude, needed for angle-based entropy computation on staggered face velocity fields.
 - Updated `./scripts/run_fmm_gpu_worker.py` aggregation save path to match new folder structure.
 - Updated `DataAnalysis_Simple` scripts (`step1_index.py`, `step2_metrics.py`) to discover and load data from the new consolidated `.npy` files and `LengthScale{L}_Size{N}` directories, with backward compatibility for older structures.
+
+## 2026-04-13
+
+- Added shared FSM utilities in `./src/fmm_core/fsm.py` and re-exported them from `./src/fmm_core/__init__.py`:
+  - `solve_fsm_travel_time`
+  - `compute_fsm_path_velocity`
+  - `compute_fsm_residual_field`
+  - `compute_fsm_residual_mse`
+- Extended the shared FSM solver/path API with residual-MSE convergence controls:
+  - `mse_tol`
+  - `convergence_mode`
+  - `mse_check_every`
+  - `mse_activation_factor`
+  - `consecutive_passes`
+- Implemented efficient convergence gating so residual-MSE evaluation is skipped unless it is required by the selected convergence mode and update tolerance state.
+- Fixed `./scripts/run_fmm_gpu_worker.py` summary extraction for newer FlowSimulation Pollock GPU tracker return signatures by accepting extra outputs from `tracker.run()` and consuming only `(travel_times, status)`.
+- Validation:
+  - `python -m py_compile ./src/fmm_core/__init__.py ./src/fmm_core/fsm.py`
+  - `python -m py_compile ./scripts/run_fmm_gpu_worker.py`
+- Limitations/follow-up:
+  - `pytest` is not installed in the current environment, so the FSM unit tests were not executed here.

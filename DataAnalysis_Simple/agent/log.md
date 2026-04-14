@@ -572,3 +572,43 @@
 - Limitations/follow-up:
   - Full Stage 3/4 runtime with the new feature was not executed here; validated by compile check and code-path review.
   - The entropy+Hausdorff samples use only the reference field size (`field_size_ref`) MC files.
+
+## 2026-04-03
+- Agent/tool: Claude Code (claude-sonnet-4-6)
+- Summary: Added Fast Sweeping Method (FSM) as a fourth path-finding method in Step 5 (`--fsm-fp`). FSM directly solves the advection equation `v·∇T = 1` (where `v = (vx, vy)` is the cell-centred Darcy velocity) via upwind finite differences + 4-direction Gauss-Seidel sweeping, then traces the fastest path backward by Euler integration `dγ/dτ = -v(γ)` using `RegularGridInterpolator`. This is physically distinct from the existing Eikonal FMM (which uses a scalar slowness field); FSM tracks the full directional velocity field. Key implementation details:
+  - Array convention: `(n_y, n_x)` (row=y, col=x), correcting the sample-code's transposed convention.
+  - Soft monotonicity check in backtracking: warns on T-increase instead of hard-stopping, to tolerate minor numerical drift.
+  - New fields `fp_fsm` and `t_min_fsm` added to `PathSolveResult` (slots=True, nullable).
+  - FSM path plotted in green (`#2CA02C`, dash-dot-dot) with label `γ*_S` when present.
+  - Off by default (`--no-fsm-fp`); existing behavior unchanged.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `submit_step5_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -c "import ast; ast.parse(open('scripts/step5_single_field_paths.py').read()); print('OK')"` — syntax OK
+  - `bash -n submit_step5_gpu.sh`
+- Limitations/follow-up:
+  - Pure-Python nested loops in `_solve_fsm_travel_time` are O(n_y × n_x × max_sweeps); for 200×200 with 20 sweeps this is ~800K iterations and may take a few seconds. A `@numba.jit(nopython=True)` decorator would give ~50–100× speedup if needed.
+  - End-to-end Step 5 figure generation with `--fsm-fp` has not been rerun in this environment.
+
+## 2026-04-13
+- Agent/tool: Codex (GPT-5)
+- Summary: Updated the analysis pipeline for the new FSM-enabled run outputs and moved Step 5 FSM solving onto the shared `Algorithm/src/fmm_core/fsm.py` implementation. Step 4 removed the Taylor and `std_*` figures, added FSM to the remaining missing method-comparison plots (scatter mean/all-points and ratio mean/variance), and kept the existing FSM-aware time, Hausdorff, endpoint, Frechet, and Wasserstein/path-length plots aligned with the current run cache. Step 5 now imports the shared FSM solver/path code, supports residual-MSE convergence controls (`--fsm-mse-tol`, `--fsm-convergence-mode`, `--fsm-mse-check-every`, `--fsm-mse-activation-factor`, `--fsm-consecutive-passes`), and `submit_step5_gpu.sh` passes those options through in batch mode.
+- Files changed:
+  - `configs/visualization.default.yaml`
+  - `scripts/step1_index.py`
+  - `scripts/step2_metrics.py`
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `scripts/step5_single_field_paths.py`
+  - `submit_step5_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step4_plot.py scripts/step5_single_field_paths.py`
+  - `bash -n submit_step5_gpu.sh`
+- Limitations/follow-up:
+  - End-to-end Stage 4 and Step 5 figure generation was not rerun here.
+  - `pytest` is not installed in the active environment, so test files were not executed in this session.

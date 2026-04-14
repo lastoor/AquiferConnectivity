@@ -33,6 +33,7 @@ COLORS = {
     "lrpFMM": "#7C5AC2",
     "fpFMM": "#C46552", #"#31830B",
     "fpDijkstra": "#B1C452", #"#131EE2",
+    "fpFSM": "#2CA02C",
 }
 
 LINESTYLES = {
@@ -41,6 +42,7 @@ LINESTYLES = {
     "lrpFMM": "-.",
     "fpFMM": "--",
     "fpDijkstra": ":",
+    "fpFSM": (0, (3, 1, 1, 1)),
 }
 
 LINEWIDTH = 2
@@ -221,6 +223,7 @@ def plot_characteristic_time(
     dh: float,
     analytical_tmin: np.ndarray | None = None,
     analytical_label: str = "Analytical $t_{\\mathrm{min}}$",
+    stats_fpt_fsm: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="FP")
@@ -228,6 +231,8 @@ def plot_characteristic_time(
     ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), stats_mhr_fmm[:, 1] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="LRP (FMM)")
     ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, stats_fpt_fmm[:, 1] / t_ref, color=COLORS["fpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FMM)")
     ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, stats_fpt_dijkstra[:, 1] / t_ref, color=COLORS["fpDijkstra"], linestyle="-", marker="o", markerfacecolor="None", label="FP (Dijkstra)")
+    if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
+        ax.errorbar(var, stats_fpt_fsm[:, 0] / t_ref, stats_fpt_fsm[:, 1] / t_ref, color=COLORS["fpFSM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FSM)")
     if analytical_tmin is not None:
         ax.plot(var, analytical_tmin, color="black", linestyle="--", linewidth=1.8, label=analytical_label)
     # ax.set_yscale("log")
@@ -239,37 +244,6 @@ def plot_characteristic_time(
     return fig, {"kind": "characteristic_time"}
 
 
-def plot_taylor_comparison(
-    var: np.ndarray,
-    stats_mhr: np.ndarray,
-    stats_mhr_fmm: np.ndarray,
-    stats_fpt: np.ndarray,
-    stats_fpt_fmm: np.ndarray,
-    stats_fpt_dijkstra: np.ndarray,
-    taylor: dict[str, np.ndarray],
-    t_ref: float,
-):
-    fig, ax = plt.subplots(figsize=[5, 4])
-    ax.errorbar(var, stats_mhr[:, 0] / t_ref, stats_mhr[:, 1] / t_ref, color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="$R_{\\mathrm{min}}$")
-    ax.errorbar(var, stats_mhr_fmm[:, 0] / t_ref, stats_mhr_fmm[:, 1] / t_ref, color=COLORS["lrpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="$R_{\\mathrm{min}}$ (FMM)")
-    ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="$t_{\\mathrm{min}}$")
-    ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, stats_fpt_fmm[:, 1] / t_ref, color=COLORS["fpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="$t_{\\mathrm{min}}$ (FMM)")
-    ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, stats_fpt_dijkstra[:, 1] / t_ref, color=COLORS["fpDijkstra"], linestyle="-", marker="o", markerfacecolor="None", label="$t_{\\mathrm{min}}$ (Dijkstra)")
-    ax.plot(var, taylor["lrp"] / t_ref, "--", color=COLORS["lrp"], linewidth=1.5, label="Taylor Expansion (LRP)")
-    ax.plot(var, taylor["lrp_fmm"] / t_ref, "--", color=COLORS["lrpFMM"], linewidth=1.5, label="Taylor Expansion (LRP, FMM)")
-    ax.plot(var, taylor["fp"] / t_ref, "--", color=COLORS["fp"], linewidth=1.5, label="Taylor Expansion (FP)")
-    ax.plot(var, taylor["fp_fmm"] / t_ref, "--", color=COLORS["fpFMM"], linewidth=1.5, label="Taylor Expansion (FP, FMM)")
-    ax.plot(var, taylor["fp_dijkstra"] / t_ref, "--", color=COLORS["fpDijkstra"], linewidth=1.5, label="Taylor Expansion (FP, Dijkstra)")
-    # ax.set_yscale("log")
-    ax.set_ylim([10 ** (-2), 10 ** 2])
-    ax.set_xlabel("$\\sigma_{Y}^2$")
-    ax.set_ylabel(r"$\mathbb{E}[t_{\mathrm{min}}] U / I_Y$")
-    ax.legend(fontsize="8", ncol=2)
-    ax.grid(True, which="both")
-    fig.tight_layout()
-    return fig, {"kind": "taylor_comparison"}
-
-
 def plot_scatter_tmin_vs_rmin(
     stats_fpt: np.ndarray,
     stats_fpt_fmm: np.ndarray,
@@ -278,10 +252,13 @@ def plot_scatter_tmin_vs_rmin(
     stats_mhr_fmm: np.ndarray,
     t_ref: float,
     dh: float,
+    stats_fpt_fsm: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.scatter(stats_fpt[:, 0] / t_ref, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], label="FP (FMM)", alpha=0.6)
     ax.scatter(stats_fpt[:, 0] / t_ref, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], label="$FP (Dijkstra)", alpha=0.6)
+    if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
+        ax.scatter(stats_fpt[:, 0] / t_ref, stats_fpt_fsm[:, 0] / t_ref, color=COLORS["fpFSM"], label="FP (FSM)", alpha=0.6)
     ax.scatter(stats_fpt[:, 0] / t_ref, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], label="LRP", alpha=0.6)
     ax.scatter(stats_fpt[:, 0] / t_ref, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], label="LRP (FMM)", alpha=0.6)
     # ax.set_xscale("log")
@@ -296,16 +273,6 @@ def plot_scatter_tmin_vs_rmin(
     return fig, {"kind": "scatter_tmin_vs_rmin"}
 
 
-def _extract_std_series(stats_std: dict[str, np.ndarray], metric: str, pair: str, x_len: int, i_y: float) -> tuple[np.ndarray, np.ndarray]:
-    arr = np.asarray(stats_std.get(metric, {}).get(pair, []), dtype=float)
-    if arr.ndim < 3 or arr.shape[0] == 0 or arr.shape[1] < 2 or arr.shape[2] == 0:
-        nan = np.full(x_len, np.nan, dtype=float)
-        return nan, nan
-    y = np.asarray(arr[:, 0, 0], dtype=float) / i_y
-    yerr = np.asarray(arr[:, 1, 0], dtype=float) / i_y
-    return y, yerr
-
-
 def _coerce_series(values: np.ndarray | list[float], expected_len: int, *, label: str, warnings: list[str]) -> np.ndarray:
     arr = np.asarray(values, dtype=float).ravel()
     if arr.size == expected_len:
@@ -318,18 +285,6 @@ def _coerce_series(values: np.ndarray | list[float], expected_len: int, *, label
         f"{label} has length {arr.size}, expected {expected_len}; "
         f"used first {n} values and filled the rest with NaN."
     )
-    return out
-
-
-def _safe_ratio(num: np.ndarray, den: np.ndarray, *, label: str, warnings: list[str]) -> np.ndarray:
-    n = np.asarray(num, dtype=float)
-    d = np.asarray(den, dtype=float)
-    out = np.full_like(n, np.nan, dtype=float)
-    valid = np.isfinite(n) & np.isfinite(d) & (d != 0.0)
-    out[valid] = n[valid] / d[valid]
-    invalid_count = int(np.size(valid) - np.count_nonzero(valid))
-    if invalid_count > 0:
-        warnings.append(f"{label}: set {invalid_count} ratio point(s) to NaN due to non-finite values or zero denominator.")
     return out
 
 
@@ -356,18 +311,20 @@ def _compute_ratio_moments_series(
     scatter_samples_by_var: dict[str, Any] | None,
     dh: float,
     warnings: list[str],
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     n_var = len(np.asarray(var, dtype=float).ravel())
     mean_fp = np.full(n_var, np.nan, dtype=float)
     mean_fmm = np.full(n_var, np.nan, dtype=float)
     mean_dijkstra = np.full(n_var, np.nan, dtype=float)
+    mean_fsm = np.full(n_var, np.nan, dtype=float)
     var_fp = np.full(n_var, np.nan, dtype=float)
     var_fmm = np.full(n_var, np.nan, dtype=float)
     var_dijkstra = np.full(n_var, np.nan, dtype=float)
+    var_fsm = np.full(n_var, np.nan, dtype=float)
 
     if not isinstance(scatter_samples_by_var, dict):
         warnings.append("Ratio plots require scatter_time_samples from Stage 3; received missing/invalid payload.")
-        return mean_fp, mean_fmm, mean_dijkstra, var_fp, var_fmm, var_dijkstra
+        return mean_fp, mean_fmm, mean_dijkstra, mean_fsm, var_fp, var_fmm, var_dijkstra, var_fsm
 
     for idx, variance_value in enumerate(np.asarray(var, dtype=float).ravel()):
         key = _resolve_sample_key(scatter_samples_by_var, float(variance_value))
@@ -401,8 +358,16 @@ def _compute_ratio_moments_series(
             label=f"FP(Dijkstra) ratio moments at sigma2={variance_value}",
             warnings=warnings,
         )
+        if "fpt_fsm" in sample_dict:
+            mean_fsm[idx], var_fsm[idx] = _aligned_ratio_moments(
+                sample_dict["fpt_fsm"],
+                sample_dict["mhr"],
+                dh=dh,
+                label=f"FP(FSM) ratio moments at sigma2={variance_value}",
+                warnings=warnings,
+            )
 
-    return mean_fp, mean_fmm, mean_dijkstra, var_fp, var_fmm, var_dijkstra
+    return mean_fp, mean_fmm, mean_dijkstra, mean_fsm, var_fp, var_fmm, var_dijkstra, var_fsm
 
 
 def _value_slug(value: float) -> str:
@@ -483,6 +448,7 @@ def plot_scatter_tmin_vs_rmin_all_points(samples: dict[str, np.ndarray], *, t_re
     x = np.asarray(samples.get("fpt", []), dtype=float).ravel() / t_ref
     y_fmm = np.asarray(samples.get("fpt_fmm", []), dtype=float).ravel() / t_ref
     y_dij = np.asarray(samples.get("fpt_dijkstra", []), dtype=float).ravel() / t_ref
+    y_fsm = np.asarray(samples.get("fpt_fsm", []), dtype=float).ravel() / t_ref
     y_mhr = np.asarray(samples.get("mhr", []), dtype=float).ravel() / (t_ref * dh)
     y_mhr_fmm = np.asarray(samples.get("mhr_fmm", []), dtype=float).ravel() / (t_ref * dh)
     n = min(x.size, y_fmm.size, y_dij.size, y_mhr.size, y_mhr_fmm.size)
@@ -491,14 +457,18 @@ def plot_scatter_tmin_vs_rmin_all_points(samples: dict[str, np.ndarray], *, t_re
     x = x[:n]
     y_fmm = y_fmm[:n]
     y_dij = y_dij[:n]
+    y_fsm = y_fsm[:n] if y_fsm.size >= n else np.asarray([], dtype=float)
     y_mhr = y_mhr[:n]
     y_mhr_fmm = y_mhr_fmm[:n]
     m_fmm = np.isfinite(x) & np.isfinite(y_fmm) & (x > 0.0) & (y_fmm > 0.0)
     m_dij = np.isfinite(x) & np.isfinite(y_dij) & (x > 0.0) & (y_dij > 0.0)
+    m_fsm = np.isfinite(x) & np.isfinite(y_fsm) & (x > 0.0) & (y_fsm > 0.0) if y_fsm.size == n else np.zeros(n, dtype=bool)
     m_mhr = np.isfinite(x) & np.isfinite(y_mhr) & (x > 0.0) & (y_mhr > 0.0)
     m_mhr_fmm = np.isfinite(x) & np.isfinite(y_mhr_fmm) & (x > 0.0) & (y_mhr_fmm > 0.0)
     ax.scatter(x[m_fmm], y_fmm[m_fmm], color=COLORS["fpFMM"], label="$t_{\\text{min}}\\text{(FMM)}$", alpha=0.6, s=12)
     ax.scatter(x[m_dij], y_dij[m_dij], color=COLORS["fpDijkstra"], label="$t_{\\text{min}}\\text{(Dijkstra)}$", alpha=0.6, s=12)
+    if np.any(m_fsm):
+        ax.scatter(x[m_fsm], y_fsm[m_fsm], color=COLORS["fpFSM"], label="$t_{\\text{min}}\\text{(FSM)}$", alpha=0.6, s=12)
     ax.scatter(x[m_mhr], y_mhr[m_mhr], color=COLORS["lrp"], label=r"$R_{\text{min}}/\mathcal{J}$", alpha=0.6, s=12)
     ax.scatter(x[m_mhr_fmm], y_mhr_fmm[m_mhr_fmm], color=COLORS["lrpFMM"], label=r"$R_{\text{min}}^{\mathrm{FMM}}/\mathcal{J}$", alpha=0.6, s=12)
 
@@ -509,6 +479,9 @@ def plot_scatter_tmin_vs_rmin_all_points(samples: dict[str, np.ndarray], *, t_re
     if np.any(m_dij):
         coeffs_dij = np.polyfit(x[m_dij], y_dij[m_dij], 1)
         ax.plot(x[m_dij], np.polyval(coeffs_dij, x[m_dij]), color=COLORS["fpDijkstra"], linestyle=LINESTYLES["fpDijkstra"], linewidth=LINEWIDTH, path_effects=[pe.Stroke(linewidth=2*LINEWIDTH, foreground="white"), pe.Normal()])
+    if np.any(m_fsm):
+        coeffs_fsm = np.polyfit(x[m_fsm], y_fsm[m_fsm], 1)
+        ax.plot(x[m_fsm], np.polyval(coeffs_fsm, x[m_fsm]), color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=LINEWIDTH, path_effects=[pe.Stroke(linewidth=2*LINEWIDTH, foreground="white"), pe.Normal()])
     if np.any(m_mhr):
         coeffs_mhr = np.polyfit(x[m_mhr], y_mhr[m_mhr], 1)
         ax.plot(x[m_mhr], np.polyval(coeffs_mhr, x[m_mhr]), color=COLORS["lrp"], linestyle=LINESTYLES["lrp"], linewidth=LINEWIDTH, path_effects=[pe.Stroke(linewidth=2*LINEWIDTH, foreground="white"), pe.Normal()])
@@ -537,12 +510,15 @@ def plot_hausdorff_vs_variance(
     stats_hausdorff_fmm: np.ndarray,
     stats_hausdorff_dijkstra: np.ndarray,
     i_y: float,
+    stats_hausdorff_fsm: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, yerr=stats_hausdorff_lrp[:, 1] / i_y, label="$d_H$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, yerr=stats_hausdorff_lrp_fmm[:, 1] / i_y, label="$d_H$[FP, LRP(FMM)]", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, yerr=stats_hausdorff_fmm[:, 1] / i_y, label="$d_H$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, yerr=stats_hausdorff_dijkstra[:, 1] / i_y, label="$d_H$[FP, FP(Dijkstra)]", linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None")
+    if stats_hausdorff_fsm is not None and np.any(np.isfinite(stats_hausdorff_fsm[:, 0])):
+        ax.errorbar(var, stats_hausdorff_fsm[:, 0] / i_y, yerr=stats_hausdorff_fsm[:, 1] / i_y, label="$d_H$[FP, FP(FSM)]", linestyle="-", color=COLORS["fpFSM"], marker="o", markerfacecolor="None")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ d_H / I_Y \right]$")
@@ -559,12 +535,15 @@ def plot_frechet_vs_variance(
     stats_frechet_fmm: np.ndarray,
     stats_frechet_dijkstra: np.ndarray,
     i_y: float,
+    stats_frechet_fsm: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.errorbar(var, stats_frechet_lrp[:, 0] / i_y, yerr=stats_frechet_lrp[:, 1] / i_y, label="$d_F$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_frechet_lrp_fmm[:, 0] / i_y, yerr=stats_frechet_lrp_fmm[:, 1] / i_y, label="$d_F$[FP, LRP(FMM)]", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_frechet_fmm[:, 0] / i_y, yerr=stats_frechet_fmm[:, 1] / i_y, label="$d_F$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")
     ax.errorbar(var, stats_frechet_dijkstra[:, 0] / i_y, yerr=stats_frechet_dijkstra[:, 1] / i_y, label="$d_F$[FP, FP(Dijkstra)]", linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None")
+    if stats_frechet_fsm is not None and np.any(np.isfinite(stats_frechet_fsm[:, 0])):
+        ax.errorbar(var, stats_frechet_fsm[:, 0] / i_y, yerr=stats_frechet_fsm[:, 1] / i_y, label="$d_F$[FP, FP(FSM)]", linestyle="-", color=COLORS["fpFSM"], marker="o", markerfacecolor="None")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ d_F / I_Y \right]$")
@@ -585,10 +564,11 @@ def plot_endpoint_box_by_variance(
         ("fp_lrpFMM", "$d_{EP}$[FP, LRP(FMM)]", COLORS["lrpFMM"]),
         ("fp_fpFMM", "$d_{EP}$[FP, FP(FMM)]", COLORS["fpFMM"]),
         ("fp_fpDijkstra", "$d_{EP}$[FP, FP(Dijkstra)]", COLORS["fpDijkstra"]),
+        ("fp_fpFSM", "$d_{EP}$[FP, FP(FSM)]", COLORS["fpFSM"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
-    width = 0.16
-    offsets = np.array([-1.5, -0.5, 0.5, 1.5], dtype=float) * width
+    width = 0.13
+    offsets = np.array([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=float) * width
     centers = np.arange(len(var_values), dtype=float)
 
     legend_handles = []
@@ -648,10 +628,11 @@ def plot_hausdorff_box_by_variance(
         ("fp_lrpFMM", "$d_H$[FP, LRP(FMM)]", COLORS["lrpFMM"]),
         ("fp_fpFMM", "$d_H$[FP, FP(FMM)]", COLORS["fpFMM"]),
         ("fp_fpDijkstra", "$d_H$[FP, FP(Dijkstra)]", COLORS["fpDijkstra"]),
+        ("fp_fpFSM", "$d_H$[FP, FP(FSM)]", COLORS["fpFSM"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
-    width = 0.16
-    offsets = np.array([-1.5, -0.5, 0.5, 1.5], dtype=float) * width
+    width = 0.13
+    offsets = np.array([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=float) * width
     centers = np.arange(len(var_values), dtype=float)
 
     legend_handles = []
@@ -698,6 +679,7 @@ _HAUSDORFF_CDF_PAIRS = (
     ("fp_lrpFMM", "$d_H$[FP, LRP(FMM)]", COLORS["lrpFMM"]),
     ("fp_fpDijkstra", "$d_H$[FP, FP(Dijkstra)]", COLORS["fpDijkstra"]),
     ("fp_fpFMM", "$d_H$[FP, FP(FMM)]", COLORS["fpFMM"]),
+    ("fp_fpFSM", "$d_H$[FP, FP(FSM)]", COLORS["fpFSM"]),
 )
 
 
@@ -734,6 +716,7 @@ def plot_hausdorff_cdf_ensemble(
 _ENTROPY_HAUSDORFF_PANELS = (
     ("fp_fpFMM", "FP (FMM)"),
     ("fp_fpDijkstra", "FP (Dijkstra)"),
+    ("fp_fpFSM", "FP (FSM)"),
     ("fp_lrpFMM", "LRP (FMM)"),
     ("fp_lrp", "LRP (Dijkstra)"),
 )
@@ -825,10 +808,11 @@ def plot_times_box_by_variance(
         ("mhr_fmm", "LRP (FMM)", COLORS["lrpFMM"], t_ref * dh),
         ("fpt_fmm", "FP (FMM)", COLORS["fpFMM"], t_ref),
         ("fpt_dijkstra", "FP (Dijkstra)", COLORS["fpDijkstra"], t_ref),
+        ("fpt_fsm", "FP (FSM)", COLORS["fpFSM"], t_ref),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
-    width = 0.14
-    offsets = np.array([-2.0, -1.0, 0.0, 1.0, 2.0], dtype=float) * width
+    width = 0.12
+    offsets = np.array([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5], dtype=float) * width
     centers = np.arange(len(var_values), dtype=float)
 
     legend_handles = []
@@ -870,11 +854,19 @@ def plot_times_box_by_variance(
     return fig, {"kind": "times_box_variance"}
 
 
-def plot_ratio_mean_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm: np.ndarray, ratio_dijkstra: np.ndarray):
+def plot_ratio_mean_vs_variance(
+    var: np.ndarray,
+    ratio_fp: np.ndarray,
+    ratio_fmm: np.ndarray,
+    ratio_dijkstra: np.ndarray,
+    ratio_fsm: np.ndarray | None = None,
+):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.plot(var, ratio_fp, linestyle="-", color=COLORS["fp"], marker="o", markerfacecolor="None", label="FP")
     ax.plot(var, ratio_fmm, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="FP (FMM)")
     ax.plot(var, ratio_dijkstra, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="FP (Dijkstra)")
+    if ratio_fsm is not None and np.any(np.isfinite(ratio_fsm)):
+        ax.plot(var, ratio_fsm, linestyle="-", color=COLORS["fpFSM"], marker="o", markerfacecolor="None", label="FP (FSM)")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[t_{\mathrm{min}}/(R_{\mathrm{min}}/dh)\right]$")
@@ -885,11 +877,19 @@ def plot_ratio_mean_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm
     return fig, {"kind": "ratio_mean_variance"}
 
 
-def plot_ratio_var_vs_variance(var: np.ndarray, ratio_fp: np.ndarray, ratio_fmm: np.ndarray, ratio_dijkstra: np.ndarray):
+def plot_ratio_var_vs_variance(
+    var: np.ndarray,
+    ratio_fp: np.ndarray,
+    ratio_fmm: np.ndarray,
+    ratio_dijkstra: np.ndarray,
+    ratio_fsm: np.ndarray | None = None,
+):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.plot(var, ratio_fp, linestyle="-", color=COLORS["fp"], marker="o", markerfacecolor="None", label="FP")
     ax.plot(var, ratio_fmm, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="FP (FMM)")
     ax.plot(var, ratio_dijkstra, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="FP (Dijkstra)")
+    if ratio_fsm is not None and np.any(np.isfinite(ratio_fsm)):
+        ax.plot(var, ratio_fsm, linestyle="-", color=COLORS["fpFSM"], marker="o", markerfacecolor="None", label="FP (FSM)")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathrm{Var}\left(t_{\mathrm{min}}/(R_{\mathrm{min}}/dh)\right)$")
@@ -907,12 +907,15 @@ def plot_wasserstein_len_vs_variance(
     w_fp_fmm: np.ndarray,
     w_fp_dijkstra: np.ndarray,
     i_y: float,
+    w_fp_fsm: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.plot(var, w_fp_lrp / i_y, linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None", label="$W_1$[FP, LRP]")
     ax.plot(var, w_fp_lrp_fmm / i_y, linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None", label="$W_1$[FP, LRP(FMM)]")
     ax.plot(var, w_fp_fmm / i_y, linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None", label="$W_1$[FP, FP(FMM)]")
     ax.plot(var, w_fp_dijkstra / i_y, linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None", label="$W_1$[FP, FP(Dijkstra)]")
+    if w_fp_fsm is not None and np.any(np.isfinite(w_fp_fsm)):
+        ax.plot(var, w_fp_fsm / i_y, linestyle="-", color=COLORS["fpFSM"], marker="o", markerfacecolor="None", label="$W_1$[FP, FP(FSM)]")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$W_1(\mathrm{len})/I_Y$")
@@ -931,6 +934,7 @@ def plot_length_cdf_for_variance(*, samples: dict[str, np.ndarray], variance_val
         ("lrp_fmm", "LRP (FMM)", COLORS["lrpFMM"]),
         ("fp_fmm", "FP (FMM)", COLORS["fpFMM"]),
         ("fp_dijkstra", "FP (Dijkstra)", COLORS["fpDijkstra"]),
+        ("fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
     ]:
         arr = np.asarray(samples.get(key, []), dtype=float).ravel()
         finite = arr[np.isfinite(arr)]
@@ -945,47 +949,6 @@ def plot_length_cdf_for_variance(*, samples: dict[str, np.ndarray], variance_val
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "length_cdf", "variance": float(variance_value)}
-
-
-def plot_std_hausdorff(x_var: np.ndarray, stats_std: dict[str, np.ndarray], i_y: float):
-    fig, ax = plt.subplots(figsize=[5, 4])
-    y, yerr = _extract_std_series(stats_std, "hausdorffDist", "fp_lrp", len(x_var), i_y)
-    ax.errorbar(x_var, y, yerr=yerr, label="$d(\\text{FP}, \\text{LRP})$", linestyle="-", color="blue", marker="o", markerfacecolor="None")
-    y, yerr = _extract_std_series(stats_std, "hausdorffDist", "fp_lrpFMM", len(x_var), i_y)
-    ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{LRP(FMM)}]$", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
-    y, yerr = _extract_std_series(stats_std, "hausdorffDist", "fp_fpFMM", len(x_var), i_y)
-    ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{FP(FMM)}]$", linestyle="-", color="orange", marker="o", markerfacecolor="None")
-    y, yerr = _extract_std_series(stats_std, "hausdorffDist", "fp_fpDijkstra", len(x_var), i_y)
-    ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{FP(Dijkstra)}]$", linestyle="-", color="red", marker="o", markerfacecolor="None")
-    # ax.set_xscale("log")
-    ax.set_xlabel("$\\sigma_{Y}^2$")
-    ax.set_ylabel("$\\mathbb{E}\\left[ \\frac{d_{\\text{Hausdorff}}}{I_Y} \\right]$")
-    ax.set_title("Variation of Hausdorff Distance with Variance")
-    ax.legend(fontsize="9", loc="upper left")
-    ax.grid(True, which="both")
-    fig.tight_layout()
-    return fig, {"kind": "hausdorff_std"}
-
-
-def plot_std_endpoint(x_var: np.ndarray, stats_std: dict[str, np.ndarray], i_y: float):
-    fig, ax = plt.subplots(figsize=[5, 4])
-    y, yerr = _extract_std_series(stats_std, "endPointDist", "fp_lrp", len(x_var), i_y)
-    ax.errorbar(x_var, y, yerr=yerr, label="$d(\\text{FP}, \\text{LRP})$", linestyle="-", color="blue", marker="o", markerfacecolor="None")
-    y, yerr = _extract_std_series(stats_std, "endPointDist", "fp_lrpFMM", len(x_var), i_y)
-    ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{LRP(FMM)}]$", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
-    y, yerr = _extract_std_series(stats_std, "endPointDist", "fp_fpFMM", len(x_var), i_y)
-    ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{FP(FMM)}]$", linestyle="-", color="orange", marker="o", markerfacecolor="None")
-    y, yerr = _extract_std_series(stats_std, "endPointDist", "fp_fpDijkstra", len(x_var), i_y)
-    ax.errorbar(x_var, y, yerr=yerr, label="$d[\\text{FP}, \\text{FP(Dijkstra)}]$", linestyle="-", color="red", marker="o", markerfacecolor="None")
-    # ax.set_xscale("log")
-    ax.set_xlabel("$\\sigma_{Y}^2$")
-    ax.set_ylabel("$\\mathbb{E}\\left[ \\frac{d_{\\text{end-point}}}{I_Y} \\right]$")
-    ax.set_title("Variation of End-Point Distance with Variance")
-    ax.legend(fontsize="9", loc="upper left")
-    ax.grid(True, which="both")
-    fig.tight_layout()
-    return fig, {"kind": "endpoint_std"}
-
 
 def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -1067,14 +1030,12 @@ def run_stage4(
 
     var = prepared["var"]
     s = prepared["stats"]
-    taylor = prepared["taylor"]
     i_y = prepared["i_y"]
     t_ref = prepared["t_ref"]
-    x_var = prepared["std_x"]
     field_size = float(prepared.get("field_size", cfg.field_size_ref))
     scatter_modes = ["mean"] if scatter_modes is None else scatter_modes
-    ratio_mean_fp = ratio_mean_fmm = ratio_mean_dijkstra = None
-    ratio_var_fp = ratio_var_fmm = ratio_var_dijkstra = None
+    ratio_mean_fp = ratio_mean_fmm = ratio_mean_dijkstra = ratio_mean_fsm = None
+    ratio_var_fp = ratio_var_fmm = ratio_var_dijkstra = ratio_var_fsm = None
 
     if "times" in cfg.sections:
         u1 = cfg.k_g * cfg.dh
@@ -1098,6 +1059,7 @@ def run_stage4(
             cfg.dh,
             analytical_tmin=analytical_tmin,
             analytical_label=f"Analytical $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
+            stats_fpt_fsm=s.get("stats_fpt_fsm"),
         )
         artifacts.extend(save_figure(fig, section="times", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
@@ -1111,14 +1073,18 @@ def run_stage4(
             artifacts.extend(save_figure(fig, section="times_box", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
             plt.close(fig)
 
-    if "taylor" in cfg.sections:
-        fig, meta = plot_taylor_comparison(var, s["stats_mhr"], s["stats_mhr_fmm"], s["stats_fpt"], s["stats_fpt_fmm"], s["stats_fpt_dijkstra"], taylor, t_ref)
-        artifacts.extend(save_figure(fig, section="taylor", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
-        plt.close(fig)
-
     if "scatter" in cfg.sections:
         if "mean" in scatter_modes:
-            fig, meta = plot_scatter_tmin_vs_rmin(s["stats_fpt"], s["stats_fpt_fmm"], s["stats_fpt_dijkstra"], s["stats_mhr"], s["stats_mhr_fmm"], t_ref, cfg.dh)
+            fig, meta = plot_scatter_tmin_vs_rmin(
+                s["stats_fpt"],
+                s["stats_fpt_fmm"],
+                s["stats_fpt_dijkstra"],
+                s["stats_mhr"],
+                s["stats_mhr_fmm"],
+                t_ref,
+                cfg.dh,
+                stats_fpt_fsm=s.get("stats_fpt_fsm"),
+            )
             artifacts.extend(save_figure(fig, section="scatter", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
             plt.close(fig)
         if "all_points" in scatter_modes:
@@ -1158,7 +1124,7 @@ def run_stage4(
                     plt.close(fig)
 
     if "hausdorff" in cfg.sections:
-        fig, meta = plot_hausdorff_vs_variance(var, s["stats_hausdorff_lrp"], s["stats_hausdorff_lrp_fmm"], s["stats_hausdorff_fmm"], s["stats_hausdorff_dijkstra"], i_y)
+        fig, meta = plot_hausdorff_vs_variance(var, s["stats_hausdorff_lrp"], s["stats_hausdorff_lrp_fmm"], s["stats_hausdorff_fmm"], s["stats_hausdorff_dijkstra"], i_y, stats_hausdorff_fsm=s.get("stats_hausdorff_fsm"))
         artifacts.extend(save_figure(fig, section="hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
 
@@ -1172,7 +1138,7 @@ def run_stage4(
             plt.close(fig)
 
     if "frechet" in cfg.sections:
-        fig, meta = plot_frechet_vs_variance(var, s["stats_frechet_lrp"], s["stats_frechet_lrp_fmm"], s["stats_frechet_fmm"], s["stats_frechet_dijkstra"], i_y)
+        fig, meta = plot_frechet_vs_variance(var, s["stats_frechet_lrp"], s["stats_frechet_lrp_fmm"], s["stats_frechet_fmm"], s["stats_frechet_dijkstra"], i_y, stats_frechet_fsm=s.get("stats_frechet_fsm"))
         artifacts.extend(save_figure(fig, section="frechet", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
 
@@ -1188,26 +1154,44 @@ def run_stage4(
     if "ratio_mean" in cfg.sections:
         if ratio_mean_fp is None:
             scatter_samples_by_var = prepared.get("scatter_time_samples")
-            ratio_mean_fp, ratio_mean_fmm, ratio_mean_dijkstra, ratio_var_fp, ratio_var_fmm, ratio_var_dijkstra = _compute_ratio_moments_series(
+            (
+                ratio_mean_fp,
+                ratio_mean_fmm,
+                ratio_mean_dijkstra,
+                ratio_mean_fsm,
+                ratio_var_fp,
+                ratio_var_fmm,
+                ratio_var_dijkstra,
+                ratio_var_fsm,
+            ) = _compute_ratio_moments_series(
                 var,
                 scatter_samples_by_var=scatter_samples_by_var,
                 dh=cfg.dh,
                 warnings=all_warnings,
             )
-        fig, meta = plot_ratio_mean_vs_variance(var, ratio_mean_fp, ratio_mean_fmm, ratio_mean_dijkstra)
+        fig, meta = plot_ratio_mean_vs_variance(var, ratio_mean_fp, ratio_mean_fmm, ratio_mean_dijkstra, ratio_mean_fsm)
         artifacts.extend(save_figure(fig, section="ratio_mean", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
 
     if "ratio_var" in cfg.sections:
         if ratio_var_fp is None:
             scatter_samples_by_var = prepared.get("scatter_time_samples")
-            ratio_mean_fp, ratio_mean_fmm, ratio_mean_dijkstra, ratio_var_fp, ratio_var_fmm, ratio_var_dijkstra = _compute_ratio_moments_series(
+            (
+                ratio_mean_fp,
+                ratio_mean_fmm,
+                ratio_mean_dijkstra,
+                ratio_mean_fsm,
+                ratio_var_fp,
+                ratio_var_fmm,
+                ratio_var_dijkstra,
+                ratio_var_fsm,
+            ) = _compute_ratio_moments_series(
                 var,
                 scatter_samples_by_var=scatter_samples_by_var,
                 dh=cfg.dh,
                 warnings=all_warnings,
             )
-        fig, meta = plot_ratio_var_vs_variance(var, ratio_var_fp, ratio_var_fmm, ratio_var_dijkstra)
+        fig, meta = plot_ratio_var_vs_variance(var, ratio_var_fp, ratio_var_fmm, ratio_var_dijkstra, ratio_var_fsm)
         artifacts.extend(save_figure(fig, section="ratio_var", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
 
@@ -1220,7 +1204,8 @@ def run_stage4(
             w_fp_lrp_fmm = _coerce_series(wl.get("fp_lrpFMM", []), len(var), label="wasserstein_len.fp_lrpFMM", warnings=all_warnings)
             w_fp_fmm = _coerce_series(wl.get("fp_fpFMM", []), len(var), label="wasserstein_len.fp_fpFMM", warnings=all_warnings)
             w_fp_dijkstra = _coerce_series(wl.get("fp_fpDijkstra", []), len(var), label="wasserstein_len.fp_fpDijkstra", warnings=all_warnings)
-            fig, meta = plot_wasserstein_len_vs_variance(var, w_fp_lrp, w_fp_lrp_fmm, w_fp_fmm, w_fp_dijkstra, i_y)
+            w_fp_fsm = _coerce_series(wl["fp_fpFSM"], len(var), label="wasserstein_len.fp_fpFSM", warnings=all_warnings) if "fp_fpFSM" in wl else None
+            fig, meta = plot_wasserstein_len_vs_variance(var, w_fp_lrp, w_fp_lrp_fmm, w_fp_fmm, w_fp_dijkstra, i_y, w_fp_fsm=w_fp_fsm)
             artifacts.extend(save_figure(fig, section="wasserstein_len", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
             plt.close(fig)
 
@@ -1254,16 +1239,6 @@ def run_stage4(
                         )
                     )
                     plt.close(fig)
-
-    if "std_hausdorff" in cfg.sections and prepared["stats_std"] is not None:
-        fig, meta = plot_std_hausdorff(x_var, prepared["stats_std"], i_y)
-        artifacts.extend(save_figure(fig, section="std_hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
-        plt.close(fig)
-
-    if "std_endpoint" in cfg.sections and prepared["stats_std"] is not None:
-        fig, meta = plot_std_endpoint(x_var, prepared["stats_std"], i_y)
-        artifacts.extend(save_figure(fig, section="std_endpoint", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
-        plt.close(fig)
 
     if hausdorff_cdf:
         hcdf_data = prepared.get("hausdorff_cdf_ensemble")

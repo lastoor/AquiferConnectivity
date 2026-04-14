@@ -14,6 +14,13 @@ from .fmm import (
     solve_travel_time_scikit,
     solve_travel_time,
 )
+from .fsm import (
+    backtrack_path_rk45,
+    compute_fsm_path as compute_fsm_path_velocity,
+    compute_fsm_residual_field,
+    compute_fsm_residual_mse,
+    solve_fsm_travel_time,
+)
 from .metrics import distance_distribution, directed_nn_distances, resample_by_arclength
 from .speed import prepare_fmm_speed
 
@@ -36,4 +43,9 @@ __all__ = [
     "directed_nn_distances",
     "distance_distribution",
     "prepare_fmm_speed",
+    "solve_fsm_travel_time",
+    "backtrack_path_rk45",
+    "compute_fsm_path_velocity",
+    "compute_fsm_residual_field",
+    "compute_fsm_residual_mse",
 ]

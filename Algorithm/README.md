@@ -21,6 +21,7 @@ Example:
 FMM-specific code lives in `./src/fmm_core`:
 
 - `fmm.py`: travel-time solvers (`custom`, `scikit`) and path backtracking (`discrete`, `continuous`).
+- `fsm.py`: velocity-driven FSM travel-time solve/path extraction for `v·∇T = 1`, including residual-field and residual-MSE helpers for convergence checks.
 - `metrics.py`: path comparison metrics (`distance_distribution`).
 
 ## Dependency on FlowSimulation
@@ -98,6 +99,7 @@ Notes:
 - `scripts/run_fmm_gpu_worker.py` currently supports `--solver pollock` only.
 - The current persistent GPU worker is intended to run one field size and one exact `--num_particles` value per job. Mixed tracker shapes in one worker process are rejected explicitly.
 - The GPU worker uses a single dedicated GPU process, compact `seed_spec` payloads, shared-memory transfer for `vx` / `vy` / face arrays, and exact winner replay in arrival mode.
+- `scripts/run_fmm_gpu_worker.py` is compatible with newer FlowSimulation Pollock GPU trackers that return extra snapshot arrays from `tracker.run()`; the worker uses the first two outputs (`travel_times`, `status`) and ignores additional values in the summary path.
 
 ## FMM Solver Options
 

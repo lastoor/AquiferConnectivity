@@ -20,6 +20,7 @@ if str(SRC_ROOT) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_ROOT))
 
 from fmm_core import compute_fmm_path
+from fmm_core.fsm import compute_fsm_path as compute_fsm_path_velocity
 from fmm_core.metrics import distance_distribution
 from fmm_core.speed import prepare_fmm_speed
 from simulation import grf_generation as sim_grf
@@ -34,7 +35,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 9
+MC_SCHEMA_VERSION = 10
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -48,15 +49,18 @@ MC_FIELDS = [
     "len_fp",
     "len_fp_dijkstra",
     "len_fp_fmm",
+    "len_fp_fsm",
     "travel_time_fp",
     "travel_time_dijkstra",
     "travel_time_fmm",
+    "travel_time_fsm",
     "resistance_lrp",
     "resistance_lrp_fmm",
     "endpoint_dy_fp_vs_lrp",
     "endpoint_dy_fp_vs_lrp_fmm",
     "endpoint_dy_fp_vs_dijkstra",
     "endpoint_dy_fp_vs_fmm",
+    "endpoint_dy_fp_vs_fsm",
     "endpoint_method",
     "endpoint_x_ref",
     "x_end_fp",
@@ -64,11 +68,13 @@ MC_FIELDS = [
     "x_end_lrp_fmm",
     "x_end_fp_dijkstra",
     "x_end_fp_fmm",
+    "x_end_fp_fsm",
     "y_end_fp",
     "y_end_lrp",
     "y_end_lrp_fmm",
     "y_end_fp_dijkstra",
     "y_end_fp_fmm",
+    "y_end_fp_fsm",
     "pt_solver",
     "pt_backend",
     "pt_num_particles",
@@ -686,6 +692,41 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 logger.warning(f"[MC {mc_index}] Invalid FP (FMM), retrying next trial.")
                 continue
 
+            # 3.3) FSM path (cell-centred Darcy velocity, non-fatal)
+            vx_cell, vy_cell = sim_hyd.compute_velocity(
+                k_field,
+                config_mc["x"],
+                config_mc["y"],
+                h,
+                output_location="cell",
+            )
+            _n_y_fsm, _n_x_fsm = vx_cell.shape
+            fsm_source_mask = np.zeros((_n_y_fsm, _n_x_fsm), dtype=bool)
+            fsm_source_mask[source_rows, x0] = True
+            fsm_target_mask = np.zeros((_n_y_fsm, _n_x_fsm), dtype=bool)
+            fsm_target_mask[target_rows, x1] = True
+
+            fp_fsm_cfg = config_mc.get("fsm_arg", {})
+            fp_fsm: np.ndarray | None = None
+            arrival_fsm: float | None = None
+            fp_fsm_error: str | None = None
+            try:
+                fp_fsm, _t_field_fsm, arrival_fsm = compute_fsm_path_velocity(
+                    vx_cell,
+                    vy_cell,
+                    fsm_source_mask,
+                    fsm_target_mask,
+                    config_mc["x"],
+                    config_mc["y"],
+                    max_sweeps=int(fp_fsm_cfg.get("max_sweeps", 100)),
+                    tol=float(fp_fsm_cfg.get("tol", 1e-6)),
+                    dt=float(fp_fsm_cfg.get("dt", 0.5)),
+                    max_steps=int(fp_fsm_cfg.get("max_steps", 10_000)),
+                )
+            except Exception as exc:
+                fp_fsm_error = str(exc)
+                logger.warning(f"[MC {mc_index}] FSM path failed (non-fatal): {exc}")
+
             # 4) Particle tracking
             try:
                 fp, pt_res, _pt_velocity = run_particle_tracking(
@@ -716,6 +757,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             D_fp_lrp_fmm, _, _ = distance_distribution(fp, lrp_fmm, ds=1.0)
             D_fp_dij, _, _ = distance_distribution(fp, fp_dijkstra, ds=1.0)
             D_fp_fmm, _, _ = distance_distribution(fp, fp_fmm, ds=1.0)
+            D_fp_fsm: np.ndarray | None = None
+            if fp_fsm is not None:
+                D_fp_fsm, _, _ = distance_distribution(fp, fp_fsm, ds=1.0)
 
             vx_pt = np.asarray(_pt_velocity["vx"])
             renyi_s1, renyi_s2 = _renyi_entropy_vx_profile(vx_pt)
@@ -725,6 +769,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             y_end_lrp_fmm = endpoint_y_at_x(lrp_fmm, x_ref=x_ref)
             y_end_fp_dij = endpoint_y_at_x(fp_dijkstra, x_ref=x_ref)
             y_end_fp_fmm = endpoint_y_at_x(fp_fmm, x_ref=x_ref)
+            y_end_fp_fsm = endpoint_y_at_x(fp_fsm, x_ref=x_ref) if fp_fsm is not None else np.nan
 
             seeds_dict = {
                 "base": none_to_nan(config_mc.get("seed_base", np.nan)),
@@ -800,6 +845,12 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "length": float(sim_utils.euclidean_length(lrp_fmm)),
                         "resistance": float(total_R_fmm),
                     },
+                    "fp_fsm": {
+                        "coords": fp_fsm,
+                        "length": float(sim_utils.euclidean_length(fp_fsm)) if fp_fsm is not None else np.nan,
+                        "travel_time": float(arrival_fsm) if arrival_fsm is not None else np.nan,
+                        "error": fp_fsm_error,
+                    },
                 },
                 "endpoint": {
                     "method": "interp_at_xref",
@@ -807,6 +858,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp": {"x": float(fp[-1, 0]), "y": float(y_end_fp)},
                     "fp_dijkstra": {"x": float(fp_dijkstra[-1, 0]), "y": float(y_end_fp_dij)},
                     "fp_fmm": {"x": float(fp_fmm[-1, 0]), "y": float(y_end_fp_fmm)},
+                    "fp_fsm": {
+                        "x": float(fp_fsm[-1, 0]) if fp_fsm is not None else np.nan,
+                        "y": float(y_end_fp_fsm),
+                    },
                     "lrp": {"x": float(lrp[-1, 0]), "y": float(y_end_lrp)},
                     "lrp_fmm": {"x": float(lrp_fmm[-1, 0]), "y": float(y_end_lrp_fmm)},
                     "dy": {
@@ -814,6 +869,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "fp_vs_lrp_fmm": float(y_end_fp - y_end_lrp_fmm),
                         "fp_vs_dijkstra": float(y_end_fp - y_end_fp_dij),
                         "fp_vs_fmm": float(y_end_fp - y_end_fp_fmm),
+                        "fp_vs_fsm": float(y_end_fp - y_end_fp_fsm) if fp_fsm is not None else np.nan,
                     },
                 },
                 "hausdorff": {
@@ -821,6 +877,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp_vs_lrp_fmm": _hausdorff_detail(D_fp_lrp_fmm),
                     "fp_vs_dijkstra": _hausdorff_detail(D_fp_dij),
                     "fp_vs_fmm": _hausdorff_detail(D_fp_fmm),
+                    "fp_vs_fsm": _hausdorff_detail(D_fp_fsm) if D_fp_fsm is not None else None,
                 },
                 "renyi_entropy": {
                     "S1": renyi_s1,
@@ -839,9 +896,11 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "len_fp": consolidated["paths"]["fp"]["length"],
                     "len_fp_dijkstra": consolidated["paths"]["fp_dijkstra"]["length"],
                     "len_fp_fmm": consolidated["paths"]["fp_fmm"]["length"],
+                    "len_fp_fsm": consolidated["paths"]["fp_fsm"]["length"],
                     "travel_time_fp": consolidated["paths"]["fp"]["travel_time"],
                     "travel_time_dijkstra": consolidated["paths"]["fp_dijkstra"]["travel_time"],
                     "travel_time_fmm": consolidated["paths"]["fp_fmm"]["travel_time"],
+                    "travel_time_fsm": consolidated["paths"]["fp_fsm"]["travel_time"],
                     "resistance_lrp": consolidated["paths"]["lrp"]["resistance"],
                     "resistance_lrp_fmm": consolidated["paths"]["lrp_fmm"]["resistance"],
                     "endpoint_method": "interp_at_xref",
@@ -851,15 +910,18 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "x_end_lrp_fmm": consolidated["endpoint"]["lrp_fmm"]["x"],
                     "x_end_fp_dijkstra": consolidated["endpoint"]["fp_dijkstra"]["x"],
                     "x_end_fp_fmm": consolidated["endpoint"]["fp_fmm"]["x"],
+                    "x_end_fp_fsm": consolidated["endpoint"]["fp_fsm"]["x"],
                     "y_end_fp": consolidated["endpoint"]["fp"]["y"],
                     "y_end_lrp": consolidated["endpoint"]["lrp"]["y"],
                     "y_end_lrp_fmm": consolidated["endpoint"]["lrp_fmm"]["y"],
                     "y_end_fp_dijkstra": consolidated["endpoint"]["fp_dijkstra"]["y"],
                     "y_end_fp_fmm": consolidated["endpoint"]["fp_fmm"]["y"],
+                    "y_end_fp_fsm": consolidated["endpoint"]["fp_fsm"]["y"],
                     "endpoint_dy_fp_vs_lrp": consolidated["endpoint"]["dy"]["fp_vs_lrp"],
                     "endpoint_dy_fp_vs_lrp_fmm": consolidated["endpoint"]["dy"]["fp_vs_lrp_fmm"],
                     "endpoint_dy_fp_vs_dijkstra": consolidated["endpoint"]["dy"]["fp_vs_dijkstra"],
                     "endpoint_dy_fp_vs_fmm": consolidated["endpoint"]["dy"]["fp_vs_fmm"],
+                    "endpoint_dy_fp_vs_fsm": consolidated["endpoint"]["dy"]["fp_vs_fsm"],
                     "pt_solver": config_dict["particle_tracking"]["solver"],
                     "pt_backend": config_dict["particle_tracking"]["backend"],
                     "pt_num_particles": config_dict["particle_tracking"]["num_particles"],

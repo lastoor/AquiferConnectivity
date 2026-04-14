@@ -12,7 +12,7 @@ synthetic_frequency_y="0.5"
 synthetic_offset="-3.0"
 
 # GRF logK source (used when logk_source="grf")
-grf_std="1.0"
+grf_std="2.0"
 grf_length_scale=""   # leave empty to use cfg.length_scale
 grf_seed="2"
 grf_minpadding="0"
@@ -20,6 +20,17 @@ grf_minpadding="0"
 run_tag="3_synthetic_plume"
 num_particles="1000000"
 dh=""
+fsm_fp="true"
+fsm_max_sweeps="100"
+fsm_tol="1e-6"
+fsm_mse_tol=""
+fsm_convergence_mode=""
+fsm_mse_check_every="5"
+fsm_mse_activation_factor="10.0"
+fsm_consecutive_passes="2"
+fsm_dt="0.5"
+fsm_max_steps="10000"
+
 linearized_fp="false"
 linearized_scheme="linearized" # Options: linearized, full_eikonal
 linearized_outer_max="10"
@@ -82,6 +93,26 @@ if [[ "${check_path_geometry}" == "true" ]]; then
 else
     check_path_geometry_args="--no-check-path-geometry"
 fi
+
+fsm_args=""
+if [[ "${fsm_fp}" == "true" ]]; then
+    fsm_args+=" --fsm-fp"
+else
+    fsm_args+=" --no-fsm-fp"
+fi
+fsm_args+=" --fsm-max-sweeps ${fsm_max_sweeps}"
+fsm_args+=" --fsm-tol ${fsm_tol}"
+if [[ -n "${fsm_mse_tol}" ]]; then
+    fsm_args+=" --fsm-mse-tol ${fsm_mse_tol}"
+fi
+if [[ -n "${fsm_convergence_mode}" ]]; then
+    fsm_args+=" --fsm-convergence-mode ${fsm_convergence_mode}"
+fi
+fsm_args+=" --fsm-mse-check-every ${fsm_mse_check_every}"
+fsm_args+=" --fsm-mse-activation-factor ${fsm_mse_activation_factor}"
+fsm_args+=" --fsm-consecutive-passes ${fsm_consecutive_passes}"
+fsm_args+=" --fsm-dt ${fsm_dt}"
+fsm_args+=" --fsm-max-steps ${fsm_max_steps}"
 
 linearized_args=""
 if [[ "${linearized_fp}" == "true" ]]; then
@@ -180,6 +211,7 @@ sbatch <<EOF
 echo "Running step5 GPU Pollock on node \$SLURM_NODELIST"
 echo "Start Time: \$(date)"
 echo "logK source: ${logk_source}"
+echo "FSM FP: ${fsm_fp} (max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, mse_tol=${fsm_mse_tol:-disabled}, mode=${fsm_convergence_mode:-auto}, mse_check_every=${fsm_mse_check_every}, mse_activation_factor=${fsm_mse_activation_factor}, consecutive_passes=${fsm_consecutive_passes}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
 echo "Linearized FP: ${linearized_fp}"
 echo "Linearized scheme: ${linearized_scheme}"
 echo "Check path geometry: ${check_path_geometry}"
@@ -224,6 +256,7 @@ python ./scripts/step5_single_field_paths.py \\
   --no-align-with-modflow-velocity \\
   --fmm-backtracking continuous \\
   --fmm-continuous-step-size 0.1 \\
+  ${fsm_args} \\
   ${linearized_args} \\
   ${check_path_geometry_args} \\
   ${geometry_args} \\
