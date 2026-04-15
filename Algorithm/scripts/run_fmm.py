@@ -196,6 +196,71 @@ def _renyi_entropy_vx_profile(vx: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return s1, s2
 
 
+def validate_covariance_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.covariance == "exp":
+        if args.length_scale is None:
+            parser.error("--length_scale is required when --covariance exp")
+        if args.fbm_alpha is not None or args.fbm_c is not None:
+            parser.error("--fbm_alpha/--fbm_c are only valid when --covariance fbm")
+        return
+
+    if args.fbm_alpha is None:
+        parser.error("--fbm_alpha is required when --covariance fbm")
+    if args.fbm_c is None:
+        parser.error("--fbm_c is required when --covariance fbm")
+    if args.length_scale is not None:
+        parser.error("--length_scale is only valid when --covariance exp")
+
+
+def build_grf_arg(args: argparse.Namespace) -> dict[str, Any]:
+    grf_arg: dict[str, Any] = {
+        "covariance": args.covariance,
+        "minpadding": int(args.minpadding),
+    }
+    if args.covariance == "exp":
+        grf_arg.update(
+            {
+                "length_scale": float(args.length_scale),
+                "std": float(args.std if args.std is not None else np.sqrt(args.var)),
+            }
+        )
+    else:
+        grf_arg.update(
+            {
+                "fbm_alpha": float(args.fbm_alpha),
+                "fbm_c": float(args.fbm_c),
+            }
+        )
+    return grf_arg
+
+
+def make_grf_generator(grf_arg: dict[str, Any], field_size_: int) -> Any:
+    covariance = str(grf_arg["covariance"])
+    if covariance == "exp":
+        cov = sim_grf.ExpCov(sigma=grf_arg["std"], length_scale=grf_arg["length_scale"])
+        pts = (np.linspace(0, 1, field_size_),) * 2
+        mean = np.zeros((field_size_, field_size_))
+        return sim_grf.GaussianRandomFieldCircEmbed(mean, cov, pts, minpadding=grf_arg["minpadding"])
+    if covariance == "fbm":
+        return sim_grf.fBmGenerator(
+            c=grf_arg["fbm_c"],
+            alpha=grf_arg["fbm_alpha"],
+            num_pt=field_size_,
+            dim=2,
+            minpadding=grf_arg["minpadding"],
+        )
+    raise ValueError(f"Unsupported covariance type: {covariance}")
+
+
+def grf_path_tag(grf_arg: dict[str, Any]) -> str:
+    covariance = str(grf_arg["covariance"])
+    if covariance == "exp":
+        return f"Covexp_LengthScale{grf_arg['length_scale']}"
+    if covariance == "fbm":
+        return f"Covfbm_Alpha{grf_arg['fbm_alpha']}_C{grf_arg['fbm_c']}"
+    raise ValueError(f"Unsupported covariance type: {covariance}")
+
+
 def save_mc_consolidated(
     config_mc: dict[str, Any],
     mc_index: int,
@@ -499,7 +564,7 @@ def make_config_for_size(config_base: dict[str, Any], idx_size: int) -> dict[str
     config["x"] = np.arange(0, field_size_, config["dx"], dtype=float)
     config["y"] = np.arange(0, field_size_, config["dy"], dtype=float)
 
-    config["path_size"] = config["path_simulation"] / f"LengthScale{config['grf_arg']['length_scale']}_Size{field_size_}"
+    config["path_size"] = config["path_simulation"] / f"{grf_path_tag(config['grf_arg'])}_Size{field_size_}"
 
     if config["path_size"].exists() and config["path_size"].is_dir():
         import shutil
@@ -1028,10 +1093,7 @@ def run_field_size_simulation(idx_size: int, config_base: dict[str, Any]) -> dic
     field_size_ = config["field_size_"]
     logger.info(f"[SIZE {field_size_}] Starting simulation.")
 
-    cov = sim_grf.ExpCov(sigma=config["grf_arg"]["std"], length_scale=config["grf_arg"]["length_scale"])
-    pts = (np.linspace(0, 1, field_size_),) * 2
-    mean = np.zeros((field_size_, field_size_))
-    grf_gen = sim_grf.GaussianRandomFieldCircEmbed(mean, cov, pts, minpadding=config["grf_arg"]["minpadding"])
+    grf_gen = make_grf_generator(config["grf_arg"], field_size_)
 
     num_mc_ = int(config["num_mc"][idx_size])
     num_process = min(num_mc_, len(os.sched_getaffinity(0)))
@@ -1069,7 +1131,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--path_workdir", required=True, type=str, help="Path to output working directory.")
     parser.add_argument("--num_mc", required=True, nargs="+", type=int, help="Monte Carlo count list.")
     parser.add_argument("--field_size", required=True, nargs="+", type=int, help="Field size list.")
-    parser.add_argument("--length_scale", required=True, type=float, help="Normalized length scale in (0, 1).")
+    parser.add_argument("--covariance", type=str, default="exp", choices=["exp", "fbm"], help="Covariance model for log-k field generation.")
+    parser.add_argument("--length_scale", type=float, default=None, help="Normalized length scale in (0, 1) for exp covariance.")
+    parser.add_argument("--fbm_alpha", type=float, default=None, help="Alpha parameter for fbm covariance.")
+    parser.add_argument("--fbm_c", type=float, default=None, help="Scale parameter c for fbm covariance.")
     parser.add_argument("--minpadding", type=int, default=0, help="Minimal padding for GRF generation.")
     parser.add_argument("--dh", type=float, default=0.01, help="Hydraulic head x-gradient.")
     parser.add_argument("--output_schema_version", type=int, default=MC_SCHEMA_VERSION, help="Output schema version.")
@@ -1197,6 +1262,7 @@ def parse_args() -> argparse.Namespace:
         parser.error("--backend gpu is supported via scripts/run_fmm_gpu_worker.py; use that entrypoint instead")
     if args.fmm_velocity_layout == "face" and args.fmm_face_output == "full" and args.fmm_face_mapping == "direct":
         parser.error("--fmm_face_output full is not supported with --fmm_face_mapping direct")
+    validate_covariance_args(args, parser)
     return args
 
 
@@ -1231,11 +1297,7 @@ def main() -> None:
         "dy": 1,
         "dz": 1,
         "field_size": args.field_size,
-        "grf_arg": {
-            "length_scale": args.length_scale,
-            "std": args.std if args.std is not None else float(np.sqrt(args.var)),
-            "minpadding": args.minpadding,
-        },
+        "grf_arg": build_grf_arg(args),
         "path_simulation": path_workdir,
         "seed_base": args.seed,
         "seed_effective_run": effective_run_seed,

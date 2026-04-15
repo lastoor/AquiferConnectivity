@@ -554,10 +554,7 @@ def run_field_size_simulation_gpu(
     field_size_ = config["field_size_"]
     logger.info(f"[SIZE {field_size_}] Starting simulation.")
 
-    cov = base.sim_grf.ExpCov(sigma=config["grf_arg"]["std"], length_scale=config["grf_arg"]["length_scale"])
-    pts = (np.linspace(0, 1, field_size_),) * 2
-    mean = np.zeros((field_size_, field_size_))
-    grf_gen = base.sim_grf.GaussianRandomFieldCircEmbed(mean, cov, pts, minpadding=config["grf_arg"]["minpadding"])
+    grf_gen = base.make_grf_generator(config["grf_arg"], field_size_)
 
     num_mc_ = int(config["num_mc"][idx_size])
     cpu_workers = int(config.get("cpu_workers") or min(num_mc_, len(os.sched_getaffinity(0))))
@@ -602,7 +599,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--path_workdir", required=True, type=str, help="Path to output working directory.")
     parser.add_argument("--num_mc", required=True, nargs="+", type=int, help="Monte Carlo count list.")
     parser.add_argument("--field_size", required=True, nargs="+", type=int, help="Field size list.")
-    parser.add_argument("--length_scale", required=True, type=float, help="Normalized length scale in (0, 1).")
+    parser.add_argument("--covariance", type=str, default="exp", choices=["exp", "fbm"])
+    parser.add_argument("--length_scale", type=float, default=None, help="Normalized length scale in (0, 1) for exp covariance.")
+    parser.add_argument("--fbm_alpha", type=float, default=None, help="Alpha parameter for fbm covariance.")
+    parser.add_argument("--fbm_c", type=float, default=None, help="Scale parameter c for fbm covariance.")
     parser.add_argument("--minpadding", type=int, default=0, help="Minimal padding for GRF generation.")
     parser.add_argument("--dh", type=float, default=0.01, help="Hydraulic head x-gradient.")
     parser.add_argument("--output_schema_version", type=int, default=base.MC_SCHEMA_VERSION, help="Output schema version.")
@@ -655,6 +655,7 @@ def parse_args() -> argparse.Namespace:
         parser.error("--solver pollock requires --velocity-location face")
     if args.fmm_velocity_layout == "face" and args.fmm_face_output == "full" and args.fmm_face_mapping == "direct":
         parser.error("--fmm_face_output full is not supported with --fmm_face_mapping direct")
+    base.validate_covariance_args(args, parser)
     return args
 
 
@@ -666,11 +667,7 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
         "dy": 1,
         "dz": 1,
         "field_size": args.field_size,
-        "grf_arg": {
-            "length_scale": args.length_scale,
-            "std": args.std if args.std is not None else float(np.sqrt(args.var)),
-            "minpadding": args.minpadding,
-        },
+        "grf_arg": base.build_grf_arg(args),
         "path_simulation": path_workdir,
         "seed_base": args.seed,
         "seed_effective_run": effective_run_seed,

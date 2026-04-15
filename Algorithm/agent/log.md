@@ -126,3 +126,28 @@
   - `python -m py_compile ./scripts/run_fmm_gpu_worker.py`
 - Limitations/follow-up:
   - `pytest` is not installed in the current environment, so the FSM unit tests were not executed here.
+
+## 2026-04-14
+
+- Renamed legacy FSM references from `solve_fsm_travel_time_old` to `solve_fsm_travel_time_legacy` and re-exported the legacy solver from `./src/fmm_core/__init__.py`.
+- Split FSM update controls in `./src/fmm_core/fsm.py` into independent `order` and `neighbors` parameters:
+  - supported combinations are `order=1, neighbors=4`, `order=1, neighbors=8`, and `order=2, neighbors=8`
+  - `order=2, neighbors=4` now raises `ValueError`
+- Updated FSM tests in `./tests/test_fmm_core.py` to cover:
+  - legacy-equivalent first-order 4-neighbor behavior
+  - first-order 8-neighbor acceptance
+  - rejection of unsupported second-order 4-neighbor mode
+- Added covariance-aware CLI wiring to `./scripts/run_fmm.py` and `./scripts/run_fmm_gpu_worker.py`:
+  - `--covariance {exp,fbm}`
+  - `--fbm_alpha`, `--fbm_c` for FBM runs
+  - covariance-specific validation for `--length_scale` versus FBM parameters
+- Centralized GRF configuration/building in `./scripts/run_fmm.py` via shared helpers so CPU and GPU runners use the same covariance selection path.
+- Changed per-size output folder naming from always `LengthScale{L}_Size{N}` to covariance-specific tags:
+  - `Covexp_LengthScale{L}_Size{N}`
+  - `Covfbm_Alpha{A}_C{C}_Size{N}`
+- Validation:
+  - `python -m py_compile ./scripts/run_fmm.py ./scripts/run_fmm_gpu_worker.py`
+  - `python -m py_compile ./src/fmm_core/__init__.py ./src/fmm_core/fsm.py ./tests/test_fmm_core.py`
+- Limitations/follow-up:
+  - Live CLI smoke checks still depend on the external `../../FlowSimulation` import path being available in the runtime environment.
+  - `pytest` is still not installed in the current environment, so unit tests were not executed here.

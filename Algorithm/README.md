@@ -32,7 +32,7 @@ The wrapper script `./scripts/run_in_fmm_env.sh` injects both `./src` and `../..
 
 ## Output Schema
 
-`scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py` write schema v8 `.npz` files:
+`scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py` write schema v10 outputs:
 
 - Per MC run: `mainOutput_size{field_size}_mc{mc_index}.npz`
 - Per size aggregate: `mainOutput_size{field_size}.npz`
@@ -48,6 +48,7 @@ Use the CPU-oriented runner for CPU particle tracking:
   --path_workdir ./output/run_pollock \
   --num_mc 10 \
   --field_size 64 \
+  --covariance exp \
   --length_scale 0.1 \
   --std 1.0 \
   --solver pollock \
@@ -63,6 +64,7 @@ Use the GPU-worker runner for Pollock GPU:
   --path_workdir ./output/run_pollock_gpu \
   --num_mc 10 \
   --field_size 64 \
+  --covariance exp \
   --length_scale 0.1 \
   --std 1.0 \
   --solver pollock \
@@ -75,6 +77,7 @@ Use the GPU-worker runner for Pollock GPU:
 
 Options:
 
+- `--covariance`: `exp` or `fbm`
 - `--solver`: `pollock` or `rk45`
 - `--backend`: `cpu` for `run_fmm.py`, `gpu` for `run_fmm_gpu_worker.py`
 - `--num_particles`: exact particle-count override for fastest-path tracking
@@ -83,6 +86,7 @@ Options:
 
 Defaults:
 
+- `--covariance exp`
 - `--solver pollock`
 - `scripts/run_fmm.py --backend cpu`
 - `scripts/run_fmm_gpu_worker.py --backend gpu`
@@ -91,6 +95,9 @@ Defaults:
 
 Notes:
 
+- `--covariance exp` requires `--length_scale` and exactly one of `--std` / `--var`.
+- `--covariance fbm` requires `--fbm_alpha` and `--fbm_c`.
+- Output folders are covariance-specific: `Covexp_LengthScale{L}_Size{N}` or `Covfbm_Alpha{A}_C{C}_Size{N}`.
 - Pollock uses the full staggered face velocity layout from `simulation.hydraulic.compute_velocity(..., output_location="face", face_output="full")`.
 - `--solver pollock` requires `--velocity-location face`.
 - If `--num_particles` is provided, it overrides the older density-based seeding logic.
@@ -101,6 +108,23 @@ Notes:
 - The GPU worker uses a single dedicated GPU process, compact `seed_spec` payloads, shared-memory transfer for `vx` / `vy` / face arrays, and exact winner replay in arrival mode.
 - `scripts/run_fmm_gpu_worker.py` is compatible with newer FlowSimulation Pollock GPU trackers that return extra snapshot arrays from `tracker.run()`; the worker uses the first two outputs (`travel_times`, `status`) and ignores additional values in the summary path.
 
+Example FBM run:
+
+```bash
+./scripts/run_in_fmm_env.sh python ./scripts/run_fmm.py \
+  --path_workdir ./output/run_fbm \
+  --num_mc 10 \
+  --field_size 64 \
+  --covariance fbm \
+  --fbm_alpha 0.8 \
+  --fbm_c 1.0 \
+  --var 1.0 \
+  --solver pollock \
+  --backend cpu \
+  --velocity-location face \
+  --no-align-with-modflow-velocity
+```
+
 ## FMM Solver Options
 
 `scripts/run_fmm.py` supports selecting both the travel-time solver and the backtracking method for all FMM-based paths (`LRP(FMM)` and `FP(FMM)`):
@@ -110,6 +134,7 @@ Notes:
   --path_workdir ./output/run_scikit_continuous \
   --num_mc 10 \
   --field_size 64 \
+  --covariance exp \
   --length_scale 0.1 \
   --std 1.0 \
   --fmm_solver scikit \
@@ -135,6 +160,7 @@ FMM speed preparation is configurable:
   --path_workdir ./output/run1 \
   --num_mc 10 \
   --field_size 64 \
+  --covariance exp \
   --length_scale 0.1 \
   --std 1.0 \
   --fmm_velocity_layout face \
@@ -190,6 +216,7 @@ Recommended deterministic mode:
   --path_workdir ./output/run_seeded \
   --num_mc 50 \
   --field_size 200 \
+  --covariance exp \
   --length_scale 0.05 \
   --var 1.0 \
   --seed 12345 \
