@@ -757,15 +757,16 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 logger.warning(f"[MC {mc_index}] Invalid FP (FMM), retrying next trial.")
                 continue
 
-            # 3.3) FSM path (cell-centred Darcy velocity, non-fatal)
-            vx_cell, vy_cell = sim_hyd.compute_velocity(
+            # 3.3) FSM path (MAC-face Darcy velocity, non-fatal)
+            vx_face, vy_face = sim_hyd.compute_velocity(
                 k_field,
                 config_mc["x"],
                 config_mc["y"],
                 h,
-                output_location="cell",
+                output_location="face",
+                face_output="full",
             )
-            _n_y_fsm, _n_x_fsm = vx_cell.shape
+            _n_y_fsm, _n_x_fsm = k_field.shape
             fsm_source_mask = np.zeros((_n_y_fsm, _n_x_fsm), dtype=bool)
             fsm_source_mask[source_rows, x0] = True
             fsm_target_mask = np.zeros((_n_y_fsm, _n_x_fsm), dtype=bool)
@@ -777,8 +778,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             fp_fsm_error: str | None = None
             try:
                 fp_fsm, _t_field_fsm, arrival_fsm = compute_fsm_path_velocity(
-                    vx_cell,
-                    vy_cell,
+                    vx_face,
+                    vy_face,
                     fsm_source_mask,
                     fsm_target_mask,
                     config_mc["x"],

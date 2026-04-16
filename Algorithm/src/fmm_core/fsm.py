@@ -9,10 +9,333 @@ Grid convention: arrays are (n_y, n_x) — first axis = y (rows), second = x (co
 
 from __future__ import annotations
 
+import math
+import warnings
 import numpy as np
 from scipy.integrate import solve_ivp
 from scipy.interpolate import RegularGridInterpolator
 
+try:
+    from numba import njit as _njit
+    _NUMBA_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    def _njit(fn=None, *, cache: bool = False, **kwargs):  # type: ignore[misc]
+        if fn is not None:
+            return fn
+        def decorator(f):
+            return f
+        return decorator
+    _NUMBA_AVAILABLE = False
+
+
+# ---------------------------------------------------------------------------
+# Numba-accelerated inner kernels
+# ---------------------------------------------------------------------------
+
+@_njit(cache=True)
+def _fsm_residual_kernel(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    dx: float,
+    dy: float,
+    t_field: np.ndarray,
+    source_mask: np.ndarray,
+) -> np.ndarray:
+    n_y, n_x = vx.shape
+    residual = np.full((n_y, n_x), np.nan)
+    for j in range(n_y):
+        for i in range(n_x):
+            if source_mask[j, i]:
+                continue
+            tji = t_field[j, i]
+            if not math.isfinite(tji):
+                continue
+            vx_ = vx[j, i]
+            vy_ = vy[j, i]
+            if vx_ == 0.0 and vy_ == 0.0:
+                continue
+
+            vxp = vx_ if vx_ > 0.0 else 0.0
+            vxn = vx_ if vx_ < 0.0 else 0.0
+            vyp = vy_ if vy_ > 0.0 else 0.0
+            vyn = vy_ if vy_ < 0.0 else 0.0
+
+            t_left  = t_field[j, i - 1] if i > 0       else math.inf
+            t_right = t_field[j, i + 1] if i < n_x - 1 else math.inf
+            t_down  = t_field[j - 1, i] if j > 0       else math.inf
+            t_up    = t_field[j + 1, i] if j < n_y - 1 else math.inf
+
+            term_x  = 0.0
+            denom_x = 0.0
+            if vxp > 0.0 and math.isfinite(t_left):
+                term_x  += vxp * t_left / dx
+                denom_x += vxp / dx
+            if vxn < 0.0 and math.isfinite(t_right):
+                term_x  -= vxn * t_right / dx
+                denom_x -= vxn / dx
+
+            term_y  = 0.0
+            denom_y = 0.0
+            if vyp > 0.0 and math.isfinite(t_down):
+                term_y  += vyp * t_down / dy
+                denom_y += vyp / dy
+            if vyn < 0.0 and math.isfinite(t_up):
+                term_y  -= vyn * t_up / dy
+                denom_y -= vyn / dy
+
+            denominator = denom_x + denom_y
+            if denominator > 0.0:
+                residual[j, i] = denominator * tji - term_x - term_y - 1.0
+
+    return residual
+
+
+@_njit(cache=True)
+def _first_order_update(
+    T: np.ndarray,
+    vx_: float,
+    vy_: float,
+    dx: float,
+    dy: float,
+    n_y: int,
+    n_x: int,
+    j: int,
+    i: int,
+) -> float:
+    denom = 0.0
+    rhs   = 1.0
+
+    if vx_ > 0.0:
+        if i == 0:
+            return math.inf
+        T_left = T[j, i - 1]
+        if not math.isfinite(T_left):
+            return math.inf
+        denom += vx_ / dx
+        rhs   += vx_ * T_left / dx
+    elif vx_ < 0.0:
+        if i == n_x - 1:
+            return math.inf
+        T_right = T[j, i + 1]
+        if not math.isfinite(T_right):
+            return math.inf
+        denom += (-vx_) / dx
+        rhs   += (-vx_) * T_right / dx
+
+    if vy_ > 0.0:
+        if j == 0:
+            return math.inf
+        T_down = T[j - 1, i]
+        if not math.isfinite(T_down):
+            return math.inf
+        denom += vy_ / dy
+        rhs   += vy_ * T_down / dy
+    elif vy_ < 0.0:
+        if j == n_y - 1:
+            return math.inf
+        T_up = T[j + 1, i]
+        if not math.isfinite(T_up):
+            return math.inf
+        denom += (-vy_) / dy
+        rhs   += (-vy_) * T_up / dy
+
+    if denom <= 0.0:
+        return math.inf
+    return rhs / denom
+
+
+@_njit(cache=True)
+def _second_order_update(
+    T: np.ndarray,
+    vx_: float,
+    vy_: float,
+    dx: float,
+    dy: float,
+    n_y: int,
+    n_x: int,
+    j: int,
+    i: int,
+) -> float:
+    denom       = 0.0
+    rhs         = 1.0
+    lower_bound = -math.inf
+    used_any    = False
+
+    if vx_ > 0.0:
+        if i >= 2 and math.isfinite(T[j, i - 1]) and math.isfinite(T[j, i - 2]):
+            denom += 3.0 * vx_ / (2.0 * dx)
+            rhs   += vx_ * (4.0 * T[j, i - 1] - T[j, i - 2]) / (2.0 * dx)
+            if T[j, i - 1] > lower_bound: lower_bound = T[j, i - 1]
+            if T[j, i - 2] > lower_bound: lower_bound = T[j, i - 2]
+            used_any = True
+        elif i >= 1 and math.isfinite(T[j, i - 1]):
+            denom += vx_ / dx
+            rhs   += vx_ * T[j, i - 1] / dx
+            if T[j, i - 1] > lower_bound: lower_bound = T[j, i - 1]
+            used_any = True
+        else:
+            return math.inf
+    elif vx_ < 0.0:
+        if i <= n_x - 3 and math.isfinite(T[j, i + 1]) and math.isfinite(T[j, i + 2]):
+            denom += 3.0 * (-vx_) / (2.0 * dx)
+            rhs   += (-vx_) * (4.0 * T[j, i + 1] - T[j, i + 2]) / (2.0 * dx)
+            if T[j, i + 1] > lower_bound: lower_bound = T[j, i + 1]
+            if T[j, i + 2] > lower_bound: lower_bound = T[j, i + 2]
+            used_any = True
+        elif i <= n_x - 2 and math.isfinite(T[j, i + 1]):
+            denom += (-vx_) / dx
+            rhs   += (-vx_) * T[j, i + 1] / dx
+            if T[j, i + 1] > lower_bound: lower_bound = T[j, i + 1]
+            used_any = True
+        else:
+            return math.inf
+
+    if vy_ > 0.0:
+        if j >= 2 and math.isfinite(T[j - 1, i]) and math.isfinite(T[j - 2, i]):
+            denom += 3.0 * vy_ / (2.0 * dy)
+            rhs   += vy_ * (4.0 * T[j - 1, i] - T[j - 2, i]) / (2.0 * dy)
+            if T[j - 1, i] > lower_bound: lower_bound = T[j - 1, i]
+            if T[j - 2, i] > lower_bound: lower_bound = T[j - 2, i]
+            used_any = True
+        elif j >= 1 and math.isfinite(T[j - 1, i]):
+            denom += vy_ / dy
+            rhs   += vy_ * T[j - 1, i] / dy
+            if T[j - 1, i] > lower_bound: lower_bound = T[j - 1, i]
+            used_any = True
+        else:
+            return math.inf
+    elif vy_ < 0.0:
+        if j <= n_y - 3 and math.isfinite(T[j + 1, i]) and math.isfinite(T[j + 2, i]):
+            denom += 3.0 * (-vy_) / (2.0 * dy)
+            rhs   += (-vy_) * (4.0 * T[j + 1, i] - T[j + 2, i]) / (2.0 * dy)
+            if T[j + 1, i] > lower_bound: lower_bound = T[j + 1, i]
+            if T[j + 2, i] > lower_bound: lower_bound = T[j + 2, i]
+            used_any = True
+        elif j <= n_y - 2 and math.isfinite(T[j + 1, i]):
+            denom += (-vy_) / dy
+            rhs   += (-vy_) * T[j + 1, i] / dy
+            if T[j + 1, i] > lower_bound: lower_bound = T[j + 1, i]
+            used_any = True
+        else:
+            return math.inf
+
+    if not used_any or denom <= 0.0:
+        return math.inf
+
+    cand = rhs / denom
+    if not math.isfinite(cand):
+        return math.inf
+    if cand + 1e-12 < lower_bound:
+        return math.inf
+    return cand
+
+
+@_njit(cache=True)
+def _diagonal_update(
+    T: np.ndarray,
+    vx_: float,
+    vy_: float,
+    dx: float,
+    dy: float,
+    n_y: int,
+    n_x: int,
+    j: int,
+    i: int,
+    eps: float,
+) -> float:
+    # diag_directions = [(-1,-1), (-1,1), (1,-1), (1,1)]
+    # di = -1 + 2*(k//2), dj = -1 + 2*(k%2)
+    best = math.inf
+    for k in range(4):
+        di = -1 + 2 * (k // 2)
+        dj = -1 + 2 * (k  % 2)
+        ii = i + di
+        jj = j + dj
+        if ii < 0 or ii >= n_x or jj < 0 or jj >= n_y:
+            continue
+        T1 = T[jj, ii]
+        if not math.isfinite(T1):
+            continue
+        h    = math.sqrt((di * dx) ** 2 + (dj * dy) ** 2)
+        ux   = (di * dx) / h
+        uy   = (dj * dy) / h
+        align = -(vx_ * ux + vy_ * uy)
+        if align <= eps:
+            continue
+        cand = T1 + h / align
+        if cand < best:
+            best = cand
+    return best
+
+
+@_njit(cache=True)
+def _fsm_sweep_kernel(
+    T: np.ndarray,
+    vx: np.ndarray,
+    vy: np.ndarray,
+    dx: float,
+    dy: float,
+    source_mask: np.ndarray,
+    order: int,
+    use_diag: bool,
+) -> float:
+    """Run one full FSM sweep cycle (all 4 directions). Returns max T change."""
+    n_y, n_x = vx.shape
+    max_change = 0.0
+    eps = 1e-14
+
+    # Four Gauss-Seidel sweep directions: (step_j, step_i)
+    step_js = (1, -1, -1,  1)
+    step_is = (1,  1, -1, -1)
+
+    for sd in range(4):
+        step_j = step_js[sd]
+        step_i = step_is[sd]
+
+        for jj in range(n_y):
+            j = jj if step_j == 1 else n_y - 1 - jj
+            for ii in range(n_x):
+                i = ii if step_i == 1 else n_x - 1 - ii
+
+                if source_mask[j, i]:
+                    continue
+
+                T_old = T[j, i]
+                vx_   = vx[j, i]
+                vy_   = vy[j, i]
+
+                if vx_ == 0.0 and vy_ == 0.0:
+                    continue
+
+                T_new = math.inf
+
+                if order == 2:
+                    T_new = _second_order_update(T, vx_, vy_, dx, dy, n_y, n_x, j, i)
+
+                if not math.isfinite(T_new):
+                    T_new = _first_order_update(T, vx_, vy_, dx, dy, n_y, n_x, j, i)
+
+                if use_diag and not math.isfinite(T_new):
+                    T_new = _diagonal_update(T, vx_, vy_, dx, dy, n_y, n_x, j, i, eps)
+
+                if not math.isfinite(T_new):
+                    continue
+
+                if T_new < T_old:
+                    if math.isfinite(T_old):
+                        change = T_old - T_new
+                        if change > max_change:
+                            max_change = change
+                    else:
+                        max_change = math.inf
+                    T[j, i] = T_new
+
+    return max_change
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def compute_fsm_residual_field(
     vx: np.ndarray,
@@ -28,56 +351,11 @@ def compute_fsm_residual_field(
     update step so it is directly compatible with the solver's numerical
     scheme. Cells where the residual is not meaningful are returned as NaN.
     """
-    vx = np.asarray(vx, dtype=float)
-    vy = np.asarray(vy, dtype=float)
-    t_field = np.asarray(t_field, dtype=float)
+    vx          = np.asarray(vx,          dtype=float)
+    vy          = np.asarray(vy,          dtype=float)
+    t_field     = np.asarray(t_field,     dtype=float)
     source_mask = np.asarray(source_mask, dtype=bool)
-
-    n_y, n_x = vx.shape
-    residual = np.full((n_y, n_x), np.nan, dtype=float)
-
-    vx_pos = np.maximum(vx, 0.0)
-    vx_neg = np.minimum(vx, 0.0)
-    vy_pos = np.maximum(vy, 0.0)
-    vy_neg = np.minimum(vy, 0.0)
-
-    for j in range(n_y):
-        for i in range(n_x):
-            if source_mask[j, i] or not np.isfinite(t_field[j, i]):
-                continue
-            if vx[j, i] == 0.0 and vy[j, i] == 0.0:
-                continue
-
-            t_left = t_field[j, i - 1] if i > 0 else np.inf
-            t_right = t_field[j, i + 1] if i < n_x - 1 else np.inf
-            t_down = t_field[j - 1, i] if j > 0 else np.inf
-            t_up = t_field[j + 1, i] if j < n_y - 1 else np.inf
-
-            term_x = 0.0
-            denom_x = 0.0
-            if vx_pos[j, i] > 0.0 and np.isfinite(t_left):
-                term_x += vx_pos[j, i] * t_left / dx
-                denom_x += vx_pos[j, i] / dx
-            if vx_neg[j, i] < 0.0 and np.isfinite(t_right):
-                term_x -= vx_neg[j, i] * t_right / dx
-                denom_x -= vx_neg[j, i] / dx
-
-            term_y = 0.0
-            denom_y = 0.0
-            if vy_pos[j, i] > 0.0 and np.isfinite(t_down):
-                term_y += vy_pos[j, i] * t_down / dy
-                denom_y += vy_pos[j, i] / dy
-            if vy_neg[j, i] < 0.0 and np.isfinite(t_up):
-                term_y -= vy_neg[j, i] * t_up / dy
-                denom_y -= vy_neg[j, i] / dy
-
-            denominator = denom_x + denom_y
-            if denominator <= 0.0:
-                continue
-
-            residual[j, i] = denominator * t_field[j, i] - term_x - term_y - 1.0
-
-    return residual
+    return _fsm_residual_kernel(vx, vy, dx, dy, t_field, source_mask)
 
 
 def compute_fsm_residual_mse(
@@ -95,10 +373,25 @@ def compute_fsm_residual_mse(
         return float("nan")
     return float(np.mean(residual[valid] ** 2))
 
-import numpy as np
+def _face_to_cell_centered_velocity(
+    vx: np.ndarray,
+    vy: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Average MAC face velocities onto cell centers."""
+    vx = np.asarray(vx, dtype=float)
+    vy = np.asarray(vy, dtype=float)
+    if vx.ndim != 2 or vy.ndim != 2:
+        raise ValueError("vx and vy must be 2D arrays.")
+    if vx.shape[0] + 1 != vy.shape[0] or vx.shape[1] != vy.shape[1] + 1:
+        raise ValueError(
+            "MAC face velocities must satisfy vx.shape == (ny, nx + 1) and vy.shape == (ny + 1, nx)."
+        )
+    vx_cell = 0.5 * (vx[:, :-1] + vx[:, 1:])
+    vy_cell = 0.5 * (vy[:-1, :] + vy[1:, :])
+    return vx_cell, vy_cell
 
 
-def solve_fsm_travel_time(
+def _solve_fsm_travel_time_sweep(
     vx: np.ndarray,
     vy: np.ndarray,
     dx: float,
@@ -114,53 +407,27 @@ def solve_fsm_travel_time(
     order: int = 1,
     neighbors: int = 4,
 ) -> np.ndarray:
-    """Solve v·∇T = 1 via upwind finite differences + fast sweeping.
+    """
+    Solve v · ∇T = 1 via fast sweeping and upwind finite differences.
 
-    The default configuration uses the original first-order monotone
-    4-neighbor update. Wider 8-neighbor updates and second-order
-    extrapolation can be enabled independently where supported.
+    Order 1:
+        Standard monotone first-order upwind update.
 
-    Arrays follow numpy convention: shape (n_y, n_x), i.e. first axis = y
-    (rows), second axis = x (cols).
+    Order 2:
+        Coordinate-wise second-order upwind update:
+            vx * D_x^{up,2} T + vy * D_y^{up,2} T = 1
+        with fallback to first order in any direction where the second
+        upwind point is unavailable.
 
-    Parameters
-    ----------
-    vx, vy : ndarray, shape (n_y, n_x)
-        x- and y-components of the velocity field (cell-centred).
-    dx, dy : float
-        Grid spacing in x and y.
-    source_mask : bool ndarray, shape (n_y, n_x)
-        Cells where T = 0 (the starting boundary).
-    max_sweeps : int
-        Maximum number of 4-direction sweep cycles before giving up.
-    tol : float
-        Convergence tolerance on the maximum per-sweep change in T.
-    mse_tol : float or None
-        Optional mean-squared residual tolerance on the discrete PDE residual
-        ``v·∇T - 1``. When None, only the update-based criterion is used.
-    convergence_mode : {"update", "mse", "update_or_mse", "update_and_mse"}
-        Convergence rule when ``mse_tol`` is provided.
-    mse_check_every : int
-        Evaluate the residual-MSE criterion at most every N sweeps when MSE
-        checking is active.
-    mse_activation_factor : float
-        Start checking residual MSE only after ``max_change`` falls below
-        ``mse_activation_factor * tol`` for modes that also use update
-        screening.
-    consecutive_passes : int
-        Require the selected convergence rule to hold for this many consecutive
-        eligible checks before returning.
-    order : {1, 2}
-        Local update order. ``1`` uses first-order causal propagation.
-        ``2`` enables second-order extrapolation where supported.
-    neighbors : {4, 8}
-        Local stencil width. ``4`` uses only axis-aligned neighbors.
-        ``8`` also enables diagonal ray updates.
-
-    Returns
-    -------
-    T : ndarray, shape (n_y, n_x)
-        Travel-time field; np.inf where unreachable.
+    Notes
+    -----
+    - This is an advection equation, not an eikonal equation.
+    - The second-order scheme is not monotone, so in difficult fields it
+      may be less robust than the first-order solve.
+    - `neighbors=4` is the proper second-order mode here.
+    - `neighbors=8` is retained only as an optional extra first-order
+      diagonal probe; the second-order scheme itself is based on the
+      4-neighbor coordinate stencil.
     """
     if vx.shape != vy.shape:
         raise ValueError("vx and vy must have the same shape.")
@@ -169,22 +436,16 @@ def solve_fsm_travel_time(
     if dx <= 0.0 or dy <= 0.0:
         raise ValueError("dx and dy must be positive.")
 
-    n_y, n_x = vx.shape
-
-    T = np.full((n_y, n_x), np.inf, dtype=float)
-    T[source_mask] = 0.0
-
-    allowed_modes = {"update", "mse", "update_or_mse", "update_and_mse"}
-    allowed_orders = {1, 2}
+    allowed_modes    = {"update", "mse", "update_or_mse", "update_and_mse"}
+    allowed_orders   = {1, 2}
     allowed_neighbors = {4, 8}
+
     if convergence_mode not in allowed_modes:
         raise ValueError(f"convergence_mode must be one of {sorted(allowed_modes)}.")
     if order not in allowed_orders:
         raise ValueError(f"order must be one of {sorted(allowed_orders)}.")
     if neighbors not in allowed_neighbors:
         raise ValueError(f"neighbors must be one of {sorted(allowed_neighbors)}.")
-    if order == 2 and neighbors == 4:
-        raise ValueError("order=2 with neighbors=4 is not supported.")
     if mse_tol is not None and mse_tol < 0.0:
         raise ValueError("mse_tol must be non-negative when provided.")
     if mse_check_every < 1:
@@ -193,175 +454,32 @@ def solve_fsm_travel_time(
         raise ValueError("mse_activation_factor must be positive.")
     if consecutive_passes < 1:
         raise ValueError("consecutive_passes must be at least 1.")
+    if max_sweeps < 1:
+        raise ValueError("max_sweeps must be at least 1.")
 
-    # Split velocities for the original monotone upwind update.
-    vx_pos = np.maximum(vx, 0.0)
-    vx_neg = np.minimum(vx, 0.0)
-    vy_pos = np.maximum(vy, 0.0)
-    vy_neg = np.minimum(vy, 0.0)
+    n_y, n_x = vx.shape
+    T = np.full((n_y, n_x), np.inf, dtype=float)
+    T[source_mask] = 0.0
 
+    # Ensure contiguous float64 arrays for the njit kernel.
+    vx_f          = np.ascontiguousarray(vx,          dtype=np.float64)
+    vy_f          = np.ascontiguousarray(vy,          dtype=np.float64)
+    source_mask_b = np.ascontiguousarray(source_mask, dtype=np.bool_)
+
+    use_diag  = neighbors == 8
     pass_count = 0
-    eps = 1e-14
-
-    # 4 sweep directions: (step_j along y-axis, step_i along x-axis)
-    sweep_directions = [
-        (1, 1),
-        (-1, 1),
-        (-1, -1),
-        (1, -1),
-    ]
-
-    # Eight ray directions for the wider stencil.
-    # Each entry is (di, dj, step_length).
-    ray_directions = [
-        (-1,  0, dx),
-        ( 1,  0, dx),
-        ( 0, -1, dy),
-        ( 0,  1, dy),
-        (-1, -1, float(np.hypot(dx, dy))),
-        (-1,  1, float(np.hypot(dx, dy))),
-        ( 1, -1, float(np.hypot(dx, dy))),
-        ( 1,  1, float(np.hypot(dx, dy))),
-    ]
-
-    def _first_order_monotone_candidate(j: int, i: int) -> float:
-        """Original local monotone candidate from upwind FD."""
-        vxp = vx_pos[j, i]
-        vxn = vx_neg[j, i]
-        vyp = vy_pos[j, i]
-        vyn = vy_neg[j, i]
-
-        abs_vx = abs(vx[j, i])
-        abs_vy = abs(vy[j, i])
-        if abs_vx == 0.0 and abs_vy == 0.0:
-            return np.inf
-
-        T_left = T[j, i - 1] if i > 0 else np.inf
-        T_right = T[j, i + 1] if i < n_x - 1 else np.inf
-        T_down = T[j - 1, i] if j > 0 else np.inf
-        T_up = T[j + 1, i] if j < n_y - 1 else np.inf
-
-        term_x = 0.0
-        denom_x = 0.0
-        if vxp > 0.0 and np.isfinite(T_left):
-            term_x += vxp * T_left / dx
-            denom_x += vxp / dx
-        if vxn < 0.0 and np.isfinite(T_right):
-            term_x -= vxn * T_right / dx
-            denom_x -= vxn / dx
-
-        term_y = 0.0
-        denom_y = 0.0
-        if vyp > 0.0 and np.isfinite(T_down):
-            term_y += vyp * T_down / dy
-            denom_y += vyp / dy
-        if vyn < 0.0 and np.isfinite(T_up):
-            term_y -= vyn * T_up / dy
-            denom_y -= vyn / dy
-
-        denominator = denom_x + denom_y
-        if denominator <= 0.0:
-            return np.inf
-
-        return (1.0 + term_x + term_y) / denominator
-
-    def _wide_stencil_candidate(j: int, i: int) -> float:
-        """Wide-stencil candidate using causal rays with optional 2nd order."""
-        vx_ = vx[j, i]
-        vy_ = vy[j, i]
-        speed = float(np.hypot(vx_, vy_))
-        if speed == 0.0:
-            return np.inf
-
-        best = np.inf
-
-        for di, dj, h in ray_directions:
-            ii1 = i + di
-            jj1 = j + dj
-            if ii1 < 0 or ii1 >= n_x or jj1 < 0 or jj1 >= n_y:
-                continue
-
-            T1 = T[jj1, ii1]
-            if not np.isfinite(T1):
-                continue
-
-            # Unit vector from current cell to the neighbor.
-            ux = (di * dx) / h
-            uy = (dj * dy) / h
-
-            # Velocity component in the direction from neighbor -> current.
-            align = -(vx_ * ux + vy_ * uy)
-            if align <= eps:
-                continue
-
-            # First-order causal propagation along this ray.
-            ray_cand = np.inf
-            cand1 = T1 + h / align
-            if np.isfinite(cand1):
-                ray_cand = cand1
-
-            if order == 2:
-                # Second-order upwind (BDF2) along the same ray
-                ii2 = i + 2 * di
-                jj2 = j + 2 * dj
-                if 0 <= ii2 < n_x and 0 <= jj2 < n_y:
-                    T2 = T[jj2, ii2]
-                    if np.isfinite(T2) and T2 < T1:
-                        # Correct PDE-informed BDF2 formula
-                        cand2 = (4.0 * T1 - T2 + 2.0 * (h / align)) / 3.0
-                        
-                        # If valid and causal, it overrides cand1 for THIS ray
-                        if np.isfinite(cand2) and cand2 >= T1:
-                            ray_cand = cand2
-
-            # Finally, compare this ray's best candidate against the global best
-            if ray_cand < best:
-                best = ray_cand
-
-        return best
 
     for sweep in range(max_sweeps):
-        max_change = 0.0
-
-        for step_j, step_i in sweep_directions:
-            j_range = range(n_y) if step_j == 1 else range(n_y - 1, -1, -1)
-            i_range = range(n_x) if step_i == 1 else range(n_x - 1, -1, -1)
-
-            for j in j_range:
-                for i in i_range:
-                    if source_mask[j, i]:
-                        continue
-
-                    T_old = T[j, i]
-                    if not np.isfinite(T_old):
-                        T_old = np.inf
-
-                    cand1 = _first_order_monotone_candidate(j, i)
-                    if neighbors == 8:
-                        cand2 = _wide_stencil_candidate(j, i)
-                        T_new = min(cand1, cand2)
-                    else:
-                        T_new = cand1
-
-                    if not np.isfinite(T_new):
-                        continue
-
-                    if T_new < T[j, i]:
-                        if np.isfinite(T[j, i]):
-                            change = T[j, i] - T_new
-                            if change > max_change:
-                                max_change = change
-                        else:
-                            # Inf -> finite is a real update, so prevent premature convergence.
-                            max_change = np.inf
-                        T[j, i] = T_new
+        max_change = _fsm_sweep_kernel(
+            T, vx_f, vy_f, dx, dy, source_mask_b, order, use_diag
+        )
 
         if sweep == 0:
             continue
 
         update_ok = max_change < tol
 
-        # If no residual criterion is requested, use update-based stopping.
+        # If no residual criterion is requested, stop on the update criterion.
         if mse_tol is None:
             if update_ok:
                 pass_count += 1
@@ -414,6 +532,89 @@ def solve_fsm_travel_time(
             pass_count = 0
 
     return T
+
+
+def solve_fsm_travel_time(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    dx: float,
+    dy: float,
+    source_mask: np.ndarray,
+    max_sweeps: int = 100,
+    tol: float = 1e-6,
+    mse_tol: float | None = None,
+    convergence_mode: str = "update_or_mse",
+    mse_check_every: int = 5,
+    mse_activation_factor: float = 10.0,
+    consecutive_passes: int = 1,
+    order: int = 1,
+    neighbors: int = 4,
+    solver: str = "fipy",
+) -> np.ndarray:
+    """Solve ``v · ∇T = 1`` from MAC-face velocities.
+
+    Parameters
+    ----------
+    vx : ndarray, shape (ny, nx + 1)
+        x-component on vertical MAC faces.
+    vy : ndarray, shape (ny + 1, nx)
+        y-component on horizontal MAC faces.
+    dx, dy : float
+        Grid spacing.
+    source_mask : bool ndarray, shape (ny, nx)
+        Cells where ``T = 0``.
+    solver : {"fipy", "sweep"}
+        Numerical backend. ``"fipy"`` is the default and falls back to
+        ``"sweep"`` automatically when FiPy / PETSc is unavailable.
+
+    Other parameters are forwarded to the sweep backend when it is selected
+    explicitly or used as the fallback.
+    """
+    vx = np.asarray(vx, dtype=float)
+    vy = np.asarray(vy, dtype=float)
+    source_mask = np.asarray(source_mask, dtype=bool)
+
+    if source_mask.ndim != 2:
+        raise ValueError("source_mask must be 2D.")
+    ny, nx = source_mask.shape
+    expected_vx = (ny, nx + 1)
+    expected_vy = (ny + 1, nx)
+    if vx.shape != expected_vx:
+        raise ValueError(f"vx must have shape {expected_vx}, got {vx.shape}.")
+    if vy.shape != expected_vy:
+        raise ValueError(f"vy must have shape {expected_vy}, got {vy.shape}.")
+
+    allowed_solvers = {"fipy", "sweep"}
+    if solver not in allowed_solvers:
+        raise ValueError(f"solver must be one of {sorted(allowed_solvers)}.")
+
+    if solver == "fipy":
+        try:
+            return solve_fipy_travel_time(vx, vy, dx, dy, source_mask)
+        except ImportError:
+            warnings.warn(
+                "FiPy / PETSc is unavailable; falling back to the sweep FSM solver.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+
+    vx_cell, vy_cell = _face_to_cell_centered_velocity(vx, vy)
+    return _solve_fsm_travel_time_sweep(
+        vx_cell,
+        vy_cell,
+        dx,
+        dy,
+        source_mask,
+        max_sweeps=max_sweeps,
+        tol=tol,
+        mse_tol=mse_tol,
+        convergence_mode=convergence_mode,
+        mse_check_every=mse_check_every,
+        mse_activation_factor=mse_activation_factor,
+        consecutive_passes=consecutive_passes,
+        order=order,
+        neighbors=neighbors,
+    )
 
 def solve_fsm_travel_time_legacy(
     vx: np.ndarray,
@@ -716,6 +917,7 @@ def compute_fsm_path(
     consecutive_passes: int = 1,
     order: int = 1,
     neighbors: int = 8,
+    solver: str = "fipy",
     dt: float = 0.5,
     max_steps: int = 10_000,
 ) -> tuple[np.ndarray, np.ndarray, float]:
@@ -723,8 +925,10 @@ def compute_fsm_path(
 
     Parameters
     ----------
-    vx, vy : ndarray, shape (n_y, n_x)
-        Cell-centred Darcy velocity components.
+    vx : ndarray, shape (ny, nx + 1)
+        x-component on vertical MAC faces.
+    vy : ndarray, shape (ny + 1, nx)
+        y-component on horizontal MAC faces.
     source_mask : bool ndarray, shape (n_y, n_x)
         Cells where T = 0 (flow origin).
     target_mask : bool ndarray, shape (n_y, n_x)
@@ -740,9 +944,11 @@ def compute_fsm_path(
     mse_check_every, mse_activation_factor, consecutive_passes
         Efficiency/robustness controls for residual-MSE checking.
     order : {1, 2}
-        Travel-time update order passed to ``solve_fsm_travel_time``.
+        Sweep-backend update order passed to ``solve_fsm_travel_time``.
     neighbors : {4, 8}
-        Travel-time stencil width passed to ``solve_fsm_travel_time``.
+        Sweep-backend stencil width passed to ``solve_fsm_travel_time``.
+    solver : {"fipy", "sweep"}
+        Travel-time backend passed to ``solve_fsm_travel_time``.
     dt : float
         RK45 max step size (same units as coordinates).
     max_steps : int
@@ -762,7 +968,8 @@ def compute_fsm_path(
     if dy is None:
         dy = float(y_coords[1] - y_coords[0])
 
-    traversable = np.isfinite(vx) & np.isfinite(vy)
+    vx_cell, vy_cell = _face_to_cell_centered_velocity(vx, vy)
+    traversable = np.isfinite(vx_cell) & np.isfinite(vy_cell)
     source_mask = source_mask & traversable
     target_mask = target_mask & traversable
 
@@ -786,6 +993,7 @@ def compute_fsm_path(
         consecutive_passes=consecutive_passes,
         order=order,
         neighbors=neighbors,
+        solver=solver,
     )
 
     valid_target = target_mask & np.isfinite(t_field)
@@ -806,10 +1014,137 @@ def compute_fsm_path(
 
     path_xy = backtrack_path_rk45(
         (target_x_cont, target_y_cont),
-        vx, vy, t_field,
+        vx_cell, vy_cell, t_field,
         x_coords, y_coords,
         dt=dt,
         max_steps=max_steps,
         stop_x=stop_x,
     )
     return path_xy, t_field, arrival_time
+
+def _pack_mac_velocity_to_fipy_face_variable(
+    mesh,
+    vx: np.ndarray,
+    vy: np.ndarray,
+    dx: float,
+    dy: float,
+):
+    """
+    Pack MAC-grid face velocities into a FiPy rank-1 FaceVariable.
+
+    Assumed input layout (numpy convention, y first):
+        vx.shape == (ny, nx + 1)  # x-velocity on vertical faces
+        vy.shape == (ny + 1, nx)  # y-velocity on horizontal faces
+
+    If your arrays are transposed, swap the indexing used below.
+    """
+    from fipy import FaceVariable
+
+    fcx, fcy = np.asarray(mesh.faceCenters)
+    n_faces = mesh.numberOfFaces
+
+    # On a Cartesian grid with origin at (0, 0):
+    # vertical faces:   x/dx is integer, y/dy is half-integer
+    # horizontal faces: x/dx is half-integer, y/dy is integer
+    x_over_dx = fcx / dx
+    y_over_dy = fcy / dy
+
+    vertical = np.isclose(np.mod(x_over_dx, 1.0), 0.0) & np.isclose(np.mod(y_over_dy, 1.0), 0.5)
+    horizontal = np.isclose(np.mod(x_over_dx, 1.0), 0.5) & np.isclose(np.mod(y_over_dy, 1.0), 0.0)
+
+    if int(vertical.sum()) + int(horizontal.sum()) != n_faces:
+        raise RuntimeError("Could not classify all faces as vertical or horizontal.")
+
+    vel = np.zeros((2, n_faces), dtype=float)
+
+    # Vertical faces -> x-component from vx[y, x_face]
+    xv = np.rint(x_over_dx[vertical]).astype(int)
+    yv = np.rint(y_over_dy[vertical] - 0.5).astype(int)
+    if np.any(xv < 0) or np.any(xv >= vx.shape[1]) or np.any(yv < 0) or np.any(yv >= vx.shape[0]):
+        raise ValueError("vx does not match the grid size implied by source_mask and dy/dx.")
+    vel[0, vertical] = vx[yv, xv]
+
+    # Horizontal faces -> y-component from vy[y_face, x]
+    xh = np.rint(x_over_dx[horizontal] - 0.5).astype(int)
+    yh = np.rint(y_over_dy[horizontal]).astype(int)
+    if np.any(xh < 0) or np.any(xh >= vy.shape[1]) or np.any(yh < 0) or np.any(yh >= vy.shape[0]):
+        raise ValueError("vy does not match the grid size implied by source_mask and dy/dx.")
+    vel[1, horizontal] = vy[yh, xh]
+
+    velocity = FaceVariable(mesh=mesh, rank=1, value=0.0)
+    velocity.setValue(vel)
+    return velocity
+
+
+def solve_fipy_travel_time(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    dx: float,
+    dy: float,
+    source_mask: np.ndarray,
+):
+    """
+    Solve v · ∇T = 1 on a uniform 2D grid with FiPy + PETSc.
+
+    Parameters
+    ----------
+    vx : ndarray, shape (ny, nx + 1)
+        x-component of velocity on vertical faces.
+    vy : ndarray, shape (ny + 1, nx)
+        y-component of velocity on horizontal faces.
+    dx, dy : float
+        Grid spacing.
+    source_mask : bool ndarray, shape (ny, nx)
+        Cells where T is fixed to 0.
+
+    Returns
+    -------
+    T : ndarray, shape (ny, nx)
+        Cell-centered solution.
+    """
+    try:
+        from fipy import CellVariable, Grid2D, ImplicitSourceTerm, UpwindConvectionTerm
+        from fipy.solvers.petsc import LinearLUSolver
+    except Exception as exc:
+        raise ImportError(
+            "FiPy with PETSc is required. Install FiPy and petsc4py in the same environment."
+        ) from exc
+
+    vx = np.asarray(vx, dtype=float)
+    vy = np.asarray(vy, dtype=float)
+    source_mask = np.asarray(source_mask, dtype=bool)
+
+    if source_mask.ndim != 2:
+        raise ValueError("source_mask must be 2D.")
+    ny, nx = source_mask.shape
+
+    expected_vx = (ny, nx + 1)
+    expected_vy = (ny + 1, nx)
+    if vx.shape != expected_vx:
+        raise ValueError(f"vx must have shape {expected_vx}, got {vx.shape}.")
+    if vy.shape != expected_vy:
+        raise ValueError(f"vy must have shape {expected_vy}, got {vy.shape}.")
+    if dx <= 0.0 or dy <= 0.0:
+        raise ValueError("dx and dy must be positive.")
+
+    mesh = Grid2D(dx=dx, dy=dy, nx=nx, ny=ny)
+
+    # Cell-centered unknown.
+    T = CellVariable(mesh=mesh, name="T", value=0.0)
+
+    # Exact cell constraint on the source cells.
+    T.constrain(0.0, where=source_mask.ravel())
+
+    # Pack MAC face velocities into a FiPy face vector coefficient.
+    velocity = _pack_mac_velocity_to_fipy_face_variable(mesh, vx, vy, dx, dy)
+
+    # Conservative form:
+    #   ∇·(v T) - (∇·v) T = 1
+    # UpwindConvectionTerm approximates ∇·(v T).
+    eq = UpwindConvectionTerm(coeff=velocity) - ImplicitSourceTerm(coeff=velocity.divergence) == 1.0
+
+    # PETSc direct solve.
+    solver = LinearLUSolver()
+    eq.solve(var=T, solver=solver)
+
+    return np.asarray(T.value).reshape((ny, nx))
