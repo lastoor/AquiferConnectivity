@@ -1081,20 +1081,30 @@ def run_stage2(
     discovered_var = deserialize_discovered(index["variance"])
     discovered_std = deserialize_discovered(index["std"])
 
-    var_results, warnings_var = run_variance_analysis_from_discovered(
-        cfg,
-        discovered_var,
-        show_progress=True,
-        hausdorff_compute_method=hausdorff_compute_method,
-        frechet_compute_method=frechet_compute_method,
-        max_var_values=max_var_values,
-        max_sizes_per_var=max_sizes_per_value,
-        max_mc_per_size=max_mc_per_size,
-    )
+    has_variance = bool(discovered_var)
+    has_std = bool(discovered_std)
+    if not has_variance and not has_std:
+        raise FileNotFoundError(
+            f"No variance or std sweep directories were discovered for run{cfg.run_id} under {cfg.data_root}."
+        )
+
+    var_results: VarianceResults | None = None
+    warnings_var: list[str] = []
+    if has_variance:
+        var_results, warnings_var = run_variance_analysis_from_discovered(
+            cfg,
+            discovered_var,
+            show_progress=True,
+            hausdorff_compute_method=hausdorff_compute_method,
+            frechet_compute_method=frechet_compute_method,
+            max_var_values=max_var_values,
+            max_sizes_per_var=max_sizes_per_value,
+            max_mc_per_size=max_mc_per_size,
+        )
 
     std_results: StdResults | None = None
     warnings_std: list[str] = []
-    if not skip_std:
+    if has_std and not skip_std:
         std_results, warnings_std = run_std_analysis_from_discovered(
             cfg,
             discovered_std,
@@ -1107,7 +1117,7 @@ def run_stage2(
         )
 
     payload = {
-        "var_results": _serialize_variance_results(var_results),
+        "var_results": _serialize_variance_results(var_results) if var_results is not None else None,
         "std_results": _serialize_std_results(std_results),
         "warnings": {"variance": warnings_var, "std": warnings_std},
     }
@@ -1118,6 +1128,7 @@ def run_stage2(
         "cache_file": str(cache_file),
         "warnings_variance": len(warnings_var),
         "warnings_std": len(warnings_std),
+        "variance_computed": var_results is not None,
         "std_computed": std_results is not None,
         "hausdorff_compute_method": hausdorff_compute_method,
         "frechet_compute_method": frechet_compute_method,

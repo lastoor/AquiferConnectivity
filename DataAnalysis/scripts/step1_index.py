@@ -381,16 +381,42 @@ def _collect_run_paths(size_dir: Path, size_str: str) -> RunPaths:
 
 
 def _discover_size_dirs(base: Path, length_scale: float) -> list[Path]:
+    if not base.exists() or not base.is_dir():
+        return []
+
     patterns = [
         f"LengthScale{length_scale}_Size*",
         f"lengthScale{length_scale}_size*",
+        f"Covexp_LengthScale{length_scale}_Size*",
+        f"covexp_lengthscale{length_scale}_size*",
     ]
     found: dict[str, Path] = {}
     for pattern in patterns:
         for d in base.glob(pattern):
             if d.name not in found:
                 found[d.name] = d
+    if found:
+        return sorted(found.values(), key=_size_sort_key)
+
+    # Fallback for future naming variations that still encode both length scale and size.
+    length_token = f"lengthscale{length_scale}".lower()
+    for d in base.iterdir():
+        if not d.is_dir():
+            continue
+        lower = d.name.lower()
+        if "size" not in lower:
+            continue
+        if length_token not in lower:
+            continue
+        if d.name not in found:
+            found[d.name] = d
     return sorted(found.values(), key=_size_sort_key)
+
+
+def _run_has_sweep_family(run_dir: Path, prefix: str) -> bool:
+    if not run_dir.exists() or not run_dir.is_dir():
+        return False
+    return any(child.is_dir() and child.name.startswith(f"{prefix}_") for child in run_dir.iterdir())
 
 
 def _extract_size_str(dir_name: str) -> str:
@@ -401,6 +427,8 @@ def _extract_size_str(dir_name: str) -> str:
 def discover_variance_runs(cfg: VisualizationConfig) -> dict[float, list[RunPaths]]:
     output: dict[float, list[RunPaths]] = {}
     run_dir = cfg.data_root / f"run{cfg.run_id}"
+    if not _run_has_sweep_family(run_dir, "var"):
+        return output
     for var_ in cfg.variance_values:
         base = _resolve_value_dir(run_dir, "var", var_)
         size_dirs = _discover_size_dirs(base, cfg.length_scale)
@@ -415,6 +443,8 @@ def discover_variance_runs(cfg: VisualizationConfig) -> dict[float, list[RunPath
 def discover_std_runs(cfg: VisualizationConfig) -> dict[float, list[RunPaths]]:
     output: dict[float, list[RunPaths]] = {}
     run_dir = cfg.data_root / f"run{cfg.run_id}"
+    if not _run_has_sweep_family(run_dir, "std"):
+        return output
     for std_ in cfg.std_values:
         base = _resolve_value_dir(run_dir, "std", std_)
         size_dirs = _discover_size_dirs(base, cfg.length_scale)
@@ -463,6 +493,8 @@ def run_stage1(cfg: VisualizationConfig, *, cache_dir: Path | None = None) -> Pa
     notes = {
         "variance_entries": {str(k): len(v) for k, v in payload["variance"].items()},
         "std_entries": {str(k): len(v) for k, v in payload["std"].items()},
+        "has_variance_runs": bool(discovered_var),
+        "has_std_runs": bool(discovered_std),
         "cache_file": str(cache_file),
     }
     write_stage_metadata(cache_dir / "stage1_index.meta.json", stage="stage1_index", config=cfg, notes=notes)

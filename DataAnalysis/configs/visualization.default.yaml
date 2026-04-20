@@ -1,13 +1,13 @@
 data_root: /project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod
-run_id: 10_fsm #9_newoutput_fmmconti_renyi
+run_id: 10_fsm_new #9_newoutput_fmmconti_renyi
 length_scale: 0.05
 dh: 0.1
 field_size_ref: 200
 k_g: 1.0
 analytical_percentile: 0.01
 
-variance_values: [0, 0.1, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]
-std_values: [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10]
+variance_values: [0.1, 0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5]
+std_values: [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5, 9, 9.5, 10]
 
 figure_dpi: 400
 workers: -1
