@@ -110,42 +110,33 @@ def _first_order_update(
     j: int,
     i: int,
 ) -> float:
+    # Dimensional reduction: only include a direction when its upwind neighbor
+    # already has a finite T. This lets propagation bootstrap from a 1D source
+    # (e.g. inlet cut) instead of stalling on inf × velocity.
     denom = 0.0
     rhs   = 1.0
 
-    if vx_ > 0.0:
-        if i == 0:
-            return math.inf
+    if vx_ > 0.0 and i > 0:
         T_left = T[j, i - 1]
-        if not math.isfinite(T_left):
-            return math.inf
-        denom += vx_ / dx
-        rhs   += vx_ * T_left / dx
-    elif vx_ < 0.0:
-        if i == n_x - 1:
-            return math.inf
+        if math.isfinite(T_left):
+            denom += vx_ / dx
+            rhs   += vx_ * T_left / dx
+    elif vx_ < 0.0 and i < n_x - 1:
         T_right = T[j, i + 1]
-        if not math.isfinite(T_right):
-            return math.inf
-        denom += (-vx_) / dx
-        rhs   += (-vx_) * T_right / dx
+        if math.isfinite(T_right):
+            denom += (-vx_) / dx
+            rhs   += (-vx_) * T_right / dx
 
-    if vy_ > 0.0:
-        if j == 0:
-            return math.inf
+    if vy_ > 0.0 and j > 0:
         T_down = T[j - 1, i]
-        if not math.isfinite(T_down):
-            return math.inf
-        denom += vy_ / dy
-        rhs   += vy_ * T_down / dy
-    elif vy_ < 0.0:
-        if j == n_y - 1:
-            return math.inf
+        if math.isfinite(T_down):
+            denom += vy_ / dy
+            rhs   += vy_ * T_down / dy
+    elif vy_ < 0.0 and j < n_y - 1:
         T_up = T[j + 1, i]
-        if not math.isfinite(T_up):
-            return math.inf
-        denom += (-vy_) / dy
-        rhs   += (-vy_) * T_up / dy
+        if math.isfinite(T_up):
+            denom += (-vy_) / dy
+            rhs   += (-vy_) * T_up / dy
 
     if denom <= 0.0:
         return math.inf
@@ -164,6 +155,9 @@ def _second_order_update(
     j: int,
     i: int,
 ) -> float:
+    # Dimensional reduction: when the upwind stencil for a direction is
+    # unavailable, drop that direction instead of returning inf so propagation
+    # can bootstrap from a 1D source.
     denom       = 0.0
     rhs         = 1.0
     lower_bound = -math.inf
@@ -181,8 +175,6 @@ def _second_order_update(
             rhs   += vx_ * T[j, i - 1] / dx
             if T[j, i - 1] > lower_bound: lower_bound = T[j, i - 1]
             used_any = True
-        else:
-            return math.inf
     elif vx_ < 0.0:
         if i <= n_x - 3 and math.isfinite(T[j, i + 1]) and math.isfinite(T[j, i + 2]):
             denom += 3.0 * (-vx_) / (2.0 * dx)
@@ -195,8 +187,6 @@ def _second_order_update(
             rhs   += (-vx_) * T[j, i + 1] / dx
             if T[j, i + 1] > lower_bound: lower_bound = T[j, i + 1]
             used_any = True
-        else:
-            return math.inf
 
     if vy_ > 0.0:
         if j >= 2 and math.isfinite(T[j - 1, i]) and math.isfinite(T[j - 2, i]):
@@ -210,8 +200,6 @@ def _second_order_update(
             rhs   += vy_ * T[j - 1, i] / dy
             if T[j - 1, i] > lower_bound: lower_bound = T[j - 1, i]
             used_any = True
-        else:
-            return math.inf
     elif vy_ < 0.0:
         if j <= n_y - 3 and math.isfinite(T[j + 1, i]) and math.isfinite(T[j + 2, i]):
             denom += 3.0 * (-vy_) / (2.0 * dy)
@@ -224,8 +212,6 @@ def _second_order_update(
             rhs   += (-vy_) * T[j + 1, i] / dy
             if T[j + 1, i] > lower_bound: lower_bound = T[j + 1, i]
             used_any = True
-        else:
-            return math.inf
 
     if not used_any or denom <= 0.0:
         return math.inf
@@ -288,6 +274,9 @@ def _second_order_update_no_guard(
     j: int,
     i: int,
 ) -> float:
+    # Dimensional reduction: when the upwind stencil for a direction is
+    # unavailable, drop that direction instead of returning inf so propagation
+    # can bootstrap from a 1D source.
     denom    = 0.0
     rhs      = 1.0
     used_any = False
@@ -301,8 +290,6 @@ def _second_order_update_no_guard(
             denom += vx_ / dx
             rhs   += vx_ * T[j, i - 1] / dx
             used_any = True
-        else:
-            return math.inf
     elif vx_ < 0.0:
         if i <= n_x - 3 and math.isfinite(T[j, i + 1]) and math.isfinite(T[j, i + 2]):
             denom += 3.0 * (-vx_) / (2.0 * dx)
@@ -312,8 +299,6 @@ def _second_order_update_no_guard(
             denom += (-vx_) / dx
             rhs   += (-vx_) * T[j, i + 1] / dx
             used_any = True
-        else:
-            return math.inf
 
     if vy_ > 0.0:
         if j >= 2 and math.isfinite(T[j - 1, i]) and math.isfinite(T[j - 2, i]):
@@ -324,8 +309,6 @@ def _second_order_update_no_guard(
             denom += vy_ / dy
             rhs   += vy_ * T[j - 1, i] / dy
             used_any = True
-        else:
-            return math.inf
     elif vy_ < 0.0:
         if j <= n_y - 3 and math.isfinite(T[j + 1, i]) and math.isfinite(T[j + 2, i]):
             denom += 3.0 * (-vy_) / (2.0 * dy)
@@ -335,8 +318,6 @@ def _second_order_update_no_guard(
             denom += (-vy_) / dy
             rhs   += (-vy_) * T[j + 1, i] / dy
             used_any = True
-        else:
-            return math.inf
 
     if not used_any or denom <= 0.0:
         return math.inf
@@ -1496,6 +1477,7 @@ def compute_fsm_path(
     consecutive_passes: int = 1,
     order: int = 1,
     neighbors: int = 4,
+    use_inlet_cut: bool = False,
     solver: str = "fipy",
     dt: float = 0.5,
     max_steps: int = 10_000,
@@ -1526,6 +1508,9 @@ def compute_fsm_path(
         Sweep-backend update order passed to ``solve_fsm_travel_time``.
     neighbors : {4, 8}
         Sweep-backend stencil width passed to ``solve_fsm_travel_time``.
+    use_inlet_cut : bool, default False
+        Reinterpret ``source_mask`` as a single inlet-cut column when supported
+        by the selected backend.
     solver : {"fipy", "sweep"}
         Travel-time backend passed to ``solve_fsm_travel_time``.
     dt : float
@@ -1572,6 +1557,7 @@ def compute_fsm_path(
         consecutive_passes=consecutive_passes,
         order=order,
         neighbors=neighbors,
+        use_inlet_cut=use_inlet_cut,
         solver=solver,
     )
 

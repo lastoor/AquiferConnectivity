@@ -651,3 +651,15 @@
   - `python -c "import ast, pathlib; ast.parse(pathlib.Path('DataAnalysis/scripts/step5_single_field_paths.py').read_text()); print('AST OK')"`
 - Limitations/follow-up:
   - This removes the warning noise for `fsm_solver=new` but does not change the numerical behavior of the underlying Algorithm FSM backend.
+
+## 2026-04-20
+- Agent/tool: Codex (GPT-5)
+- Summary: Updated Step 5 FSM path solving to call `compute_fsm_path(..., use_inlet_cut=True, ...)`, aligning the single-column source-mask setup used by Step 5 with the Algorithm FSM backends. This restores the inlet-cut semantics expected by the older solver paths and avoids the `solver='new'` reachability failure where no target cell received a finite travel time.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - `python -c "import ast, pathlib; ast.parse(pathlib.Path('DataAnalysis/scripts/step5_single_field_paths.py').read_text()); print('AST OK')"`
+- Limitations/follow-up:
+  - This required a follow-up API patch in `Algorithm/src/fmm_core/fsm.py` because `compute_fsm_path()` did not yet expose `use_inlet_cut`.
+  - The full Step 5 run was not re-executed in this session.

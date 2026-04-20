@@ -1314,6 +1314,7 @@ def solve_single_field(
             mse_check_every=fsm_effective_mse_check_every,
             mse_activation_factor=fsm_effective_mse_activation_factor,
             consecutive_passes=fsm_effective_consecutive_passes,
+            use_inlet_cut=True,
             solver=fsm_solver,
             dt=fsm_dt,
             max_steps=fsm_max_steps,
