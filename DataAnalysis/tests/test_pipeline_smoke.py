@@ -1,32 +1,47 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
-from pathlib import Path
 
 
-def test_cli_dry_run(tmp_path: Path) -> None:
-    cfg = tmp_path / "cfg.yaml"
-    cfg.write_text(
-        "\n".join(
-            [
-                "data_root: /tmp/nonexistent",
-                "run_id: 3",
-                "length_scale: 0.05",
-                "dh: 0.1",
-                "field_size_ref: 200",
-                "variance_values: [0.1]",
-                "std_values: [1.0]",
-                f"output_dir: {tmp_path / 'out'}",
-                "save_formats: [png]",
-                "sections: [times]",
-            ]
-        ),
-        encoding="utf-8",
-    )
+def test_run_all_dry_run_and_full(pipeline_fixture) -> None:
+    repo_root = pipeline_fixture["repo_root"]
+    cfg_path = pipeline_fixture["cfg_path"]
+    cache_dir = pipeline_fixture["cache_dir"]
+    output_dir = pipeline_fixture["output_dir"].parent / "override_outputs"
 
-    repo_root = Path(__file__).resolve().parents[1]
-    cmd = [sys.executable, str(repo_root / "scripts" / "visualize.py"), "--config", str(cfg), "--dry-run"]
-    proc = subprocess.run(cmd, cwd=repo_root, check=False, capture_output=True, text=True)
-    assert proc.returncode == 0
-    assert '"sections": [' in proc.stdout
+    env = os.environ.copy()
+    env["PYTHONPATH"] = "./scripts"
+
+    dry_cmd = [
+        sys.executable,
+        "scripts/run_all.py",
+        "--config",
+        str(cfg_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--output-dir",
+        str(output_dir),
+        "--dry-run",
+    ]
+    dry_proc = subprocess.run(dry_cmd, cwd=repo_root, check=False, capture_output=True, text=True, env=env)
+    assert dry_proc.returncode == 0
+    assert '"sections": [' in dry_proc.stdout
+    assert str(output_dir.resolve()) in dry_proc.stdout
+
+    full_cmd = [
+        sys.executable,
+        "scripts/run_all.py",
+        "--config",
+        str(cfg_path),
+        "--cache-dir",
+        str(cache_dir),
+        "--output-dir",
+        str(output_dir),
+        "--no-unique-filenames",
+    ]
+    full_proc = subprocess.run(full_cmd, cwd=repo_root, check=False, capture_output=True, text=True, env=env)
+    assert full_proc.returncode == 0
+    assert "Generated" in full_proc.stdout
+    assert (output_dir / "manifest.json").exists()

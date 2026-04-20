@@ -413,16 +413,16 @@ def generate_synthetic_logk(
     ecllipse3 = (dx3 * np.cos(theta3) + dy3 * np.sin(theta3)) ** 2 / a3**2 + (dx3 * np.sin(theta3) - dy3 * np.cos(theta3)) ** 2 / b3**2
     ecllipse4 = (dx4 * np.cos(theta4) + dy4 * np.sin(theta4)) ** 2 / a4**2 + (dx4 * np.sin(theta4) - dy4 * np.cos(theta4)) ** 2 / b4**2
 
-    # return np.asarray(
-    #     offset
-    #     + amplitude * (
-    #         np.exp(- ecllipse1)
-    #         + 0.75*np.exp(- ecllipse2)
-    #         # + 0.1*np.exp(- ecllipse3)
-    #         # + 0.1*np.exp(- ecllipse4)
-    #     ),
-    #     dtype=float,
-    # )
+    return np.asarray(
+        offset
+        + amplitude * (
+            np.exp(- ecllipse1)
+            + 0.75*np.exp(- ecllipse2)
+            # + 0.1*np.exp(- ecllipse3)
+            # + 0.1*np.exp(- ecllipse4)
+        ),
+        dtype=float,
+    )
 
     # return np.asarray(
     #     offset
@@ -433,16 +433,16 @@ def generate_synthetic_logk(
     #     dtype=float,
     # )
 
-    return np.asarray(
-        offset
-        + amplitude * (
-            np.sin(2.0 * np.pi * frequency_x * xx)
-            * np.cos(2.0 * np.pi * frequency_y * yy)
-            + np.exp(- ((xx - 3/8) ** 2 + (yy - 3/4) ** 2) / (1/8) ** 2)
-            + np.exp(- ((xx - 5/8) ** 2 + (yy - 1/4) ** 2) / (1/8) ** 2)
-        ),
-        dtype=float,
-    )
+    # return np.asarray(
+    #     offset
+    #     + amplitude * (
+    #         np.sin(2.0 * np.pi * frequency_x * xx)
+    #         * np.cos(2.0 * np.pi * frequency_y * yy)
+    #         + np.exp(- ((xx - 3/8) ** 2 + (yy - 3/4) ** 2) / (1/8) ** 2)
+    #         + np.exp(- ((xx - 5/8) ** 2 + (yy - 1/4) ** 2) / (1/8) ** 2)
+    #     ),
+    #     dtype=float,
+    # )
 
     # # Sine curve
     # y_sin = np.sin(xx)/2
@@ -1279,6 +1279,7 @@ def solve_single_field(
             y,
             h,
             output_location="face",
+            align_with_modflow=align_with_modflow_velocity,
             face_output="full",
         )
         fsm_source_mask = np.zeros(k_field.shape, dtype=bool)
@@ -3026,8 +3027,8 @@ def parse_args() -> argparse.Namespace:
         help="Only start FSM residual-MSE checks once max_change falls below this factor times --fsm-tol for update-screened modes.")
     parser.add_argument("--fsm-consecutive-passes", type=int, default=2,
         help="Require the FSM convergence rule to pass this many consecutive eligible checks before stopping.")
-    parser.add_argument("--fsm-solver", choices=["fipy", "sweep"], default="fipy",
-        help="FSM backend. 'fipy' uses the FiPy/PETSc solver with sweep fallback in Algorithm; 'sweep' forces the shared sweep backend.")
+    parser.add_argument("--fsm-solver", choices=["fipy", "sweep", "legacy"], default="fipy",
+        help="FSM backend. 'fipy' uses the FiPy/PETSc solver with sweep fallback in Algorithm; 'sweep' forces the current inlet-cut sweep backend; 'legacy' uses the old internal-source cell-centered sweep solver.")
     parser.add_argument("--fsm-dt", type=float, default=0.5,
         help="RK45 max step size (grid cells) for FSM path backtracking.")
     parser.add_argument("--fsm-max-steps", type=int, default=10000,

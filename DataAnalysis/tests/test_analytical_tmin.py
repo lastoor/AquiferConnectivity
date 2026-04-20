@@ -1,32 +1,24 @@
 from __future__ import annotations
 
-import importlib.util
 from pathlib import Path
 
+import matplotlib
 import numpy as np
 
+matplotlib.use("Agg")
 
-def _load_module(module_name: str, rel_path: str):
-    repo_root = Path(__file__).resolve().parents[1]
-    path = repo_root / rel_path
-    spec = importlib.util.spec_from_file_location(module_name, path)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+import step1_index as step1
+import step4_plot as step4
 
 
 def test_compute_effective_length_uses_integer_floor_margin() -> None:
-    analytical = _load_module("analytical_tmin", "visualization/stats/analytical_tmin.py")
-    assert analytical.compute_effective_length(200.0) == 180.0
-    assert analytical.compute_effective_length(201.0) == 181.0
+    assert step4.compute_effective_length(200.0) == 180.0
+    assert step4.compute_effective_length(201.0) == 181.0
 
 
 def test_compute_analytical_tmin_curve_typical_variances() -> None:
-    analytical = _load_module("analytical_tmin", "visualization/stats/analytical_tmin.py")
     var = np.asarray([0.1, 0.5, 1.0, 2.0, 3.0], dtype=float)
-    values, warnings = analytical.compute_analytical_tmin_curve(
+    values, warnings = step4.compute_analytical_tmin_curve(
         var,
         length=180.0,
         velocity=0.1,
@@ -38,10 +30,23 @@ def test_compute_analytical_tmin_curve_typical_variances() -> None:
     assert warnings == []
 
 
+def test_g_tau_tiny_time_is_finite_and_bounded() -> None:
+    with np.errstate(invalid="raise", divide="raise", over="raise"):
+        value = step4._g_tau(
+            1e-300,
+            length=180.0,
+            velocity=0.1,
+            i_y=10.0,
+            sigma_y_sq=1.0,
+            euler_const=float(getattr(step4.constants, "euler_gamma", np.euler_gamma)),
+        )
+    assert np.isfinite(value)
+    assert 0.0 <= value <= 1.0
+
+
 def test_compute_analytical_tmin_curve_invalid_params_returns_nan() -> None:
-    analytical = _load_module("analytical_tmin", "visualization/stats/analytical_tmin.py")
     var = np.asarray([0.1, 0.5], dtype=float)
-    values, warnings = analytical.compute_analytical_tmin_curve(
+    values, warnings = step4.compute_analytical_tmin_curve(
         var,
         length=180.0,
         velocity=0.0,
@@ -52,8 +57,40 @@ def test_compute_analytical_tmin_curve_invalid_params_returns_nan() -> None:
     assert warnings
 
 
+def test_compute_analytical_tmin_curve_stress_params_do_not_crash() -> None:
+    var = np.asarray([1e-12, 1e-6, 1e-3], dtype=float)
+    values, warnings = step4.compute_analytical_tmin_curve(
+        var,
+        length=180.0,
+        velocity=1e-12,
+        i_y=10.0,
+        percentile=0.01,
+    )
+    assert values.shape == var.shape
+    # Values may be NaN for difficult regimes, but function should return safely with warnings.
+    assert isinstance(warnings, list)
+
+
+def test_plot_characteristic_time_includes_analytical_label() -> None:
+    var = np.asarray([0.1, 0.5, 1.0], dtype=float)
+    stats = np.asarray([[1.0, 0.1], [2.0, 0.2], [3.0, 0.3]], dtype=float)
+    analytical = np.asarray([0.8, 1.7, 2.6], dtype=float)
+
+    fig, _ = step4.plot_characteristic_time(
+        var,
+        stats,
+        stats,
+        stats,
+        stats,
+        t_ref=1.0,
+        analytical_tmin=analytical,
+        analytical_label="Analytical Test",
+    )
+    labels = fig.axes[0].get_legend_handles_labels()[1]
+    assert "Analytical Test" in labels
+
+
 def test_config_validates_analytical_percentile(tmp_path: Path) -> None:
-    cfg_mod = _load_module("viz_config", "visualization/config.py")
     cfg_path = tmp_path / "cfg.yaml"
     cfg_path.write_text(
         "\n".join(
@@ -75,8 +112,8 @@ def test_config_validates_analytical_percentile(tmp_path: Path) -> None:
     )
 
     try:
-        cfg_mod.load_config(cfg_path)
-    except cfg_mod.ConfigError as exc:
+        step1.load_config(cfg_path)
+    except step1.ConfigError as exc:
         assert "analytical_percentile" in str(exc)
     else:
         raise AssertionError("Expected ConfigError for invalid analytical_percentile")

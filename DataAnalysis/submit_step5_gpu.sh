@@ -21,16 +21,16 @@ run_tag="3_synthetic_plume"
 num_particles="1000000"
 dh=""
 fsm_fp="true"
-fsm_max_sweeps="100"
+fsm_max_sweeps="100000"
 fsm_tol="1e-8"
-fsm_mse_tol=""
+fsm_mse_tol="1e-4"
 fsm_convergence_mode=""
 fsm_mse_check_every="5"
 fsm_mse_activation_factor="10.0"
 fsm_consecutive_passes="2"
-fsm_solver="fipy"
+fsm_solver="legacy" # Options: sweep, fipy, legacy
 fsm_dt="0.5"
-fsm_max_steps="10000"
+fsm_max_steps="1000000"
 
 linearized_fp="false"
 linearized_scheme="linearized" # Options: linearized, full_eikonal
@@ -240,13 +240,12 @@ export NUMEXPR_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
 
 source ~/.bashrc
-conda deactivate || true
+source /apps/conda/miniforge3/24.3.0/etc/profile.d/conda.sh
 conda activate taichi_env
-which python
 
 export PYTHONPATH=./scripts
-
-python ./scripts/step5_single_field_paths.py \\
+TAICHI_PY=/home1/binhaoli/.conda/envs/taichi_env/bin/python
+"\$TAICHI_PY" ./scripts/step5_single_field_paths.py \\
   --config "${config_path}" \\
   ${logk_args} \\
   --output-dir "\${output_dir}" \\
