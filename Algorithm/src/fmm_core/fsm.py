@@ -28,6 +28,14 @@ except ImportError:  # pragma: no cover
     _NUMBA_AVAILABLE = False
 
 
+class FiPyConfigurationError(ValueError):
+    """Raised when the FiPy backend cannot represent the requested geometry."""
+
+
+class FSMSourceConfigurationError(ValueError):
+    """Raised when the current FSM solver cannot represent the source layout."""
+
+
 # ---------------------------------------------------------------------------
 # Numba-accelerated inner kernels
 # ---------------------------------------------------------------------------
@@ -391,6 +399,31 @@ def _face_to_cell_centered_velocity(
     return vx_cell, vy_cell
 
 
+def _extract_inlet_cut(source_mask: np.ndarray) -> tuple[int, int]:
+    """Interpret ``source_mask`` as a single inlet cut column.
+
+    Returns
+    -------
+    source_col : int
+        The x-column occupied by the inlet cut.
+    downwind_start : int
+        First strictly downwind column index (`source_col + 1`).
+    """
+    source_mask = np.asarray(source_mask, dtype=bool)
+    source_indices = np.argwhere(source_mask)
+    if source_indices.size == 0:
+        raise FSMSourceConfigurationError("source_mask is empty.")
+
+    source_cols = np.unique(source_indices[:, 1])
+    if source_cols.size != 1:
+        raise FSMSourceConfigurationError(
+            "Current FSM solver requires source_mask to occupy exactly one source column."
+        )
+
+    source_col = int(source_cols[0])
+    return source_col, source_col + 1
+
+
 def _solve_fsm_travel_time_sweep(
     vx: np.ndarray,
     vy: np.ndarray,
@@ -563,9 +596,11 @@ def solve_fsm_travel_time(
         Grid spacing.
     source_mask : bool ndarray, shape (ny, nx)
         Cells where ``T = 0``.
-    solver : {"fipy", "sweep"}
+    solver : {"fipy", "sweep", "legacy"}
         Numerical backend. ``"fipy"`` is the default and falls back to
         ``"sweep"`` automatically when FiPy / PETSc is unavailable.
+        ``"legacy"`` routes through ``solve_fsm_travel_time_legacy()`` after
+        averaging MAC-face velocities to cell centers.
 
     Other parameters are forwarded to the sweep backend when it is selected
     explicitly or used as the fallback.
@@ -584,27 +619,62 @@ def solve_fsm_travel_time(
     if vy.shape != expected_vy:
         raise ValueError(f"vy must have shape {expected_vy}, got {vy.shape}.")
 
-    allowed_solvers = {"fipy", "sweep"}
+    allowed_solvers = {"fipy", "sweep", "legacy"}
     if solver not in allowed_solvers:
         raise ValueError(f"solver must be one of {sorted(allowed_solvers)}.")
 
     if solver == "fipy":
         try:
             return solve_fipy_travel_time(vx, vy, dx, dy, source_mask)
-        except ImportError:
+        except (ImportError, FiPyConfigurationError) as exc:
             warnings.warn(
-                "FiPy / PETSc is unavailable; falling back to the sweep FSM solver.",
+                f"FiPy backend failed; falling back to the sweep FSM solver. Original error: {exc!r}",
                 RuntimeWarning,
                 stacklevel=2,
             )
 
     vx_cell, vy_cell = _face_to_cell_centered_velocity(vx, vy)
-    return _solve_fsm_travel_time_sweep(
-        vx_cell,
-        vy_cell,
+    if solver == "legacy":
+        return solve_fsm_travel_time_legacy(
+            vx_cell,
+            vy_cell,
+            dx,
+            dy,
+            source_mask,
+            max_sweeps=max_sweeps,
+            tol=tol,
+            mse_tol=mse_tol,
+            convergence_mode=convergence_mode,
+            mse_check_every=mse_check_every,
+            mse_activation_factor=mse_activation_factor,
+            consecutive_passes=consecutive_passes,
+        )
+
+    source_col, downwind_start = _extract_inlet_cut(source_mask)
+    full_t = np.full((ny, nx), np.inf, dtype=float)
+    full_t[:, source_col] = 0.0
+
+    if downwind_start >= nx:
+        return full_t
+
+    vx_downwind = vx_cell[:, downwind_start:]
+    vy_downwind = vy_cell[:, downwind_start:]
+    ny_downwind, nx_downwind = vx_downwind.shape
+    vx_augmented = np.empty((ny_downwind, nx_downwind + 1), dtype=float)
+    vy_augmented = np.empty((ny_downwind, nx_downwind + 1), dtype=float)
+    vx_augmented[:, 0] = vx_downwind[:, 0]
+    vx_augmented[:, 1:] = vx_downwind
+    vy_augmented[:, 0] = vy_downwind[:, 0]
+    vy_augmented[:, 1:] = vy_downwind
+    source_mask_downwind = np.zeros_like(vx_augmented, dtype=bool)
+    source_mask_downwind[:, 0] = True
+
+    t_downwind = _solve_fsm_travel_time_sweep(
+        vx_augmented,
+        vy_augmented,
         dx,
         dy,
-        source_mask,
+        source_mask_downwind,
         max_sweeps=max_sweeps,
         tol=tol,
         mse_tol=mse_tol,
@@ -615,6 +685,8 @@ def solve_fsm_travel_time(
         order=order,
         neighbors=neighbors,
     )
+    full_t[:, downwind_start:] = t_downwind[:, 1:]
+    return full_t
 
 def solve_fsm_travel_time_legacy(
     vx: np.ndarray,
@@ -629,6 +701,8 @@ def solve_fsm_travel_time_legacy(
     mse_check_every: int = 5,
     mse_activation_factor: float = 10.0,
     consecutive_passes: int = 1,
+    *,
+    use_inlet_cut: bool = True,
 ) -> np.ndarray:
     """Solve v·∇T = 1 via upwind finite differences + fast sweeping.
 
@@ -662,21 +736,28 @@ def solve_fsm_travel_time_legacy(
     consecutive_passes : int
         Require the selected convergence rule to hold for this many consecutive
         eligible checks before returning.
+    use_inlet_cut : bool, default False
+        When True, reinterpret ``source_mask`` as an inlet cut on a single
+        source column, solve only on the strictly downwind domain, set the
+        source column to zero, and return ``np.inf`` upwind.
 
     Returns
     -------
     T : ndarray, shape (n_y, n_x)
         Travel-time field; np.inf where unreachable.
     """
+    vx = np.asarray(vx, dtype=float)
+    vy = np.asarray(vy, dtype=float)
+    source_mask = np.asarray(source_mask, dtype=bool)
+
+    if vx.shape != vy.shape:
+        raise ValueError("vx and vy must have the same shape.")
+    if source_mask.shape != vx.shape:
+        raise ValueError("source_mask must have the same shape as vx and vy.")
+    if dx <= 0.0 or dy <= 0.0:
+        raise ValueError("dx and dy must be positive.")
+
     n_y, n_x = vx.shape
-
-    T = np.full((n_y, n_x), np.inf)
-    T[source_mask] = 0.0
-
-    vx_pos = np.maximum(vx, 0.0)
-    vx_neg = np.minimum(vx, 0.0)
-    vy_pos = np.maximum(vy, 0.0)
-    vy_neg = np.minimum(vy, 0.0)
     allowed_modes = {"update", "mse", "update_or_mse", "update_and_mse"}
     if convergence_mode not in allowed_modes:
         raise ValueError(f"convergence_mode must be one of {sorted(allowed_modes)}.")
@@ -688,6 +769,52 @@ def solve_fsm_travel_time_legacy(
         raise ValueError("mse_activation_factor must be positive.")
     if consecutive_passes < 1:
         raise ValueError("consecutive_passes must be at least 1.")
+
+    if use_inlet_cut:
+        source_col, downwind_start = _extract_inlet_cut(source_mask)
+        full_t = np.full((n_y, n_x), np.inf, dtype=float)
+        full_t[:, source_col] = 0.0
+
+        if downwind_start >= n_x:
+            return full_t
+
+        vx_downwind = vx[:, downwind_start:]
+        vy_downwind = vy[:, downwind_start:]
+        n_y_downwind, n_x_downwind = vx_downwind.shape
+        vx_augmented = np.empty((n_y_downwind, n_x_downwind + 1), dtype=float)
+        vy_augmented = np.empty((n_y_downwind, n_x_downwind + 1), dtype=float)
+        vx_augmented[:, 0] = vx_downwind[:, 0]
+        vx_augmented[:, 1:] = vx_downwind
+        vy_augmented[:, 0] = vy_downwind[:, 0]
+        vy_augmented[:, 1:] = vy_downwind
+        source_mask_downwind = np.zeros_like(vx_augmented, dtype=bool)
+        source_mask_downwind[:, 0] = True
+
+        t_downwind = solve_fsm_travel_time_legacy(
+            vx_augmented,
+            vy_augmented,
+            dx,
+            dy,
+            source_mask_downwind,
+            max_sweeps=max_sweeps,
+            tol=tol,
+            mse_tol=mse_tol,
+            convergence_mode=convergence_mode,
+            mse_check_every=mse_check_every,
+            mse_activation_factor=mse_activation_factor,
+            consecutive_passes=consecutive_passes,
+            use_inlet_cut=False,
+        )
+        full_t[:, downwind_start:] = t_downwind[:, 1:]
+        return full_t
+
+    T = np.full((n_y, n_x), np.inf)
+    T[source_mask] = 0.0
+
+    vx_pos = np.maximum(vx, 0.0)
+    vx_neg = np.minimum(vx, 0.0)
+    vy_pos = np.maximum(vy, 0.0)
+    vy_neg = np.minimum(vy, 0.0)
     pass_count = 0
 
     # 4 sweep directions: (step_j along y-axis, step_i along x-axis)
@@ -916,7 +1043,7 @@ def compute_fsm_path(
     mse_activation_factor: float = 10.0,
     consecutive_passes: int = 1,
     order: int = 1,
-    neighbors: int = 8,
+    neighbors: int = 4,
     solver: str = "fipy",
     dt: float = 0.5,
     max_steps: int = 10_000,
@@ -1073,7 +1200,7 @@ def _pack_mac_velocity_to_fipy_face_variable(
 
     velocity = FaceVariable(mesh=mesh, rank=1, value=0.0)
     velocity.setValue(vel)
-    return velocity
+    return velocity, vel
 
 
 def solve_fipy_travel_time(
@@ -1095,7 +1222,10 @@ def solve_fipy_travel_time(
     dx, dy : float
         Grid spacing.
     source_mask : bool ndarray, shape (ny, nx)
-        Cells where T is fixed to 0.
+        Release region. The FiPy backend interprets this as an inlet cut:
+        the source column is assigned ``T = 0``, the solve is performed only
+        on the strictly downwind subdomain, and upwind cells are returned as
+        ``np.inf``.
 
     Returns
     -------
@@ -1127,16 +1257,49 @@ def solve_fipy_travel_time(
     if dx <= 0.0 or dy <= 0.0:
         raise ValueError("dx and dy must be positive.")
 
-    mesh = Grid2D(dx=dx, dy=dy, nx=nx, ny=ny)
+    source_indices = np.argwhere(source_mask)
+    if source_indices.size == 0:
+        raise FiPyConfigurationError("source_mask is empty.")
 
-    # Cell-centered unknown.
+    source_cols = np.unique(source_indices[:, 1])
+    if source_cols.size != 1:
+        raise FiPyConfigurationError(
+            "FiPy backend requires source_mask to occupy exactly one source column."
+        )
+
+    source_col = int(source_cols[0])
+    full_t = np.full((ny, nx), np.inf, dtype=float)
+    full_t[:, source_col] = 0.0
+
+    downwind_start = source_col + 1
+    if downwind_start >= nx:
+        return full_t
+
+    vx_sub = vx[:, downwind_start:]
+    vy_sub = vy[:, downwind_start:]
+    nx_sub = vx_sub.shape[1] - 1
+
+    mesh = Grid2D(dx=dx, dy=dy, nx=nx_sub, ny=ny)
+
+    # Cell-centered unknown on the strictly downwind domain.
     T = CellVariable(mesh=mesh, name="T", value=0.0)
-
-    # Exact cell constraint on the source cells.
-    T.constrain(0.0, where=source_mask.ravel())
+    T.constrain(0.0, where=mesh.facesLeft)
 
     # Pack MAC face velocities into a FiPy face vector coefficient.
-    velocity = _pack_mac_velocity_to_fipy_face_variable(mesh, vx, vy, dx, dy)
+    velocity, velocity_values = _pack_mac_velocity_to_fipy_face_variable(
+        mesh, vx_sub, vy_sub, dx, dy
+    )
+
+    face_normals = np.asarray(mesh.faceNormals)
+    normal_flux = (
+        np.asarray(velocity_values[0], dtype=float) * np.asarray(face_normals[0], dtype=float)
+        + np.asarray(velocity_values[1], dtype=float) * np.asarray(face_normals[1], dtype=float)
+    )
+    exterior_mask = np.asarray(mesh.exteriorFaces.value, dtype=bool)
+    inlet_mask = np.asarray(mesh.facesLeft.value, dtype=bool)
+    outflow_mask = exterior_mask & (~inlet_mask) & (normal_flux > 1e-14)
+    if np.any(outflow_mask):
+        T.faceGrad.constrain(((0.0,), (0.0,)), where=outflow_mask)
 
     # Conservative form:
     #   ∇·(v T) - (∇·v) T = 1
@@ -1147,4 +1310,6 @@ def solve_fipy_travel_time(
     solver = LinearLUSolver()
     eq.solve(var=T, solver=solver)
 
-    return np.asarray(T.value).reshape((ny, nx))
+    t_sub = np.asarray(T.value, dtype=float).reshape((ny, nx_sub))
+    full_t[:, downwind_start:] = t_sub
+    return full_t
