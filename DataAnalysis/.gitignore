@@ -24,7 +24,11 @@ dist/
 .ipynb_checkpoints/
 
 # Local outputs and staged caches
-outputs/
+outputs/*
+!outputs/.gitkeep
+
+# Plot output files
+scripts/*.png
 
 # OS/editor files
 .DS_Store
