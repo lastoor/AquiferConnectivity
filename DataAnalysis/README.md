@@ -186,6 +186,16 @@ Notes:
   - `--fsm-max-steps`: maximum accepted backtracking points
 - `submit_step5_gpu.sh` now passes the FSM convergence options through to `step5_single_field_paths.py`, so batch runs can use the same update/MSE stopping controls as interactive runs.
 - The current `submit_step5_gpu.sh` defaults are slightly stricter than the interactive CLI defaults: it sets `fsm_tol="1e-8"` while leaving residual-MSE checking optional unless `fsm_mse_tol` is set explicitly.
+- `submit_step5_gpu.sh` is now a dual-mode launcher:
+  - on macOS it runs `step5_single_field_paths.py` locally, prefers `--backend gpu`, and falls back to `--backend cpu` if Taichi GPU init fails
+  - on Linux with `sbatch` available it keeps the existing Slurm submission flow
+  - on Linux without `sbatch` it runs locally instead of failing on missing Slurm
+- Local launcher overrides:
+  - `STEP5_PYTHON=/path/to/python` chooses the interpreter
+  - `STEP5_PYTHONPATH=/path/to/DataAnalysis/scripts` overrides the Step 5 `PYTHONPATH`
+  - `STEP5_LOCAL_BACKEND=gpu|cpu` overrides the local backend preference
+  - `FLOWSIM_PATH=/path/to/FlowSimulation` overrides the sibling checkout path
+- When local execution resolves to CPU, the launcher disables snapshot capture automatically because Step 5 snapshots currently require `--solver pollock --backend gpu`.
 - Step 5 FMM backtracking still defaults to `--fmm-backtracking discrete`.
 - Solver imports require both `Algorithm/src` and the sibling `FlowSimulation` repo.
 - The linearized Eikonal iteration additionally loads `scripts/fp_and_lrp/linear_eikonal_solver.py`.

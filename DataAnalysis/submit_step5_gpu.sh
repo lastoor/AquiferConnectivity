@@ -28,7 +28,7 @@ fsm_convergence_mode=""
 fsm_mse_check_every="5"
 fsm_mse_activation_factor="10.0"
 fsm_consecutive_passes="2"
-fsm_solver="legacy" # Options: sweep, fipy, legacy
+fsm_solver="legacy" # Options: sweep, fipy, legacy, new
 fsm_dt="0.5"
 fsm_max_steps="1000000"
 
@@ -77,11 +77,18 @@ gpus_per_task="1"
 account="fbarros_324"
 partition="gpu"
 
-repo_root="/home1/binhaoli/FMM_FastestPath/DataAnalysis"
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 config_path="${repo_root}/configs/visualization.default.yaml"
 run_root="${repo_root}/outputs/visualization/path/${run_tag}"
 log_dir="${run_root}/slurm_logs"
 mkdir -p "${log_dir}"
+
+flowsim_default="$(cd "${repo_root}/../.." && pwd)/FlowSimulation"
+export FLOWSIM_PATH="${FLOWSIM_PATH:-${flowsim_default}}"
+
+step5_python="${STEP5_PYTHON:-python3}"
+step5_pythonpath="${STEP5_PYTHONPATH:-${repo_root}/scripts}"
+script_path="${repo_root}/scripts/step5_single_field_paths.py"
 
 dh_args=""
 if [[ -n "${dh}" ]]; then
@@ -195,7 +202,140 @@ else
     exit 1
 fi
 
-sbatch <<EOF
+common_args="\
+  --config ${config_path} \
+  ${logk_args} \
+  --output-dir ${output_dir} \
+  ${dh_args} \
+  --solver pollock \
+  --num-particles ${num_particles} \
+  --velocity-location face \
+  --no-align-with-modflow-velocity \
+  --fmm-backtracking continuous \
+  --fmm-continuous-step-size 0.1 \
+  ${fsm_args} \
+  ${linearized_args} \
+  ${check_path_geometry_args} \
+  ${geometry_args} \
+  --curvature-resample-ds ${curvature_resample_ds} \
+  --curvature-method ${curvature_method} \
+  --curvature-spline-mode ${curvature_spline_mode} \
+  --curvature-spline-smooth ${curvature_spline_smooth} \
+  --curvature-spline-degree ${curvature_spline_degree} \
+  --curvature-field-smooth-method ${curvature_field_smooth_method} \
+  --curvature-field-smooth-sigma ${curvature_field_smooth_sigma} \
+  --curvature-circle-window ${curvature_circle_window} \
+  --curvature-savgol-window ${curvature_savgol_window} \
+  --curvature-savgol-poly ${curvature_savgol_poly} \
+  --normal-deriv-method ${normal_deriv_method} \
+  --normal-deriv-spline2d-smooth ${normal_deriv_spline2d_smooth} \
+  --normal-deriv-mls-ns ${normal_deriv_mls_ns} \
+  --normal-deriv-mls-nn ${normal_deriv_mls_nn} \
+  --normal-deriv-hessian-smooth ${normal_deriv_hessian_smooth} \
+  --normal-deriv-hessian-window ${normal_deriv_hessian_window} \
+  --normal-deriv-hessian-poly ${normal_deriv_hessian_poly}"
+
+print_run_context() {
+    local backend_label="$1"
+    local snapshot_label="${2:-${snapshot_mode:-disabled}}"
+    local snapshot_times_label="${3:-${snapshot_times:-n/a}}"
+    echo "Start Time: $(date)"
+    echo "Execution mode: ${backend_label}"
+    echo "Repo root: ${repo_root}"
+    echo "Config path: ${config_path}"
+    echo "Output dir: ${output_dir}"
+    echo "FlowSimulation path: ${FLOWSIM_PATH}"
+    echo "logK source: ${logk_source}"
+    echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, mse_tol=${fsm_mse_tol:-disabled}, mode=${fsm_convergence_mode:-auto}, mse_check_every=${fsm_mse_check_every}, mse_activation_factor=${fsm_mse_activation_factor}, consecutive_passes=${fsm_consecutive_passes}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
+    echo "Linearized FP: ${linearized_fp}"
+    echo "Linearized scheme: ${linearized_scheme}"
+    echo "Check path geometry: ${check_path_geometry}"
+    echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window}, savgol_window=${curvature_savgol_window}, savgol_poly=${curvature_savgol_poly}), normal_deriv_method=${normal_deriv_method}"
+    echo "Snapshot mode: ${snapshot_label}, times: ${snapshot_times_label}"
+    echo "Curvature field smoothing: method=${curvature_field_smooth_method}, sigma=${curvature_field_smooth_sigma}"
+    echo "Step5 geometry overrides: source_x=${source_x:-default}, target_x=${target_x:-default}, source_y=[${source_y_start:-default}, ${source_y_end:-default}), target_y=[${target_y_start:-default}, ${target_y_end:-default})"
+    if [[ "${logk_source}" == "dataset" ]]; then
+        echo "Dataset selection: sweep=${sweep}, value=${value}, mc_index=${mc_index}"
+    elif [[ "${logk_source}" == "synthetic" ]]; then
+        echo "Synthetic logK: amplitude=${synthetic_amplitude}, freq_x=${synthetic_frequency_x}, freq_y=${synthetic_frequency_y}, offset=${synthetic_offset}"
+    else
+        echo "GRF logK: std=${grf_std}, length_scale=${grf_length_scale:-cfg.length_scale}, seed=${grf_seed}, minpadding=${grf_minpadding}"
+    fi
+    if [[ "${linearized_fp}" == "true" && "${linearized_scheme}" == "full_eikonal" ]]; then
+        echo "Note: full_eikonal ignores linearized-only controls: inner_max_sweeps, inner_tol, eikonal_tol, damping, max_deltat, monotone_residual."
+    fi
+}
+
+run_local() {
+    local os_name="$1"
+    local requested_backend="${STEP5_LOCAL_BACKEND:-}"
+    local resolved_backend="cpu"
+    local runtime_label="mode=local"
+    local local_snapshot_args="${snapshot_args}"
+
+    if [[ -z "${requested_backend}" ]]; then
+        if [[ "${os_name}" == "Darwin" ]]; then
+            requested_backend="gpu"
+        else
+            requested_backend="cpu"
+        fi
+    fi
+
+    if [[ "${requested_backend}" == "gpu" ]]; then
+        if env PYTHONPATH="${step5_pythonpath}${PYTHONPATH:+:${PYTHONPATH}}" FLOWSIM_PATH="${FLOWSIM_PATH}" \
+            "${step5_python}" -c 'import taichi as ti; ti.init(arch=ti.gpu, verbose=False)' >/dev/null 2>&1; then
+            resolved_backend="gpu"
+            if [[ "${os_name}" == "Darwin" ]]; then
+                runtime_label="mode=local-mac backend=gpu"
+            else
+                runtime_label="mode=local backend=gpu"
+            fi
+        else
+            echo "GPU preflight failed for local Step 5 run; falling back to --backend cpu." >&2
+            resolved_backend="cpu"
+            if [[ "${os_name}" == "Darwin" ]]; then
+                runtime_label="mode=local-mac backend=cpu (gpu preflight failed)"
+            else
+                runtime_label="mode=local backend=cpu (gpu preflight failed)"
+            fi
+        fi
+    elif [[ "${requested_backend}" == "cpu" ]]; then
+        resolved_backend="cpu"
+        if [[ "${os_name}" == "Darwin" ]]; then
+            runtime_label="mode=local-mac backend=cpu"
+        fi
+    else
+        echo "Unsupported STEP5_LOCAL_BACKEND=${requested_backend}; expected gpu or cpu." >&2
+        exit 1
+    fi
+
+    if [[ "${resolved_backend}" != "gpu" && -n "${local_snapshot_args}" ]]; then
+        echo "Snapshot capture requires --solver pollock --backend gpu; skipping snapshot arguments for local CPU execution." >&2
+        local_snapshot_args=""
+    fi
+
+    mkdir -p "${output_dir}"
+    export OMP_NUM_THREADS=1
+    export OPENBLAS_NUM_THREADS=1
+    export MKL_NUM_THREADS=1
+    export NUMEXPR_NUM_THREADS=1
+    export PYTHONUNBUFFERED=1
+    export PYTHONPATH="${step5_pythonpath}${PYTHONPATH:+:${PYTHONPATH}}"
+
+    if [[ -n "${local_snapshot_args}" ]]; then
+        print_run_context "${runtime_label}" "${snapshot_mode}" "${snapshot_times}"
+    else
+        print_run_context "${runtime_label}" "disabled" "n/a"
+    fi
+    "${step5_python}" "${script_path}" \
+      ${common_args} \
+      --backend "${resolved_backend}" \
+      ${local_snapshot_args}
+    echo "End Time: $(date)"
+}
+
+run_slurm() {
+    sbatch <<EOF
 #!/bin/bash
 #SBATCH --account=${account}
 #SBATCH --job-name=step5_gpu_${job_suffix}
@@ -210,34 +350,14 @@ sbatch <<EOF
 #SBATCH --mem-per-cpu=${mem_per_cpu}
 #SBATCH --chdir=${repo_root}
 
-echo "Running step5 GPU Pollock on node \$SLURM_NODELIST"
-echo "Start Time: \$(date)"
-echo "logK source: ${logk_source}"
-echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, mse_tol=${fsm_mse_tol:-disabled}, mode=${fsm_convergence_mode:-auto}, mse_check_every=${fsm_mse_check_every}, mse_activation_factor=${fsm_mse_activation_factor}, consecutive_passes=${fsm_consecutive_passes}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
-echo "Linearized FP: ${linearized_fp}"
-echo "Linearized scheme: ${linearized_scheme}"
-echo "Check path geometry: ${check_path_geometry}"
-echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window}, savgol_window=${curvature_savgol_window}, savgol_poly=${curvature_savgol_poly}), normal_deriv_method=${normal_deriv_method}"
-echo "Snapshot mode: ${snapshot_mode:-disabled}, times: ${snapshot_times:-n/a}"
-echo "Curvature field smoothing: method=${curvature_field_smooth_method}, sigma=${curvature_field_smooth_sigma}"
-echo "Step5 geometry overrides: source_x=${source_x:-default}, target_x=${target_x:-default}, source_y=[${source_y_start:-default}, ${source_y_end:-default}), target_y=[${target_y_start:-default}, ${target_y_end:-default})"
-if [[ "${logk_source}" == "dataset" ]]; then
-  echo "Dataset selection: sweep=${sweep}, value=${value}, mc_index=${mc_index}"
-else
-  echo "Synthetic logK: amplitude=${synthetic_amplitude}, freq_x=${synthetic_frequency_x}, freq_y=${synthetic_frequency_y}, offset=${synthetic_offset}"
-fi
-if [[ "${linearized_fp}" == "true" && "${linearized_scheme}" == "full_eikonal" ]]; then
-  echo "Note: full_eikonal ignores linearized-only controls: inner_max_sweeps, inner_tol, eikonal_tol, damping, max_deltat, monotone_residual."
-fi
-
-output_dir="${output_dir}"
-mkdir -p "\${output_dir}"
+mkdir -p "${output_dir}"
 
 export OMP_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
+export FLOWSIM_PATH="${FLOWSIM_PATH}"
 
 source ~/.bashrc
 source /apps/conda/miniforge3/24.3.0/etc/profile.d/conda.sh
@@ -245,40 +365,25 @@ conda activate taichi_env
 
 export PYTHONPATH=./scripts
 TAICHI_PY=/home1/binhaoli/.conda/envs/taichi_env/bin/python
-"\$TAICHI_PY" ./scripts/step5_single_field_paths.py \\
-  --config "${config_path}" \\
-  ${logk_args} \\
-  --output-dir "\${output_dir}" \\
-  ${dh_args} \\
-  --solver pollock \\
-  --backend gpu \\
-  --num-particles "${num_particles}" \\
-  --velocity-location face \\
-  --no-align-with-modflow-velocity \\
-  --fmm-backtracking continuous \\
-  --fmm-continuous-step-size 0.1 \\
-  ${fsm_args} \\
-  ${linearized_args} \\
-  ${check_path_geometry_args} \\
-  ${geometry_args} \\
-  --curvature-resample-ds "${curvature_resample_ds}" \\
-  --curvature-method "${curvature_method}" \\
-  --curvature-spline-mode "${curvature_spline_mode}" \\
-  --curvature-spline-smooth "${curvature_spline_smooth}" \\
-  --curvature-spline-degree "${curvature_spline_degree}" \\
-  --curvature-field-smooth-method "${curvature_field_smooth_method}" \\
-  --curvature-field-smooth-sigma "${curvature_field_smooth_sigma}" \\
-  --curvature-circle-window "${curvature_circle_window}" \\
-  --curvature-savgol-window "${curvature_savgol_window}" \\
-  --curvature-savgol-poly "${curvature_savgol_poly}" \\
-  --normal-deriv-method "${normal_deriv_method}" \\
-  --normal-deriv-spline2d-smooth "${normal_deriv_spline2d_smooth}" \\
-  --normal-deriv-mls-ns "${normal_deriv_mls_ns}" \\
-  --normal-deriv-mls-nn "${normal_deriv_mls_nn}" \\
-  --normal-deriv-hessian-smooth "${normal_deriv_hessian_smooth}" \\
-  --normal-deriv-hessian-window "${normal_deriv_hessian_window}" \\
-  --normal-deriv-hessian-poly "${normal_deriv_hessian_poly}" \\
+
+echo "Running step5 GPU Pollock on node \$SLURM_NODELIST"
+$(declare -f print_run_context)
+print_run_context "mode=slurm backend=gpu"
+
+"\$TAICHI_PY" ./scripts/step5_single_field_paths.py \
+  ${common_args} \
+  --backend gpu \
   ${snapshot_args}
 
 echo "End Time: \$(date)"
 EOF
+}
+
+os_name="$(uname -s)"
+if [[ "${os_name}" == "Darwin" ]]; then
+    run_local "${os_name}"
+elif command -v sbatch >/dev/null 2>&1; then
+    run_slurm
+else
+    run_local "${os_name}"
+fi

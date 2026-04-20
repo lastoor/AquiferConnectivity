@@ -277,6 +277,77 @@ def _diagonal_update(
 
 
 @_njit(cache=True)
+def _second_order_update_no_guard(
+    T: np.ndarray,
+    vx_: float,
+    vy_: float,
+    dx: float,
+    dy: float,
+    n_y: int,
+    n_x: int,
+    j: int,
+    i: int,
+) -> float:
+    denom    = 0.0
+    rhs      = 1.0
+    used_any = False
+
+    if vx_ > 0.0:
+        if i >= 2 and math.isfinite(T[j, i - 1]) and math.isfinite(T[j, i - 2]):
+            denom += 3.0 * vx_ / (2.0 * dx)
+            rhs   += vx_ * (4.0 * T[j, i - 1] - T[j, i - 2]) / (2.0 * dx)
+            used_any = True
+        elif i >= 1 and math.isfinite(T[j, i - 1]):
+            denom += vx_ / dx
+            rhs   += vx_ * T[j, i - 1] / dx
+            used_any = True
+        else:
+            return math.inf
+    elif vx_ < 0.0:
+        if i <= n_x - 3 and math.isfinite(T[j, i + 1]) and math.isfinite(T[j, i + 2]):
+            denom += 3.0 * (-vx_) / (2.0 * dx)
+            rhs   += (-vx_) * (4.0 * T[j, i + 1] - T[j, i + 2]) / (2.0 * dx)
+            used_any = True
+        elif i <= n_x - 2 and math.isfinite(T[j, i + 1]):
+            denom += (-vx_) / dx
+            rhs   += (-vx_) * T[j, i + 1] / dx
+            used_any = True
+        else:
+            return math.inf
+
+    if vy_ > 0.0:
+        if j >= 2 and math.isfinite(T[j - 1, i]) and math.isfinite(T[j - 2, i]):
+            denom += 3.0 * vy_ / (2.0 * dy)
+            rhs   += vy_ * (4.0 * T[j - 1, i] - T[j - 2, i]) / (2.0 * dy)
+            used_any = True
+        elif j >= 1 and math.isfinite(T[j - 1, i]):
+            denom += vy_ / dy
+            rhs   += vy_ * T[j - 1, i] / dy
+            used_any = True
+        else:
+            return math.inf
+    elif vy_ < 0.0:
+        if j <= n_y - 3 and math.isfinite(T[j + 1, i]) and math.isfinite(T[j + 2, i]):
+            denom += 3.0 * (-vy_) / (2.0 * dy)
+            rhs   += (-vy_) * (4.0 * T[j + 1, i] - T[j + 2, i]) / (2.0 * dy)
+            used_any = True
+        elif j <= n_y - 2 and math.isfinite(T[j + 1, i]):
+            denom += (-vy_) / dy
+            rhs   += (-vy_) * T[j + 1, i] / dy
+            used_any = True
+        else:
+            return math.inf
+
+    if not used_any or denom <= 0.0:
+        return math.inf
+
+    cand = rhs / denom
+    if not math.isfinite(cand):
+        return math.inf
+    return cand
+
+
+@_njit(cache=True)
 def _fsm_sweep_kernel(
     T: np.ndarray,
     vx: np.ndarray,
@@ -341,6 +412,64 @@ def _fsm_sweep_kernel(
     return max_change
 
 
+@_njit(cache=True)
+def _fsm_sweep_kernel_new(
+    T: np.ndarray,
+    vx: np.ndarray,
+    vy: np.ndarray,
+    dx: float,
+    dy: float,
+    pinned: np.ndarray,
+    monotone: bool,
+    use_second_order: bool,
+) -> float:
+    """Run one full FSM sweep cycle for the auto-inflow solver."""
+    n_y, n_x = vx.shape
+    max_change = 0.0
+
+    step_js = (1, -1, -1, 1)
+    step_is = (1, 1, -1, -1)
+
+    for sd in range(4):
+        step_j = step_js[sd]
+        step_i = step_is[sd]
+
+        for jj in range(n_y):
+            j = jj if step_j == 1 else n_y - 1 - jj
+            for ii in range(n_x):
+                i = ii if step_i == 1 else n_x - 1 - ii
+
+                if pinned[j, i]:
+                    continue
+
+                vx_ = vx[j, i]
+                vy_ = vy[j, i]
+                if vx_ == 0.0 and vy_ == 0.0:
+                    continue
+
+                T_old = T[j, i]
+                if use_second_order:
+                    T_new = _second_order_update_no_guard(T, vx_, vy_, dx, dy, n_y, n_x, j, i)
+                else:
+                    T_new = _first_order_update(T, vx_, vy_, dx, dy, n_y, n_x, j, i)
+
+                if not math.isfinite(T_new):
+                    continue
+
+                if monotone:
+                    if T_new < T_old:
+                        T[j, i] = T_new
+                else:
+                    T[j, i] = T_new
+
+                if math.isfinite(T_old) and math.isfinite(T[j, i]):
+                    change = abs(T[j, i] - T_old)
+                    if change > max_change:
+                        max_change = change
+
+    return max_change
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -380,6 +509,254 @@ def compute_fsm_residual_mse(
     if not np.any(valid):
         return float("nan")
     return float(np.mean(residual[valid] ** 2))
+
+
+def _pin_inflow_boundary(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    T_inflow: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Initialize travel time by pinning inflow boundary nodes from velocity sign."""
+    n_y, n_x = vx.shape
+    t_init = np.full((n_y, n_x), np.inf, dtype=float)
+    pinned = np.zeros((n_y, n_x), dtype=bool)
+
+    mask = vx[:, 0] > 0.0
+    t_init[mask, 0] = T_inflow
+    pinned[mask, 0] = True
+
+    mask = vx[:, -1] < 0.0
+    t_init[mask, -1] = T_inflow
+    pinned[mask, -1] = True
+
+    mask = vy[0, :] > 0.0
+    t_init[0, mask] = T_inflow
+    pinned[0, mask] = True
+
+    mask = vy[-1, :] < 0.0
+    t_init[-1, mask] = T_inflow
+    pinned[-1, mask] = True
+
+    return t_init, pinned
+
+
+def _pin_source_mask(
+    source_mask: np.ndarray,
+    T_inflow: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Initialize travel time from an explicit pinned source region."""
+    source_mask = np.asarray(source_mask, dtype=bool)
+    t_init = np.full(source_mask.shape, np.inf, dtype=float)
+    t_init[source_mask] = T_inflow
+    return t_init, source_mask.copy()
+
+
+def solve_fsm_travel_time_new(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    dx: float,
+    dy: float,
+    source_mask: np.ndarray | None = None,
+    T_inflow: float = 0.0,
+    max_sweeps: int = 200,
+    tol: float = 1e-10,
+    verbose: bool = False,
+    second_order: bool = False,
+    *,
+    use_inlet_cut: bool = False,
+) -> np.ndarray:
+    """Solve ``v · ∇T = 1`` from cell-centered velocities.
+
+    Parameters
+    ----------
+    vx, vy : ndarray, shape (n_y, n_x)
+        Cell-centered velocity components.
+    dx, dy : float
+        Grid spacing.
+    source_mask : bool ndarray or None, default None
+        Explicit pinned region where ``T = T_inflow``. When omitted or empty,
+        the solver falls back to auto-detected inflow boundary pinning unless
+        ``use_inlet_cut=True``.
+    T_inflow : float, default 0.0
+        Value imposed on pinned source cells or inflow boundary nodes.
+    max_sweeps : int, default 200
+        Maximum number of full 4-direction sweep cycles per phase.
+    tol : float, default 1e-10
+        Sweep convergence tolerance.
+    verbose : bool, default False
+        When True, print per-sweep progress.
+    second_order : bool, default False
+        When True, run a second-order non-monotone phase after the first-order
+        monotone solve converges.
+    use_inlet_cut : bool, default False
+        When True, reinterpret ``source_mask`` as a single inlet-cut column,
+        solve only on the strictly downwind subdomain, set the cut column to
+        ``T_inflow``, and return ``np.inf`` upwind.
+    """
+    vx = np.asarray(vx, dtype=float)
+    vy = np.asarray(vy, dtype=float)
+    if vx.shape != vy.shape:
+        raise ValueError("vx and vy must have the same shape.")
+    if vx.ndim != 2:
+        raise ValueError("vx and vy must be 2D arrays.")
+    if dx <= 0.0 or dy <= 0.0:
+        raise ValueError("dx and dy must be positive.")
+    if max_sweeps < 1:
+        raise ValueError("max_sweeps must be at least 1.")
+    if tol < 0.0:
+        raise ValueError("tol must be non-negative.")
+    if source_mask is not None:
+        source_mask = np.asarray(source_mask, dtype=bool)
+        if source_mask.shape != vx.shape:
+            raise ValueError("source_mask must have the same shape as vx and vy.")
+
+    has_source_mask = source_mask is not None and np.any(source_mask)
+
+    if use_inlet_cut:
+        if not has_source_mask:
+            raise ValueError("use_inlet_cut=True requires a non-empty source_mask.")
+        n_y, n_x = vx.shape
+        source_col, downwind_start = _extract_inlet_cut(source_mask)
+        full_t = np.full((n_y, n_x), np.inf, dtype=float)
+        full_t[:, source_col] = T_inflow
+
+        if downwind_start >= n_x:
+            return full_t
+
+        vx_downwind = vx[:, downwind_start:]
+        vy_downwind = vy[:, downwind_start:]
+        n_y_downwind, n_x_downwind = vx_downwind.shape
+        vx_augmented = np.empty((n_y_downwind, n_x_downwind + 1), dtype=float)
+        vy_augmented = np.empty((n_y_downwind, n_x_downwind + 1), dtype=float)
+        vx_augmented[:, 0] = vx_downwind[:, 0]
+        vx_augmented[:, 1:] = vx_downwind
+        vy_augmented[:, 0] = vy_downwind[:, 0]
+        vy_augmented[:, 1:] = vy_downwind
+        source_mask_downwind = np.zeros_like(vx_augmented, dtype=bool)
+        source_mask_downwind[:, 0] = True
+
+        t_downwind = solve_fsm_travel_time_new(
+            vx_augmented,
+            vy_augmented,
+            dx,
+            dy,
+            source_mask=source_mask_downwind,
+            T_inflow=T_inflow,
+            max_sweeps=max_sweeps,
+            tol=tol,
+            verbose=verbose,
+            second_order=second_order,
+            use_inlet_cut=False,
+        )
+        full_t[:, downwind_start:] = t_downwind[:, 1:]
+        return full_t
+
+    if has_source_mask:
+        T, pinned = _pin_source_mask(source_mask, T_inflow)
+    else:
+        T, pinned = _pin_inflow_boundary(vx, vy, T_inflow)
+
+    vx_f = np.ascontiguousarray(vx, dtype=np.float64)
+    vy_f = np.ascontiguousarray(vy, dtype=np.float64)
+    pinned_b = np.ascontiguousarray(pinned, dtype=np.bool_)
+
+    for sweep in range(max_sweeps):
+        change = _fsm_sweep_kernel_new(
+            T,
+            vx_f,
+            vy_f,
+            dx,
+            dy,
+            pinned_b,
+            True,
+            False,
+        )
+        if verbose:
+            print(
+                f"  [1st] sweep {sweep + 1:3d}: max|dT| = {change:.3e}, "
+                f"reached {np.isfinite(T).sum()}/{T.size} nodes"
+            )
+        if sweep > 0 and change < tol and np.isfinite(T).all():
+            break
+
+    if not second_order:
+        return T
+
+    if verbose:
+        print("  --- switching to 2nd-order ---")
+
+    for sweep in range(max_sweeps):
+        change = _fsm_sweep_kernel_new(
+            T,
+            vx_f,
+            vy_f,
+            dx,
+            dy,
+            pinned_b,
+            False,
+            True,
+        )
+        if verbose:
+            print(f"  [2nd] sweep {sweep + 1:3d}: max|dT| = {change:.3e}")
+        if sweep > 0 and change < tol:
+            break
+
+    return T
+
+
+def compute_fsm_residual_field_new(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    t_field: np.ndarray,
+    dx: float,
+    dy: float,
+    scheme: str = "central",
+) -> np.ndarray:
+    """Return ``v·∇T - 1`` using either a central or first-order upwind stencil."""
+    vx = np.asarray(vx, dtype=float)
+    vy = np.asarray(vy, dtype=float)
+    t_field = np.asarray(t_field, dtype=float)
+
+    if vx.shape != vy.shape or vx.shape != t_field.shape:
+        raise ValueError("vx, vy, and t_field must have the same shape.")
+    if vx.ndim != 2:
+        raise ValueError("vx, vy, and t_field must be 2D arrays.")
+    if dx <= 0.0 or dy <= 0.0:
+        raise ValueError("dx and dy must be positive.")
+
+    n_y, n_x = t_field.shape
+    grad_x = np.zeros((n_y, n_x), dtype=float)
+    grad_y = np.zeros((n_y, n_x), dtype=float)
+    invalid = ~np.isfinite(t_field) | ((vx == 0.0) & (vy == 0.0))
+
+    if scheme == "central":
+        grad_x[:, 1:-1] = (t_field[:, 2:] - t_field[:, :-2]) / (2.0 * dx)
+        grad_y[1:-1, :] = (t_field[2:, :] - t_field[:-2, :]) / (2.0 * dy)
+        boundary = np.zeros((n_y, n_x), dtype=bool)
+        boundary[[0, -1], :] = True
+        boundary[:, [0, -1]] = True
+        invalid |= boundary
+    elif scheme == "upwind1":
+        mask = vx[:, 1:] > 0.0
+        grad_x[:, 1:][mask] = (t_field[:, 1:] - t_field[:, :-1])[mask] / dx
+        mask = vx[:, :-1] < 0.0
+        grad_x[:, :-1][mask] = (t_field[:, 1:] - t_field[:, :-1])[mask] / dx
+        mask = vy[1:, :] > 0.0
+        grad_y[1:, :][mask] = (t_field[1:, :] - t_field[:-1, :])[mask] / dy
+        mask = vy[:-1, :] < 0.0
+        grad_y[:-1, :][mask] = (t_field[1:, :] - t_field[:-1, :])[mask] / dy
+
+        cols = np.arange(n_x)
+        rows = np.arange(n_y)
+        no_x = ((vx > 0.0) & (cols == 0)[np.newaxis, :]) | ((vx < 0.0) & (cols == n_x - 1)[np.newaxis, :])
+        no_y = ((vy > 0.0) & (rows == 0)[:, np.newaxis]) | ((vy < 0.0) & (rows == n_y - 1)[:, np.newaxis])
+        invalid |= no_x | no_y
+    else:
+        raise ValueError(f"Unknown scheme: {scheme!r}")
+
+    residual = vx * grad_x + vy * grad_y - 1.0
+    residual[invalid] = np.nan
+    return residual
 
 def _face_to_cell_centered_velocity(
     vx: np.ndarray,
@@ -582,6 +959,7 @@ def solve_fsm_travel_time(
     consecutive_passes: int = 1,
     order: int = 1,
     neighbors: int = 4,
+    use_inlet_cut: bool = False,
     solver: str = "fipy",
 ) -> np.ndarray:
     """Solve ``v · ∇T = 1`` from MAC-face velocities.
@@ -596,11 +974,19 @@ def solve_fsm_travel_time(
         Grid spacing.
     source_mask : bool ndarray, shape (ny, nx)
         Cells where ``T = 0``.
-    solver : {"fipy", "sweep", "legacy"}
+    use_inlet_cut : bool, default False
+        When supported by the selected backend, reinterpret ``source_mask`` as
+        a single inlet-cut column, solve only on the strictly downwind domain,
+        set the cut column to zero, and return ``np.inf`` upwind.
+    solver : {"fipy", "sweep", "legacy", "new"}
         Numerical backend. ``"fipy"`` is the default and falls back to
         ``"sweep"`` automatically when FiPy / PETSc is unavailable.
         ``"legacy"`` routes through ``solve_fsm_travel_time_legacy()`` after
-        averaging MAC-face velocities to cell centers.
+        averaging MAC-face velocities to cell centers. ``"new"`` routes
+        through ``solve_fsm_travel_time_new()`` after averaging MAC-face
+        velocities to cell centers and supports either explicit pinned
+        ``source_mask`` cells or auto-detected inflow boundary pinning when
+        ``source_mask`` is empty.
 
     Other parameters are forwarded to the sweep backend when it is selected
     explicitly or used as the fallback.
@@ -619,7 +1005,7 @@ def solve_fsm_travel_time(
     if vy.shape != expected_vy:
         raise ValueError(f"vy must have shape {expected_vy}, got {vy.shape}.")
 
-    allowed_solvers = {"fipy", "sweep", "legacy"}
+    allowed_solvers = {"fipy", "sweep", "legacy", "new"}
     if solver not in allowed_solvers:
         raise ValueError(f"solver must be one of {sorted(allowed_solvers)}.")
 
@@ -648,33 +1034,101 @@ def solve_fsm_travel_time(
             mse_check_every=mse_check_every,
             mse_activation_factor=mse_activation_factor,
             consecutive_passes=consecutive_passes,
+            use_inlet_cut=use_inlet_cut,
         )
 
-    source_col, downwind_start = _extract_inlet_cut(source_mask)
-    full_t = np.full((ny, nx), np.inf, dtype=float)
-    full_t[:, source_col] = 0.0
+    if solver == "new":
+        if mse_tol is not None:
+            warnings.warn(
+                "mse_tol is ignored by solver='new'.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if convergence_mode != "update_or_mse":
+            warnings.warn(
+                "convergence_mode is ignored by solver='new'.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if mse_check_every != 5:
+            warnings.warn(
+                "mse_check_every is ignored by solver='new'.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if mse_activation_factor != 10.0:
+            warnings.warn(
+                "mse_activation_factor is ignored by solver='new'.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if consecutive_passes != 1:
+            warnings.warn(
+                "consecutive_passes is ignored by solver='new'.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+        if neighbors != 4:
+            raise ValueError("solver='new' only supports neighbors=4.")
+        if order not in {1, 2}:
+            raise ValueError("solver='new' only supports order=1 or order=2.")
+        return solve_fsm_travel_time_new(
+            vx_cell,
+            vy_cell,
+            dx,
+            dy,
+            source_mask=source_mask,
+            max_sweeps=max_sweeps,
+            tol=tol,
+            second_order=(order == 2),
+            use_inlet_cut=use_inlet_cut,
+        )
 
-    if downwind_start >= nx:
+    if use_inlet_cut:
+        source_col, downwind_start = _extract_inlet_cut(source_mask)
+        full_t = np.full((ny, nx), np.inf, dtype=float)
+        full_t[:, source_col] = 0.0
+
+        if downwind_start >= nx:
+            return full_t
+
+        vx_downwind = vx_cell[:, downwind_start:]
+        vy_downwind = vy_cell[:, downwind_start:]
+        ny_downwind, nx_downwind = vx_downwind.shape
+        vx_augmented = np.empty((ny_downwind, nx_downwind + 1), dtype=float)
+        vy_augmented = np.empty((ny_downwind, nx_downwind + 1), dtype=float)
+        vx_augmented[:, 0] = vx_downwind[:, 0]
+        vx_augmented[:, 1:] = vx_downwind
+        vy_augmented[:, 0] = vy_downwind[:, 0]
+        vy_augmented[:, 1:] = vy_downwind
+        source_mask_downwind = np.zeros_like(vx_augmented, dtype=bool)
+        source_mask_downwind[:, 0] = True
+
+        t_downwind = _solve_fsm_travel_time_sweep(
+            vx_augmented,
+            vy_augmented,
+            dx,
+            dy,
+            source_mask_downwind,
+            max_sweeps=max_sweeps,
+            tol=tol,
+            mse_tol=mse_tol,
+            convergence_mode=convergence_mode,
+            mse_check_every=mse_check_every,
+            mse_activation_factor=mse_activation_factor,
+            consecutive_passes=consecutive_passes,
+            order=order,
+            neighbors=neighbors,
+        )
+        full_t[:, downwind_start:] = t_downwind[:, 1:]
         return full_t
 
-    vx_downwind = vx_cell[:, downwind_start:]
-    vy_downwind = vy_cell[:, downwind_start:]
-    ny_downwind, nx_downwind = vx_downwind.shape
-    vx_augmented = np.empty((ny_downwind, nx_downwind + 1), dtype=float)
-    vy_augmented = np.empty((ny_downwind, nx_downwind + 1), dtype=float)
-    vx_augmented[:, 0] = vx_downwind[:, 0]
-    vx_augmented[:, 1:] = vx_downwind
-    vy_augmented[:, 0] = vy_downwind[:, 0]
-    vy_augmented[:, 1:] = vy_downwind
-    source_mask_downwind = np.zeros_like(vx_augmented, dtype=bool)
-    source_mask_downwind[:, 0] = True
-
-    t_downwind = _solve_fsm_travel_time_sweep(
-        vx_augmented,
-        vy_augmented,
+    return _solve_fsm_travel_time_sweep(
+        vx_cell,
+        vy_cell,
         dx,
         dy,
-        source_mask_downwind,
+        source_mask,
         max_sweeps=max_sweeps,
         tol=tol,
         mse_tol=mse_tol,
@@ -685,8 +1139,6 @@ def solve_fsm_travel_time(
         order=order,
         neighbors=neighbors,
     )
-    full_t[:, downwind_start:] = t_downwind[:, 1:]
-    return full_t
 
 def solve_fsm_travel_time_legacy(
     vx: np.ndarray,

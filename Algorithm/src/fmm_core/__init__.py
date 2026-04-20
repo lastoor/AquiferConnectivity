@@ -18,9 +18,11 @@ from .fsm import (
     backtrack_path_rk45,
     compute_fsm_path as compute_fsm_path_velocity,
     compute_fsm_residual_field,
+    compute_fsm_residual_field_new,
     compute_fsm_residual_mse,
     solve_fsm_travel_time_legacy,
     solve_fsm_travel_time,
+    solve_fsm_travel_time_new,
 )
 from .metrics import distance_distribution, directed_nn_distances, resample_by_arclength
 from .speed import prepare_fmm_speed
@@ -46,8 +48,10 @@ __all__ = [
     "prepare_fmm_speed",
     "solve_fsm_travel_time",
     "solve_fsm_travel_time_legacy",
+    "solve_fsm_travel_time_new",
     "backtrack_path_rk45",
     "compute_fsm_path_velocity",
     "compute_fsm_residual_field",
+    "compute_fsm_residual_field_new",
     "compute_fsm_residual_mse",
 ]

@@ -3027,8 +3027,8 @@ def parse_args() -> argparse.Namespace:
         help="Only start FSM residual-MSE checks once max_change falls below this factor times --fsm-tol for update-screened modes.")
     parser.add_argument("--fsm-consecutive-passes", type=int, default=2,
         help="Require the FSM convergence rule to pass this many consecutive eligible checks before stopping.")
-    parser.add_argument("--fsm-solver", choices=["fipy", "sweep", "legacy"], default="fipy",
-        help="FSM backend. 'fipy' uses the FiPy/PETSc solver with sweep fallback in Algorithm; 'sweep' forces the current inlet-cut sweep backend; 'legacy' uses the old internal-source cell-centered sweep solver.")
+    parser.add_argument("--fsm-solver", choices=["fipy", "sweep", "legacy", "new"], default="fipy",
+        help="FSM backend. 'fipy' uses the FiPy/PETSc solver with sweep fallback in Algorithm; 'sweep' forces the current sweep backend; 'legacy' uses the old cell-centered sweep solver; 'new' selects the two-phase FSM backend with explicit source-mask support.")
     parser.add_argument("--fsm-dt", type=float, default=0.5,
         help="RK45 max step size (grid cells) for FSM path backtracking.")
     parser.add_argument("--fsm-max-steps", type=int, default=10000,

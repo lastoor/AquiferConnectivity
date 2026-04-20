@@ -624,3 +624,19 @@
   - `bash -n submit_step5_gpu.sh`
 - Limitations/follow-up:
   - This changes only the batch-wrapper default; the `step5_single_field_paths.py` CLI default remains `1e-6` unless overridden explicitly.
+
+## 2026-04-19
+- Agent/tool: Codex (GPT-5)
+- Summary: Reworked `submit_step5_gpu.sh` into a dual-mode Step 5 launcher that auto-selects Slurm submission on cluster hosts and direct local execution on macOS or non-Slurm machines. Local runs now derive repo-relative paths, honor `STEP5_PYTHON` / `STEP5_PYTHONPATH` / `STEP5_LOCAL_BACKEND`, prefer GPU on macOS with a Taichi preflight, and fall back to CPU while disabling unsupported snapshots when GPU initialization is unavailable. Also updated the Pollock GPU summary to report the actual Taichi backend (`taichi_arch`) so CPU fallback is visible to callers.
+- Files changed:
+  - `submit_step5_gpu.sh`
+  - `README.md`
+  - `agent/log.md`
+  - `../FlowSimulation/simulation/particle_tracking/pollock_gpu.py`
+  - `../FlowSimulation/tests/test_particle_tracking.py`
+- Validation:
+  - `bash -n DataAnalysis/submit_step5_gpu.sh`
+  - `python -c "import ast, pathlib; [ast.parse(pathlib.Path(p).read_text()) for p in ['../FlowSimulation/simulation/particle_tracking/pollock_gpu.py','../FlowSimulation/tests/test_particle_tracking.py']]; print('AST OK')"`
+- Limitations/follow-up:
+  - End-to-end Step 5 execution was not run here, so the new local launcher path was validated by shell parsing and code-path review rather than a full solve.
+  - The local GPU preflight only checks Taichi initialization; the actual run can still report `taichi_arch="cpu"` if the runtime falls back later.
