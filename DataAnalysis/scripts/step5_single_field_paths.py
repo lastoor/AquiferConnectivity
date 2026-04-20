@@ -1271,8 +1271,22 @@ def solve_single_field(
     fp_fsm: np.ndarray | None = None
     t_min_fsm: np.ndarray | None = None
     if fsm_fp:
-        if fsm_convergence_mode is None:
-            fsm_convergence_mode = "update_and_mse" if fsm_mse_tol is not None else "update"
+        if fsm_solver == "new":
+            # The new FSM backend ignores the legacy residual-gating controls.
+            fsm_effective_mse_tol = None
+            fsm_effective_convergence_mode = "update_or_mse"
+            fsm_effective_mse_check_every = 5
+            fsm_effective_mse_activation_factor = 10.0
+            fsm_effective_consecutive_passes = 1
+        else:
+            fsm_effective_mse_tol = fsm_mse_tol
+            if fsm_convergence_mode is None:
+                fsm_effective_convergence_mode = "update_and_mse" if fsm_mse_tol is not None else "update"
+            else:
+                fsm_effective_convergence_mode = fsm_convergence_mode
+            fsm_effective_mse_check_every = fsm_mse_check_every
+            fsm_effective_mse_activation_factor = fsm_mse_activation_factor
+            fsm_effective_consecutive_passes = fsm_consecutive_passes
         vx_face, vy_face = sim_hyd.compute_velocity(
             k_field,
             x,
@@ -1295,11 +1309,11 @@ def solve_single_field(
             geometry.y,
             max_sweeps=fsm_max_sweeps,
             tol=fsm_tol,
-            mse_tol=fsm_mse_tol,
-            convergence_mode=fsm_convergence_mode,
-            mse_check_every=fsm_mse_check_every,
-            mse_activation_factor=fsm_mse_activation_factor,
-            consecutive_passes=fsm_consecutive_passes,
+            mse_tol=fsm_effective_mse_tol,
+            convergence_mode=fsm_effective_convergence_mode,
+            mse_check_every=fsm_effective_mse_check_every,
+            mse_activation_factor=fsm_effective_mse_activation_factor,
+            consecutive_passes=fsm_effective_consecutive_passes,
             solver=fsm_solver,
             dt=fsm_dt,
             max_steps=fsm_max_steps,

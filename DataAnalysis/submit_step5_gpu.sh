@@ -14,7 +14,7 @@ synthetic_offset="-3.0"
 # GRF logK source (used when logk_source="grf")
 grf_std="2.25"
 grf_length_scale=""   # leave empty to use cfg.length_scale
-grf_seed="2"
+grf_seed="3"
 grf_minpadding="0"
 
 run_tag="3_synthetic_plume"
@@ -23,12 +23,12 @@ dh=""
 fsm_fp="true"
 fsm_max_sweeps="100000"
 fsm_tol="1e-8"
-fsm_mse_tol="1e-4"
+fsm_mse_tol=""
 fsm_convergence_mode=""
 fsm_mse_check_every="5"
 fsm_mse_activation_factor="10.0"
 fsm_consecutive_passes="2"
-fsm_solver="legacy" # Options: sweep, fipy, legacy, new
+fsm_solver="new" # Options: sweep, fipy, legacy, new
 fsm_dt="0.5"
 fsm_max_steps="1000000"
 

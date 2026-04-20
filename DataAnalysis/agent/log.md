@@ -640,3 +640,14 @@
 - Limitations/follow-up:
   - End-to-end Step 5 execution was not run here, so the new local launcher path was validated by shell parsing and code-path review rather than a full solve.
   - The local GPU preflight only checks Taichi initialization; the actual run can still report `taichi_arch="cpu"` if the runtime falls back later.
+
+## 2026-04-19
+- Agent/tool: Codex (GPT-5)
+- Summary: Normalized FSM convergence arguments inside `step5_single_field_paths.py` when `--fsm-solver new` is selected, so Step 5 no longer forwards legacy residual-gating controls (`mse_tol`, `convergence_mode`, `consecutive_passes`, etc.) that the new Algorithm FSM backend explicitly ignores and warns about.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - `python -c "import ast, pathlib; ast.parse(pathlib.Path('DataAnalysis/scripts/step5_single_field_paths.py').read_text()); print('AST OK')"`
+- Limitations/follow-up:
+  - This removes the warning noise for `fsm_solver=new` but does not change the numerical behavior of the underlying Algorithm FSM backend.
