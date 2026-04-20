@@ -5,6 +5,7 @@ Output/
 __pycache__/
 *.py[cod]
 *$py.class
+scripts/*.png
 
 # Test/cache tooling
 .pytest_cache/
