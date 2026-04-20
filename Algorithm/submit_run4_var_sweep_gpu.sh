@@ -1,16 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 
-# VAR=("0" "0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
-VAR=("0" "0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
+VAR=("0" "0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
+# VAR=("0" "0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
+# VAR=("1" "5")
 length_scale="0.05"
-run="10_fsm"
+run="10_fsm_new"
 dh="0.1"
 
 num_mc="1000"
 field_size="200"
 num_particles="1000000"
 cpu_workers="6"
+fsm_solver="new" # Options: fipy, sweep, legacy, new
+fsm_max_sweeps="100000"
+fsm_tol="1e-8"
+fsm_mse_tol=""
+fsm_convergence_mode=""
+fsm_mse_check_every="5"
+fsm_mse_activation_factor="10.0"
+fsm_consecutive_passes="2"
+fsm_dt="0.5"
+fsm_max_steps="1000000"
 
 time="00:60:00"
 mem_per_cpu="2GB"
@@ -81,7 +92,17 @@ which python
   --fmm_face_output full \\
   --fmm_face_mapping to_cell_avg \\
   --fmm_zero_policy obstacle \\
-  --fmm_min_speed 1e-12
+  --fmm_min_speed 1e-12 \\
+  --fsm_solver ${fsm_solver} \\
+  --fsm_max_sweeps ${fsm_max_sweeps} \\
+  --fsm_tol ${fsm_tol} \\
+  --fsm_mse_check_every ${fsm_mse_check_every} \\
+  --fsm_mse_activation_factor ${fsm_mse_activation_factor} \\
+  --fsm_consecutive_passes ${fsm_consecutive_passes} \\
+  --fsm_dt ${fsm_dt} \\
+  --fsm_max_steps ${fsm_max_steps} \\
+  ${fsm_mse_tol:+--fsm_mse_tol ${fsm_mse_tol}} \\
+  ${fsm_convergence_mode:+--fsm_convergence_mode ${fsm_convergence_mode}}
 
 echo "End Time: \$(date)"
 EOF

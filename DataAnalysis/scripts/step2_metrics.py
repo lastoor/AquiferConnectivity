@@ -119,6 +119,7 @@ def runpaths_from_dict(raw: dict[str, Any]) -> RunPaths:
         size_str=str(raw["size_str"]),
         mc_files=[Path(p) for p in raw.get("mc_files", [])],
         main_output_files=[Path(p) for p in raw.get("main_output_files", [])],
+        aggregate_output_file=Path(raw["aggregate_output_file"]) if raw.get("aggregate_output_file") else None,
         fp_files=[Path(p) for p in raw.get("fp_files", [])],
         lrp_files=[Path(p) for p in raw.get("lrp_files", [])],
         lrp_fmm_files=[Path(p) for p in raw.get("lrp_fmm_files", [])],
@@ -202,6 +203,30 @@ def _normalize_npz_value(value: np.ndarray) -> Any:
 def _load_main_output_impl(npz_path: Path, *, allow_pickle: bool) -> dict[str, Any]:
     with np.load(npz_path, allow_pickle=allow_pickle) as data:
         return {k: _normalize_npz_value(data[k]) for k in data.files}
+
+
+def _aggregate_mc_count(output_data: dict[str, Any]) -> int:
+    for value in output_data.values():
+        arr = np.asarray(value)
+        if arr.ndim >= 1 and arr.size > 1:
+            return int(arr.shape[0])
+    return 0
+
+
+def _slice_aggregate_output_data(output_data: dict[str, Any], mc_idx: int) -> dict[str, Any]:
+    sliced: dict[str, Any] = {}
+    for key, value in output_data.items():
+        arr = np.asarray(value)
+        if arr.ndim >= 1 and arr.size > 1 and mc_idx < arr.shape[0]:
+            item = arr[mc_idx]
+            if np.asarray(item).size == 1:
+                scalar = np.asarray(item).item()
+                sliced[key] = np.nan if scalar is None else scalar
+            else:
+                sliced[key] = item
+        else:
+            sliced[key] = value
+    return sliced
 
 
 def _safe_load(paths: list[Path], idx: int) -> np.ndarray | None:
@@ -663,9 +688,11 @@ def run_variance_analysis_from_discovered(
         for rp in run_iter:
             field_size_list.append(rp.size_value)
             use_consolidated = bool(rp.mc_files)
-            if not rp.mc_files and not rp.main_output_files:
+            use_aggregate = (not use_consolidated) and (not rp.main_output_files) and (rp.aggregate_output_file is not None)
+            if not rp.mc_files and not rp.main_output_files and not use_aggregate:
                 warnings.append(f"No mainOutput files found for var={var_}, size={rp.size_str}")
                 continue
+            aggregate_output_data = load_main_output(rp.aggregate_output_file) if use_aggregate and rp.aggregate_output_file else None
 
             len_fp_m: list[float] = []
             len_lrp_m: list[float] = []
@@ -695,20 +722,25 @@ def run_variance_analysis_from_discovered(
             end_fp_fmm: list[float] = []
             end_fp_fsm: list[float] = []
 
-            iter_files = rp.mc_files if use_consolidated else rp.main_output_files
+            if use_consolidated:
+                n_mc = len(rp.mc_files)
+            elif use_aggregate:
+                n_mc = _aggregate_mc_count(aggregate_output_data or {})
+            else:
+                n_mc = len(rp.main_output_files)
             if max_mc_per_size is not None:
-                iter_files = iter_files[:max_mc_per_size]
-            mc_iter = enumerate(iter_files)
-            if show_progress:
-                mc_iter = enumerate(tqdm(iter_files, desc=f"var={var_} size={rp.size_str} MC", unit="mc", leave=False))
+                n_mc = min(n_mc, max_mc_per_size)
 
-            for mc_idx, path in mc_iter:
+            mc_range = tqdm(range(n_mc), desc=f"var={var_} size={rp.size_str} MC", unit="mc", leave=False) if show_progress else range(n_mc)
+            for mc_idx in mc_range:
                 mc_consolidated = None
                 if use_consolidated:
-                    mc_consolidated = load_mc_consolidated(path)
+                    mc_consolidated = load_mc_consolidated(rp.mc_files[mc_idx])
                     output_data = _consolidated_to_output_data(mc_consolidated)
+                elif use_aggregate:
+                    output_data = _slice_aggregate_output_data(aggregate_output_data or {}, mc_idx)
                 else:
-                    output_data = load_main_output(path)
+                    output_data = load_main_output(rp.main_output_files[mc_idx])
                 len_fp_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp"])
                 len_fp_dijkstra_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp_dijkstra"])
                 len_fp_fmm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp_fmm"])
@@ -875,9 +907,11 @@ def run_std_analysis_from_discovered(
         for rp in run_iter:
             field_size.append(rp.size_value)
             use_consolidated = bool(rp.mc_files)
-            if not rp.mc_files and not (rp.fp_files or rp.lrp_files or rp.lrp_fmm_files or rp.fp_dijkstra_files or rp.fp_fmm_files or rp.main_output_files):
+            use_aggregate = (not use_consolidated) and (not rp.main_output_files) and (rp.aggregate_output_file is not None)
+            if not rp.mc_files and not (rp.fp_files or rp.lrp_files or rp.lrp_fmm_files or rp.fp_dijkstra_files or rp.fp_fmm_files or rp.main_output_files or use_aggregate):
                 warnings.append(f"No path/mainOutput files found for std={std_}, size={rp.size_str}")
                 continue
+            aggregate_output_data = load_main_output(rp.aggregate_output_file) if use_aggregate and rp.aggregate_output_file else None
 
             hausdorffDist_fp_lrp_m: list[float] = []
             frechetDist_fp_lrp_m: list[float] = []
@@ -894,6 +928,8 @@ def run_std_analysis_from_discovered(
 
             if use_consolidated:
                 n_mc = len(rp.mc_files)
+            elif use_aggregate:
+                n_mc = _aggregate_mc_count(aggregate_output_data or {})
             else:
                 n_mc = max(
                     len(rp.fp_files),
@@ -912,6 +948,17 @@ def run_std_analysis_from_discovered(
                     mc_consolidated = load_mc_consolidated(rp.mc_files[mc_idx])
                     output_data = _consolidated_to_output_data(mc_consolidated)
                     pathset_loader_fn = lambda mc=mc_consolidated: _consolidated_to_pathset(mc)
+                elif use_aggregate:
+                    output_data = _slice_aggregate_output_data(aggregate_output_data or {}, mc_idx)
+
+                    def pathset_loader_fn(rp: RunPaths = rp, mc_idx: int = mc_idx) -> PathSet:
+                        return PathSet(
+                            fp=_safe_load(rp.fp_files, mc_idx),
+                            lrp=_safe_load(rp.lrp_files, mc_idx),
+                            lrp_fmm=_safe_load(rp.lrp_fmm_files, mc_idx),
+                            fp_dijkstra=_safe_load(rp.fp_dijkstra_files, mc_idx),
+                            fp_fmm=_safe_load(rp.fp_fmm_files, mc_idx),
+                        )
                 else:
                     output_data = load_main_output(rp.main_output_files[mc_idx]) if mc_idx < len(rp.main_output_files) else None
 

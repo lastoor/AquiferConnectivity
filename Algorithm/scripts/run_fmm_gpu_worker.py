@@ -641,6 +641,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fmm_backtracking", type=str, default="discrete", choices=["discrete", "continuous"])
     parser.add_argument("--fmm_zero_policy", type=str, default="obstacle", choices=["obstacle", "clip", "error"])
     parser.add_argument("--fmm_min_speed", type=float, default=1e-12)
+    parser.add_argument("--fsm_solver", type=str, default="fipy", choices=["fipy", "sweep", "legacy", "new"])
+    parser.add_argument("--fsm_max_sweeps", type=int, default=100)
+    parser.add_argument("--fsm_tol", type=float, default=1e-6)
+    parser.add_argument("--fsm_mse_tol", type=float, default=None)
+    parser.add_argument(
+        "--fsm_convergence_mode",
+        type=str,
+        default=None,
+        choices=["update", "mse", "update_or_mse", "update_and_mse"],
+    )
+    parser.add_argument("--fsm_mse_check_every", type=int, default=5)
+    parser.add_argument("--fsm_mse_activation_factor", type=float, default=10.0)
+    parser.add_argument("--fsm_consecutive_passes", type=int, default=1)
+    parser.add_argument("--fsm_dt", type=float, default=0.5)
+    parser.add_argument("--fsm_max_steps", type=int, default=10_000)
     parser.add_argument("--cpu_workers", type=int, default=None, help="CPU worker count for preprocessing/finalization.")
     parser.add_argument("--gpu_device", type=str, default=None, help="GPU token to pin the single GPU worker to.")
     group.add_argument("--std", type=float, default=None)
@@ -689,6 +704,18 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
             "backtracking": args.fmm_backtracking,
             "zero_policy": args.fmm_zero_policy,
             "min_speed": args.fmm_min_speed,
+        },
+        "fsm_arg": {
+            "solver": args.fsm_solver,
+            "max_sweeps": args.fsm_max_sweeps,
+            "tol": args.fsm_tol,
+            "mse_tol": args.fsm_mse_tol,
+            "convergence_mode": args.fsm_convergence_mode,
+            "mse_check_every": args.fsm_mse_check_every,
+            "mse_activation_factor": args.fsm_mse_activation_factor,
+            "consecutive_passes": args.fsm_consecutive_passes,
+            "dt": args.fsm_dt,
+            "max_steps": args.fsm_max_steps,
         },
         "particleTracking_arg": {
             "solver": args.solver,

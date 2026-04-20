@@ -689,6 +689,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 record["status_message"] = f"Head solver failed: {msg}"
                 logger.warning(f"[MC {mc_index}] Head not converged, retrying next trial. {msg}")
                 continue
+            align_with_modflow = bool(config_mc["particleTracking_arg"]["align_with_modflow_velocity"])
             if config_mc["fmm_arg"]["velocity_layout"] == "face":
                 vx_fmm, vy_fmm = sim_hyd.compute_velocity(
                     k_field,
@@ -696,6 +697,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     config_mc["y"],
                     h,
                     output_location="face",
+                    align_with_modflow=align_with_modflow,
                     face_output=config_mc["fmm_arg"]["face_output"],
                 )
             else:
@@ -705,6 +707,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     config_mc["y"],
                     h,
                     output_location="cell",
+                    align_with_modflow=align_with_modflow,
                 )
 
             speed_fmm, traversable_mask, speed_diag = prepare_fmm_speed(
@@ -764,6 +767,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 config_mc["y"],
                 h,
                 output_location="face",
+                align_with_modflow=align_with_modflow,
                 face_output="full",
             )
             _n_y_fsm, _n_x_fsm = k_field.shape
@@ -777,6 +781,25 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             arrival_fsm: float | None = None
             fp_fsm_error: str | None = None
             try:
+                fsm_solver = str(fp_fsm_cfg.get("solver", "fipy"))
+                if fsm_solver == "new":
+                    # Keep the new solver behavior aligned with Step 5.
+                    fsm_effective_mse_tol = None
+                    fsm_effective_convergence_mode = "update_or_mse"
+                    fsm_effective_mse_check_every = 5
+                    fsm_effective_mse_activation_factor = 10.0
+                    fsm_effective_consecutive_passes = 1
+                else:
+                    fsm_effective_mse_tol = fp_fsm_cfg.get("mse_tol")
+                    if fp_fsm_cfg.get("convergence_mode") is None:
+                        fsm_effective_convergence_mode = (
+                            "update_and_mse" if fsm_effective_mse_tol is not None else "update"
+                        )
+                    else:
+                        fsm_effective_convergence_mode = str(fp_fsm_cfg["convergence_mode"])
+                    fsm_effective_mse_check_every = int(fp_fsm_cfg.get("mse_check_every", 5))
+                    fsm_effective_mse_activation_factor = float(fp_fsm_cfg.get("mse_activation_factor", 10.0))
+                    fsm_effective_consecutive_passes = int(fp_fsm_cfg.get("consecutive_passes", 1))
                 fp_fsm, _t_field_fsm, arrival_fsm = compute_fsm_path_velocity(
                     vx_face,
                     vy_face,
@@ -786,6 +809,13 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     config_mc["y"],
                     max_sweeps=int(fp_fsm_cfg.get("max_sweeps", 100)),
                     tol=float(fp_fsm_cfg.get("tol", 1e-6)),
+                    mse_tol=fsm_effective_mse_tol,
+                    convergence_mode=fsm_effective_convergence_mode,
+                    mse_check_every=fsm_effective_mse_check_every,
+                    mse_activation_factor=fsm_effective_mse_activation_factor,
+                    consecutive_passes=fsm_effective_consecutive_passes,
+                    use_inlet_cut=True,
+                    solver=fsm_solver,
                     dt=float(fp_fsm_cfg.get("dt", 0.5)),
                     max_steps=int(fp_fsm_cfg.get("max_steps", 10_000)),
                 )

@@ -137,6 +137,7 @@ class RunPaths:
     size_str: str
     mc_files: list[Path] = field(default_factory=list)
     main_output_files: list[Path] = field(default_factory=list)
+    aggregate_output_file: Path | None = None
     fp_files: list[Path] = field(default_factory=list)
     lrp_files: list[Path] = field(default_factory=list)
     lrp_fmm_files: list[Path] = field(default_factory=list)
@@ -340,20 +341,35 @@ def _resolve_value_dir(run_dir: Path, prefix: str, value: float) -> Path:
 
 def _collect_run_paths(size_dir: Path, size_str: str) -> RunPaths:
     mc_files = sorted(size_dir.glob(f"size{size_str}_mc*.npy"))
+    main_output_dir = size_dir / "main_output"
+    main_output_files = sorted(main_output_dir.glob(f"mainOutput_size{size_str}_mc*.npz"))
+    if not main_output_files:
+        main_output_files = sorted(size_dir.glob(f"mainOutput_size{size_str}_mc*.npz"))
+    aggregate_output_file = None
+    aggregate_candidates = [
+        size_dir / f"size{size_str}.npz",
+        main_output_dir / f"mainOutput_size{size_str}.npz",
+        size_dir / f"mainOutput_size{size_str}.npz",
+    ]
+    for candidate in aggregate_candidates:
+        if candidate.exists():
+            aggregate_output_file = candidate
+            break
     if mc_files:
         return RunPaths(
             size_dir=size_dir,
             size_value=float(size_str),
             size_str=size_str,
             mc_files=mc_files,
+            aggregate_output_file=aggregate_output_file,
         )
-    main_output_files = sorted((size_dir / "main_output").glob(f"mainOutput_size{size_str}_mc*.npz"))
     path_dir = size_dir / "path"
     return RunPaths(
         size_dir=size_dir,
         size_value=float(size_str),
         size_str=size_str,
         main_output_files=main_output_files,
+        aggregate_output_file=aggregate_output_file,
         fp_files=sorted(path_dir.glob(f"fp_size{size_str}_mc*.npy")),
         lrp_files=sorted(path_dir.glob(f"lrp_size{size_str}_mc*.npy")),
         lrp_fmm_files=sorted(path_dir.glob(f"lrp_fmm_size{size_str}_mc*.npy")),
@@ -417,6 +433,7 @@ def runpaths_to_dict(rp: RunPaths) -> dict[str, Any]:
         "size_str": rp.size_str,
         "mc_files": [str(p) for p in rp.mc_files],
         "main_output_files": [str(p) for p in rp.main_output_files],
+        "aggregate_output_file": str(rp.aggregate_output_file) if rp.aggregate_output_file is not None else None,
         "fp_files": [str(p) for p in rp.fp_files],
         "lrp_files": [str(p) for p in rp.lrp_files],
         "lrp_fmm_files": [str(p) for p in rp.lrp_fmm_files],
