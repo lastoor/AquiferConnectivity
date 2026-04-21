@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import Any
 
 import step1_index as step1
 
@@ -27,6 +28,26 @@ def parse_args() -> argparse.Namespace:
         help="Whether to include timestamp/hash in output figure filenames",
     )
     return parser.parse_args()
+
+
+def run_pipeline(cfg: step1.VisualizationConfig, args: argparse.Namespace) -> list[Any]:
+    import step2_metrics as step2
+    import step3_stats as step3
+    import step4_plot as step4
+
+    cache_dir = args.cache_dir
+    step1.run_stage1(cfg, cache_dir=cache_dir)
+    step2.run_stage2(
+        cfg,
+        cache_dir=cache_dir,
+        skip_std=args.skip_std,
+        max_var_values=args.max_var_values,
+        max_std_values=args.max_std_values,
+        max_sizes_per_value=args.max_sizes_per_value,
+        max_mc_per_size=args.max_mc_per_size,
+    )
+    step3.run_stage3(cfg, cache_dir=cache_dir)
+    return step4.run_stage4(cfg, cache_dir=cache_dir, unique_filenames=args.unique_filenames)
 
 
 def main() -> int:
@@ -53,23 +74,7 @@ def main() -> int:
         )
         return 0
 
-    import step2_metrics as step2
-    import step3_stats as step3
-    import step4_plot as step4
-
-    cache_dir = args.cache_dir
-    step1.run_stage1(cfg, cache_dir=cache_dir)
-    step2.run_stage2(
-        cfg,
-        cache_dir=cache_dir,
-        skip_std=args.skip_std,
-        max_var_values=args.max_var_values,
-        max_std_values=args.max_std_values,
-        max_sizes_per_value=args.max_sizes_per_value,
-        max_mc_per_size=args.max_mc_per_size,
-    )
-    step3.run_stage3(cfg, cache_dir=cache_dir)
-    artifacts = step4.run_stage4(cfg, cache_dir=cache_dir, unique_filenames=args.unique_filenames)
+    artifacts = run_pipeline(cfg, args)
 
     print(f"Generated {len(artifacts)} figure artifact(s) in {cfg.output_dir}")
     return 0

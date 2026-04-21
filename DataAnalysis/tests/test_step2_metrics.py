@@ -101,6 +101,10 @@ def _collect_warnings(payload: dict[str, object]) -> list[str]:
     return combined
 
 
+def _warning_mentions_metric(msg: str, metric_name: str) -> bool:
+    return msg.endswith(f"for {metric_name}")
+
+
 def test_step2_metrics_accepts_legacy_files_with_new_config_keys(pipeline_fixture) -> None:
     cfg = step1.load_config(pipeline_fixture["cfg_path"])
     _rewrite_main_output_schema(cfg.data_root, cfg.run_id, legacy=True)
@@ -118,8 +122,8 @@ def test_step2_metrics_accepts_legacy_files_with_new_config_keys(pipeline_fixtur
     with cache_file.open("rb") as f:
         payload = pickle.load(f)
     warnings = _collect_warnings(payload)
-    assert all("for len_fp" not in msg for msg in warnings)
-    assert all("for travel_time_fp" not in msg for msg in warnings)
+    assert not any(_warning_mentions_metric(msg, "len_fp") for msg in warnings)
+    assert not any(_warning_mentions_metric(msg, "travel_time_fp") for msg in warnings)
     fpt_mean = payload["var_results"]["stats"]["var_0.1"]["times"]["fpt"][0][0]
     assert np.isfinite(float(fpt_mean))
 
@@ -131,18 +135,21 @@ def test_step2_metrics_accepts_new_files_with_legacy_config_keys(pipeline_fixtur
         "fp_lrpFMM": "endPointDist_fp_lrpFMM_m",
         "fp_fpDijkstra": "endPointDist_fp_fpDijkstra_m",
         "fp_fpFMM": "endPointDist_fp_fpFMM_m",
+        "fp_fpFSM": "endPointDist_fp_fpFSM_m",
     }
     cfg.distance_main_output_keys["hausdorff"] = {
         "fp_lrp": "hausdorffDist_fp_lrp_m",
         "fp_lrpFMM": "hausdorffDist_fp_lrpFMM_m",
         "fp_fpDijkstra": "hausdorffDist_fp_fpDijkstra_m",
         "fp_fpFMM": "hausdorffDist_fp_fpFMM_m",
+        "fp_fpFSM": "hausdorffDist_fp_fpFSM_m",
     }
     cfg.distance_main_output_keys["frechet"] = {
         "fp_lrp": "frechetDist_fp_lrp_m",
         "fp_lrpFMM": "frechetDist_fp_lrpFMM_m",
         "fp_fpDijkstra": "frechetDist_fp_fpDijkstra_m",
         "fp_fpFMM": "frechetDist_fp_fpFMM_m",
+        "fp_fpFSM": "frechetDist_fp_fpFSM_m",
     }
     cfg.distance_mode["hausdorff"] = "load_from_main_output"
     step1.run_stage1(cfg, cache_dir=pipeline_fixture["cache_dir"])
@@ -158,10 +165,62 @@ def test_step2_metrics_accepts_new_files_with_legacy_config_keys(pipeline_fixtur
     with cache_file.open("rb") as f:
         payload = pickle.load(f)
     warnings = _collect_warnings(payload)
-    assert all("for len_fp" not in msg for msg in warnings)
-    assert all("for travel_time_fp" not in msg for msg in warnings)
+    assert not any(_warning_mentions_metric(msg, "len_fp") for msg in warnings)
+    assert not any(_warning_mentions_metric(msg, "travel_time_fp") for msg in warnings)
     fpt_mean = payload["var_results"]["stats"]["var_0.1"]["times"]["fpt"][0][0]
     assert np.isfinite(float(fpt_mean))
+
+
+def test_consolidated_to_output_data_extracts_hausdorff_max_and_aliases() -> None:
+    mc = {
+        "paths": {},
+        "endpoint": {"dy": {}},
+        "hausdorff": {
+            "fp_vs_lrp": {"max": 1.2},
+            "fp_vs_lrp_fmm": {"max": 1.1},
+            "fp_vs_dijkstra": {"max": 1.3},
+            "fp_vs_fmm": {"max": 1.05},
+            "fp_vs_fsm": None,
+        },
+        "renyi_entropy": {},
+        "computation_time": {},
+    }
+
+    output_data = step2._consolidated_to_output_data(mc)
+
+    assert output_data["hausdorff_fp_vs_lrp"] == 1.2
+    assert output_data["hausdorffDist_fp_lrp_m"] == 1.2
+    assert output_data["hausdorff_fp_vs_lrp_fmm"] == 1.1
+    assert output_data["hausdorffDist_fp_lrpFMM_m"] == 1.1
+    assert output_data["hausdorff_fp_vs_dijkstra"] == 1.3
+    assert output_data["hausdorffDist_fp_fpDijkstra_m"] == 1.3
+    assert output_data["hausdorff_fp_vs_fmm"] == 1.05
+    assert output_data["hausdorffDist_fp_fpFMM_m"] == 1.05
+    assert np.isnan(output_data["hausdorff_fp_vs_fsm"])
+    assert np.isnan(output_data["hausdorffDist_fp_fpFSM_m"])
+
+
+def test_step2_metrics_loads_hausdorff_from_consolidated_outputs(consolidated_pipeline_fixture) -> None:
+    cfg = step1.load_config(consolidated_pipeline_fixture["cfg_path"])
+    step1.run_stage1(cfg, cache_dir=consolidated_pipeline_fixture["cache_dir"])
+
+    cache_file = step2.run_stage2(
+        cfg,
+        cache_dir=consolidated_pipeline_fixture["cache_dir"],
+        max_var_values=1,
+        max_std_values=1,
+        max_sizes_per_value=1,
+        max_mc_per_size=1,
+    )
+
+    with cache_file.open("rb") as f:
+        payload = pickle.load(f)
+
+    warnings = _collect_warnings(payload)
+    assert all("for hausdorff:" not in msg for msg in warnings)
+    haus_mean = payload["var_results"]["stats"]["var_0.1"]["distances"]["hausdorff"]["fp_lrp"][0][0]
+    assert np.isfinite(float(haus_mean))
+    assert haus_mean == 1.2
 
 
 def test_load_main_output_value_prefers_solver_neutral_fp_keys() -> None:

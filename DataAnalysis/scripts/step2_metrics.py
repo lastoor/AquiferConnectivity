@@ -144,6 +144,18 @@ def load_mc_consolidated(npy_path: Path) -> dict[str, Any]:
     return np.load(npy_path, allow_pickle=True).item()
 
 
+def _extract_consolidated_hausdorff_max(mc: dict[str, Any], pair_key: str) -> float:
+    hausdorff = mc.get("hausdorff", {})
+    pair_data = hausdorff.get(pair_key)
+    if not isinstance(pair_data, dict):
+        return float("nan")
+    value = pair_data.get("max", np.nan)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def _consolidated_to_output_data(mc: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {}
     paths = mc.get("paths", {})
@@ -167,6 +179,21 @@ def _consolidated_to_output_data(mc: dict[str, Any]) -> dict[str, Any]:
     out["endpoint_dy_fp_vs_dijkstra"] = dy.get("fp_vs_dijkstra", np.nan)
     out["endpoint_dy_fp_vs_fmm"] = dy.get("fp_vs_fmm", np.nan)
     out["endpoint_dy_fp_vs_fsm"] = dy.get("fp_vs_fsm", np.nan)
+    haus_fp_lrp = _extract_consolidated_hausdorff_max(mc, "fp_vs_lrp")
+    haus_fp_lrp_fmm = _extract_consolidated_hausdorff_max(mc, "fp_vs_lrp_fmm")
+    haus_fp_dijkstra = _extract_consolidated_hausdorff_max(mc, "fp_vs_dijkstra")
+    haus_fp_fmm = _extract_consolidated_hausdorff_max(mc, "fp_vs_fmm")
+    haus_fp_fsm = _extract_consolidated_hausdorff_max(mc, "fp_vs_fsm")
+    out["hausdorff_fp_vs_lrp"] = haus_fp_lrp
+    out["hausdorffDist_fp_lrp_m"] = haus_fp_lrp
+    out["hausdorff_fp_vs_lrp_fmm"] = haus_fp_lrp_fmm
+    out["hausdorffDist_fp_lrpFMM_m"] = haus_fp_lrp_fmm
+    out["hausdorff_fp_vs_dijkstra"] = haus_fp_dijkstra
+    out["hausdorffDist_fp_fpDijkstra_m"] = haus_fp_dijkstra
+    out["hausdorff_fp_vs_fmm"] = haus_fp_fmm
+    out["hausdorffDist_fp_fpFMM_m"] = haus_fp_fmm
+    out["hausdorff_fp_vs_fsm"] = haus_fp_fsm
+    out["hausdorffDist_fp_fpFSM_m"] = haus_fp_fsm
     renyi = mc.get("renyi_entropy", {})
     out["renyi_entropy_S1"] = np.asarray(renyi.get("S1", [np.nan]), dtype=float)
     out["renyi_entropy_S2"] = np.asarray(renyi.get("S2", [np.nan]), dtype=float)

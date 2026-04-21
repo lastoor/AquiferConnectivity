@@ -54,8 +54,8 @@ PYTHONPATH=./scripts python scripts/run_all.py --config configs/visualization.de
 ## Stage-by-Stage Run
 
 ```bash
-CACHE_DIR=/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run10_fsm_new/cache
-FIGURE_DIR=outputs/run10_fsm_new
+CACHE_DIR=/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run11p2_fd/cache
+FIGURE_DIR=outputs/run11p2_fd
 
 PYTHONPATH=./scripts python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" 

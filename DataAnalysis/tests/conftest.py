@@ -67,6 +67,66 @@ def _write_path_set(path_dir: Path, size: int, mc: int, y_shift: float) -> None:
     np.save(path_dir / f"fp_fmm_size{size}_mc{mc}.npy", fp_fmm)
 
 
+def _write_consolidated_mc(path: Path, scale: float, *, include_hausdorff: bool = True) -> None:
+    fp = np.array([[0.0, 0.0], [1.0, 1.0], [2.0, 2.0]], dtype=float)
+    lrp = np.array([[0.0, 0.0], [1.0, 1.1 * scale], [2.0, 2.1 * scale]], dtype=float)
+    lrp_fmm = np.array([[0.0, 0.0], [1.0, 1.05 * scale], [2.0, 2.05 * scale]], dtype=float)
+    fp_dijkstra = np.array([[0.0, 0.0], [1.0, 0.9 * scale], [2.0, 1.9 * scale]], dtype=float)
+    fp_fmm = np.array([[0.0, 0.0], [1.0, 1.02 * scale], [2.0, 2.02 * scale]], dtype=float)
+    fp_fsm = np.array([[0.0, 0.0], [1.0, 0.98 * scale], [2.0, 1.98 * scale]], dtype=float)
+
+    hausdorff = {}
+    if include_hausdorff:
+        hausdorff = {
+            "fp_vs_lrp": {"max": 1.2 * scale},
+            "fp_vs_lrp_fmm": {"max": 1.1 * scale},
+            "fp_vs_dijkstra": {"max": 1.3 * scale},
+            "fp_vs_fmm": {"max": 1.05 * scale},
+            "fp_vs_fsm": {"max": 1.4 * scale},
+        }
+
+    payload = {
+        "meta": {
+            "schema_version": 11,
+            "mc_index": int(path.stem.split("mc")[-1]),
+            "trial_used": 0,
+            "status_code": 0,
+            "status_message": "ok",
+        },
+        "fields": {"logk": np.ones((8, 8), dtype=float) * scale},
+        "paths": {
+            "fp": {"coords": fp, "length": 10.0 * scale, "travel_time": 5.0 * scale},
+            "fp_dijkstra": {"coords": fp_dijkstra, "length": 10.5 * scale, "travel_time": 5.2 * scale},
+            "fp_fmm": {"coords": fp_fmm, "length": 9.8 * scale, "travel_time": 4.9 * scale},
+            "fp_fsm": {"coords": fp_fsm, "length": 9.7 * scale, "travel_time": 4.8 * scale},
+            "lrp": {"coords": lrp, "length": 9.6 * scale, "resistance": 4.7 * scale},
+            "lrp_fmm": {"coords": lrp_fmm, "length": 9.5 * scale, "resistance": 4.6 * scale},
+        },
+        "endpoint": {
+            "dy": {
+                "fp_vs_lrp": 0.2 * scale,
+                "fp_vs_lrp_fmm": 0.15 * scale,
+                "fp_vs_dijkstra": 0.3 * scale,
+                "fp_vs_fmm": 0.1 * scale,
+                "fp_vs_fsm": 0.05 * scale,
+            }
+        },
+        "hausdorff": hausdorff,
+        "renyi_entropy": {"S1": np.array([0.1 * scale]), "S2": np.array([0.2 * scale])},
+        "computation_time": {
+            "lrp_dijkstra": 0.6 * scale,
+            "lrp_fmm": 0.5 * scale,
+            "fp_dijkstra": 0.4 * scale,
+            "fp_fmm": 0.3 * scale,
+            "fp_fsm": 0.2 * scale,
+            "fp": 0.1 * scale,
+        },
+        "config": {},
+        "seeds": {},
+    }
+    np.save(path, payload, allow_pickle=True)
+
+
 @pytest.fixture()
 def pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
     data_root = tmp_path / "data"
@@ -179,6 +239,82 @@ def pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
         "    fp_lrp: frechetDist_fp_lrp_m",
         "    fp_fpDijkstra: frechetDist_fp_fpDijkstra_m",
         "    fp_fpFMM: frechetDist_fp_fpFMM_m",
+        "font:",
+        "  family: DejaVu Sans",
+        "  mathtext_fontset: cm",
+        "  unicode_minus: false",
+        "  cmu_font_glob: /tmp/no-font-needed*.ttf",
+    ]
+    cfg_path.write_text("\n".join(lines), encoding="utf-8")
+
+    return {
+        "repo_root": REPO_ROOT,
+        "cfg_path": cfg_path,
+        "cache_dir": cache_dir,
+        "output_dir": output_dir,
+    }
+
+
+@pytest.fixture()
+def consolidated_pipeline_fixture(tmp_path: Path) -> dict[str, Path]:
+    data_root = tmp_path / "data"
+    run_dir = data_root / "run3"
+
+    var_dir = run_dir / "var_0.1" / "lengthScale0.05_size200"
+    std_dir = run_dir / "std_1.0" / "lengthScale0.05_size200"
+
+    for base in [var_dir, std_dir]:
+        base.mkdir(parents=True, exist_ok=True)
+
+    for mc in [0, 1]:
+        _write_consolidated_mc(var_dir / f"size200_mc{mc}.npy", scale=1.0 + 0.1 * mc)
+        _write_consolidated_mc(std_dir / f"size200_mc{mc}.npy", scale=1.0 + 0.05 * mc)
+
+    output_dir = tmp_path / "outputs"
+    cache_dir = tmp_path / "cache"
+    cfg_path = tmp_path / "cfg.yaml"
+    lines = [
+        f"data_root: {data_root}",
+        "run_id: 3",
+        "length_scale: 0.05",
+        "dh: 0.1",
+        "field_size_ref: 200",
+        "k_g: 1.0",
+        "variance_values: [0.1]",
+        "std_values: [1.0]",
+        f"output_dir: {output_dir}",
+        "figure_dpi: 120",
+        "workers: -1",
+        "save_formats: [png]",
+        "sections: [times, scatter, endpoint, hausdorff, std_endpoint, std_hausdorff]",
+        "distance_mode:",
+        "  end_point: load_from_main_output",
+        "  hausdorff: load_from_main_output",
+        "  frechet: compute_from_paths",
+        "distance_enabled:",
+        "  end_point: true",
+        "  hausdorff: true",
+        "  frechet: false",
+        "distance_fallback_on_missing: nan",
+        "distance_main_output_keys:",
+        "  end_point:",
+        "    fp_lrp: endpoint_dy_fp_vs_lrp",
+        "    fp_lrpFMM: endpoint_dy_fp_vs_lrp_fmm",
+        "    fp_fpDijkstra: endpoint_dy_fp_vs_dijkstra",
+        "    fp_fpFMM: endpoint_dy_fp_vs_fmm",
+        "    fp_fpFSM: endpoint_dy_fp_vs_fsm",
+        "  hausdorff:",
+        "    fp_lrp: hausdorff_fp_vs_lrp",
+        "    fp_lrpFMM: hausdorff_fp_vs_lrp_fmm",
+        "    fp_fpDijkstra: hausdorff_fp_vs_dijkstra",
+        "    fp_fpFMM: hausdorff_fp_vs_fmm",
+        "    fp_fpFSM: hausdorff_fp_vs_fsm",
+        "  frechet:",
+        "    fp_lrp: frechetDist_fp_lrp_m",
+        "    fp_lrpFMM: frechetDist_fp_lrpFMM_m",
+        "    fp_fpDijkstra: frechetDist_fp_fpDijkstra_m",
+        "    fp_fpFMM: frechetDist_fp_fpFMM_m",
+        "    fp_fpFSM: frechetDist_fp_fpFSM_m",
         "font:",
         "  family: DejaVu Sans",
         "  mathtext_fontset: cm",
