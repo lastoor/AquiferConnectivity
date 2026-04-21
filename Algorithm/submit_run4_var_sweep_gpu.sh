@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-VAR=("0" "0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
-# VAR=("0" "0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
+VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
+# VAR=("0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
 # VAR=("1" "5")
 length_scale="0.05"
-run="10_fsm_new"
+run="11_computation_time"
 dh="0.1"
 
 num_mc="1000"
@@ -65,11 +65,13 @@ export NUMEXPR_NUM_THREADS=1
 export PYTHONUNBUFFERED=1
 
 source ~/.bashrc
-conda deactivate
+source /apps/conda/miniforge3/24.3.0/etc/profile.d/conda.sh
 conda activate taichi_env
-which python
 
-./scripts/run_in_fmm_env.sh python ./scripts/run_fmm_gpu_worker.py \\
+export PYTHONPATH=./scripts
+TAICHI_PY=/home1/binhaoli/.conda/envs/taichi_env/bin/python
+
+./scripts/run_in_fmm_env.sh "\$TAICHI_PY" ./scripts/run_fmm_gpu_worker.py \\
   --path_workdir "\${output_dir}" \\
   --num_mc ${num_mc} \\
   --field_size ${field_size} \\

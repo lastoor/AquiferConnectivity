@@ -685,6 +685,156 @@ def solve_fsm_travel_time_new(
     return T
 
 
+def solve_fd_travel_time(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    dx: float,
+    dy: float,
+    source_mask: np.ndarray,
+    T_inflow: float = 0.0,
+    max_iters: int = 10000,
+    tol: float = 1e-6,
+    verbose: bool = False,
+) -> np.ndarray:
+    """Solve ``v · ∇T = 1`` via upwind FD Jacobi iteration with PDE-loss convergence.
+
+    Uses a simple Jacobi iteration: at each step every free cell is updated
+    simultaneously from the **previous** iterate using the one-sided upwind
+    finite-difference formula::
+
+        T^{k+1}[j,i] = (1 + Σ_upwind |v_d| * T^k[nbr] / h_d)
+                        / (Σ_upwind |v_d| / h_d)
+
+    Convergence is declared when the RMS PDE residual
+    ``||v · ∇_upwind T − 1||_rms`` (the *loss*) falls below ``tol``.
+
+    **Key differences from the FSM sweep solvers:**
+
+    * **Update order** — all cells are updated from the *old* iterate
+      simultaneously (Jacobi), not via multi-directional Gauss-Seidel
+      sweeping that exploits characteristic information.
+    * **Convergence criterion** — the loss is the discrete PDE residual
+      ``||v · ∇T − 1||_rms``, not the maximum change in T between sweeps.
+
+    Parameters
+    ----------
+    vx, vy : ndarray, shape (n_y, n_x)
+        Cell-centered velocity components.
+    dx, dy : float
+        Grid spacing.
+    source_mask : bool ndarray, shape (n_y, n_x)
+        Cells pinned to ``T_inflow``.
+    T_inflow : float, default 0.0
+        Value imposed on pinned source cells.
+    max_iters : int, default 10000
+        Maximum number of Jacobi iterations.
+    tol : float, default 1e-6
+        RMS PDE residual convergence tolerance.
+    verbose : bool, default False
+        When True, print progress every 200 iterations.
+
+    Returns
+    -------
+    T : ndarray, shape (n_y, n_x)
+        Travel-time field.
+    """
+    vx = np.asarray(vx, dtype=float)
+    vy = np.asarray(vy, dtype=float)
+    source_mask = np.asarray(source_mask, dtype=bool)
+
+    if vx.shape != vy.shape:
+        raise ValueError("vx and vy must have the same shape.")
+    if source_mask.shape != vx.shape:
+        raise ValueError("source_mask must have the same shape as vx and vy.")
+    if dx <= 0.0 or dy <= 0.0:
+        raise ValueError("dx and dy must be positive.")
+    if max_iters < 1:
+        raise ValueError("max_iters must be at least 1.")
+    if tol < 0.0:
+        raise ValueError("tol must be non-negative.")
+
+    n_y, n_x = vx.shape
+
+    T = np.zeros((n_y, n_x), dtype=float)
+    T[source_mask] = T_inflow
+
+    free = ~source_mask
+
+    vx_pos = np.maximum(vx, 0.0)   # max(vx, 0) — for backward (upwind) x-diff
+    vx_neg = np.minimum(vx, 0.0)   # min(vx, 0) — for forward  (upwind) x-diff
+    vy_pos = np.maximum(vy, 0.0)
+    vy_neg = np.minimum(vy, 0.0)
+
+    # Cells where at least one upwind neighbor exists — used for residual RMS.
+    col_idx = np.arange(n_x)
+    row_idx = np.arange(n_y)
+    has_upwind = (
+        ((vx > 0.0) & (col_idx > 0)[np.newaxis, :])
+        | ((vx < 0.0) & (col_idx < n_x - 1)[np.newaxis, :])
+        | ((vy > 0.0) & (row_idx > 0)[:, np.newaxis])
+        | ((vy < 0.0) & (row_idx < n_y - 1)[:, np.newaxis])
+    ) & free
+
+    for it in range(max_iters):
+        T_old = T.copy()
+
+        # ---- Jacobi update: all free cells updated from T_old ----
+        rhs   = np.ones((n_y, n_x), dtype=float)
+        denom = np.zeros((n_y, n_x), dtype=float)
+
+        # vx > 0 → backward diff: upwind neighbor is T_old[:,i-1]
+        rhs[:, 1:]   += vx_pos[:, 1:]    * T_old[:, :-1] / dx
+        denom[:, 1:] += vx_pos[:, 1:]    / dx
+        # vx < 0 → forward diff: upwind neighbor is T_old[:,i+1]
+        rhs[:, :-1]  += (-vx_neg[:, :-1]) * T_old[:, 1:]  / dx
+        denom[:, :-1]+= (-vx_neg[:, :-1]) / dx
+        # vy > 0 → backward diff: upwind neighbor is T_old[j-1,:]
+        rhs[1:, :]   += vy_pos[1:, :]    * T_old[:-1, :] / dy
+        denom[1:, :] += vy_pos[1:, :]    / dy
+        # vy < 0 → forward diff: upwind neighbor is T_old[j+1,:]
+        rhs[:-1, :]  += (-vy_neg[:-1, :]) * T_old[1:, :]  / dy
+        denom[:-1, :]+= (-vy_neg[:-1, :]) / dy
+
+        update = free & (denom > 0.0)
+        T[update] = rhs[update] / denom[update]
+
+        # ---- PDE residual (loss function) using upwind FD on updated T ----
+        dTdx = np.zeros((n_y, n_x), dtype=float)
+        dTdy = np.zeros((n_y, n_x), dtype=float)
+
+        # For vx > 0 at cells i >= 1: backward diff (T[j,i] - T[j,i-1]) / dx
+        m = vx[:, 1:] > 0.0
+        dTdx[:, 1:][m]  = (T[:, 1:] - T[:, :-1])[m]  / dx
+        # For vx < 0 at cells i <= n_x-2: forward diff (T[j,i+1] - T[j,i]) / dx
+        m = vx[:, :-1] < 0.0
+        dTdx[:, :-1][m] = (T[:, 1:] - T[:, :-1])[m]  / dx
+
+        # For vy > 0 at cells j >= 1: backward diff
+        m = vy[1:, :] > 0.0
+        dTdy[1:, :][m]  = (T[1:, :] - T[:-1, :])[m]  / dy
+        # For vy < 0 at cells j <= n_y-2: forward diff
+        m = vy[:-1, :] < 0.0
+        dTdy[:-1, :][m] = (T[1:, :] - T[:-1, :])[m]  / dy
+
+        residual = vx * dTdx + vy * dTdy - 1.0
+
+        n_up = int(has_upwind.sum())
+        rms = float(np.sqrt(np.mean(residual[has_upwind] ** 2))) if n_up > 0 else 0.0
+
+        log_interval = max(200, max_iters // 20)
+        if verbose and it % log_interval == 0:
+            print(f"  [fd] iter {it:6d}/{max_iters}: rms residual = {rms:.3e}", flush=True)
+
+        if rms < tol:
+            print(f"  [fd] converged at iter {it}/{max_iters}: rms residual = {rms:.3e} (tol={tol:.3e})", flush=True)
+            break
+
+    else:
+        print(f"  [fd] stopped at max_iters={max_iters}: rms residual = {rms:.3e} (tol={tol:.3e})", flush=True)
+
+    return T
+
+
 def compute_fsm_residual_field_new(
     vx: np.ndarray,
     vy: np.ndarray,
@@ -959,7 +1109,7 @@ def solve_fsm_travel_time(
         When supported by the selected backend, reinterpret ``source_mask`` as
         a single inlet-cut column, solve only on the strictly downwind domain,
         set the cut column to zero, and return ``np.inf`` upwind.
-    solver : {"fipy", "sweep", "legacy", "new"}
+    solver : {"fipy", "sweep", "legacy", "new", "fd"}
         Numerical backend. ``"fipy"`` is the default and falls back to
         ``"sweep"`` automatically when FiPy / PETSc is unavailable.
         ``"legacy"`` routes through ``solve_fsm_travel_time_legacy()`` after
@@ -967,7 +1117,10 @@ def solve_fsm_travel_time(
         through ``solve_fsm_travel_time_new()`` after averaging MAC-face
         velocities to cell centers and supports either explicit pinned
         ``source_mask`` cells or auto-detected inflow boundary pinning when
-        ``source_mask`` is empty.
+        ``source_mask`` is empty.  ``"fd"`` routes through
+        ``solve_fd_travel_time()``, which uses **ordinary central finite
+        differences** (not sign-split upwind) and converges by minimising the
+        PDE residual ``||v · ∇T - 1||_rms`` via pseudo-time marching.
 
     Other parameters are forwarded to the sweep backend when it is selected
     explicitly or used as the fallback.
@@ -986,7 +1139,7 @@ def solve_fsm_travel_time(
     if vy.shape != expected_vy:
         raise ValueError(f"vy must have shape {expected_vy}, got {vy.shape}.")
 
-    allowed_solvers = {"fipy", "sweep", "legacy", "new"}
+    allowed_solvers = {"fipy", "sweep", "legacy", "new", "fd"}
     if solver not in allowed_solvers:
         raise ValueError(f"solver must be one of {sorted(allowed_solvers)}.")
 
@@ -1063,6 +1216,42 @@ def solve_fsm_travel_time(
             tol=tol,
             second_order=(order == 2),
             use_inlet_cut=use_inlet_cut,
+        )
+
+    if solver == "fd":
+        if use_inlet_cut:
+            source_col, downwind_start = _extract_inlet_cut(source_mask)
+            full_t = np.full((ny, nx), np.inf, dtype=float)
+            full_t[:, source_col] = 0.0
+            if downwind_start >= nx:
+                return full_t
+            vx_dw = vx_cell[:, downwind_start:]
+            vy_dw = vy_cell[:, downwind_start:]
+            ny_dw, nx_dw = vx_dw.shape
+            vx_aug = np.empty((ny_dw, nx_dw + 1), dtype=float)
+            vy_aug = np.empty((ny_dw, nx_dw + 1), dtype=float)
+            vx_aug[:, 0] = vx_dw[:, 0]
+            vx_aug[:, 1:] = vx_dw
+            vy_aug[:, 0] = vy_dw[:, 0]
+            vy_aug[:, 1:] = vy_dw
+            sm_dw = np.zeros((ny_dw, nx_dw + 1), dtype=bool)
+            sm_dw[:, 0] = True
+            t_dw = solve_fd_travel_time(
+                vx_aug, vy_aug, dx, dy, sm_dw,
+                T_inflow=0.0, max_iters=max_sweeps * 50, tol=tol, verbose=True,
+            )
+            full_t[:, downwind_start:] = t_dw[:, 1:]
+            return full_t
+        return solve_fd_travel_time(
+            vx_cell,
+            vy_cell,
+            dx,
+            dy,
+            source_mask=source_mask,
+            T_inflow=0.0,
+            max_iters=max_sweeps * 50,
+            tol=tol,
+            verbose=True,
         )
 
     if use_inlet_cut:

@@ -854,6 +854,103 @@ def plot_times_box_by_variance(
     return fig, {"kind": "times_box_variance"}
 
 
+def plot_comp_time_mean_vs_variance(
+    var: np.ndarray,
+    s: dict[str, np.ndarray],
+):
+    fig, ax = plt.subplots(figsize=[6, 4])
+    series_defs = [
+        ("stats_ct_fp", "FP", COLORS["fp"]),
+        ("stats_ct_lrp_dijkstra", "LRP (Dijkstra)", COLORS["lrp"]),
+        ("stats_ct_lrp_fmm", "LRP (FMM)", COLORS["lrpFMM"]),
+        ("stats_ct_fp_fmm", "FP (FMM)", COLORS["fpFMM"]),
+        ("stats_ct_fp_dijkstra", "FP (Dijkstra)", COLORS["fpDijkstra"]),
+        ("stats_ct_fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
+    ]
+    for key, label, color in series_defs:
+        arr = s.get(key)
+        if arr is None or not np.any(np.isfinite(arr[:, 0])):
+            continue
+        ax.errorbar(
+            var,
+            arr[:, 0],
+            yerr=arr[:, 1],
+            label=label,
+            color=color,
+            linewidth=LINEWIDTH,
+            marker="o",
+            markerfacecolor="None",
+            capsize=3,
+        )
+    ax.set_xlabel("$\\sigma_{Y}^2$")
+    ax.set_ylabel("Computation Time (s)")
+    ax.set_title("Mean Computation Time per Solver")
+    ax.legend(fontsize="9", loc="best")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": "comp_time_mean_variance"}
+
+
+def plot_comp_time_box_by_variance(
+    var: np.ndarray,
+    comp_time_samples: dict[str, dict[str, np.ndarray]],
+):
+    fig, ax = plt.subplots(figsize=[8, 4.5])
+    series_defs = [
+        ("ct_fp", "FP", COLORS["fp"]),
+        ("ct_lrp_dijkstra", "LRP (Dijkstra)", COLORS["lrp"]),
+        ("ct_lrp_fmm", "LRP (FMM)", COLORS["lrpFMM"]),
+        ("ct_fp_fmm", "FP (FMM)", COLORS["fpFMM"]),
+        ("ct_fp_dijkstra", "FP (Dijkstra)", COLORS["fpDijkstra"]),
+        ("ct_fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
+    ]
+    var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
+    n_series = len(series_defs)
+    width = 0.12
+    half = (n_series - 1) / 2.0
+    offsets = np.array([i - half for i in range(n_series)], dtype=float) * width
+    centers = np.arange(len(var_values), dtype=float)
+
+    legend_handles = []
+    for series_idx, (key, label, color) in enumerate(series_defs):
+        samples: list[np.ndarray] = []
+        positions: list[float] = []
+        for idx, variance_value in enumerate(var_values):
+            sample_key = _resolve_sample_key(comp_time_samples, variance_value)
+            if sample_key is None:
+                continue
+            arr = np.asarray(comp_time_samples[sample_key].get(key, []), dtype=float).ravel()
+            finite = arr[np.isfinite(arr) & (arr > 0)]
+            if finite.size == 0:
+                continue
+            samples.append(finite)
+            positions.append(float(centers[idx] + offsets[series_idx]))
+        if not samples:
+            continue
+        bp = ax.boxplot(samples, positions=positions, widths=width * 0.85, patch_artist=True, showfliers=True, manage_ticks=False)
+        for box in bp["boxes"]:
+            box.set(facecolor=color, edgecolor=color, alpha=0.35)
+        for median in bp["medians"]:
+            median.set(color=color, linewidth=1.5)
+        for whisker in bp["whiskers"]:
+            whisker.set(color=color, linewidth=1.0)
+        for cap in bp["caps"]:
+            cap.set(color=color, linewidth=1.0)
+        for flier in bp["fliers"]:
+            flier.set(marker="o", markersize=2.5, markerfacecolor=color, markeredgecolor=color, alpha=0.45)
+        legend_handles.append(plt.Line2D([0], [0], color=color, linewidth=2, label=label))
+
+    ax.set_xticks(centers)
+    ax.set_xticklabels([f"{v:g}" for v in var_values])
+    ax.set_yscale("log")
+    ax.set_xlabel("$\\sigma_{Y}^2$")
+    ax.set_ylabel("Computation Time (s)")
+    ax.legend(handles=legend_handles, fontsize="9", loc="upper left")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": "comp_time_box_variance"}
+
+
 def plot_ratio_mean_vs_variance(
     var: np.ndarray,
     ratio_fp: np.ndarray,
@@ -1071,6 +1168,20 @@ def run_stage4(
         else:
             fig, meta = plot_times_box_by_variance(var, scatter_samples_by_var, t_ref, cfg.dh)
             artifacts.extend(save_figure(fig, section="times_box", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+            plt.close(fig)
+
+    if "comp_time_mean" in cfg.sections:
+        fig, meta = plot_comp_time_mean_vs_variance(var, s)
+        artifacts.extend(save_figure(fig, section="comp_time_mean", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+        plt.close(fig)
+
+    if "comp_time_box" in cfg.sections:
+        ct_samples = prepared.get("comp_time_samples")
+        if not isinstance(ct_samples, dict):
+            all_warnings.append("Requested 'comp_time_box' section but Stage 3 cache is missing comp_time_samples.")
+        else:
+            fig, meta = plot_comp_time_box_by_variance(var, ct_samples)
+            artifacts.extend(save_figure(fig, section="comp_time_box", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
             plt.close(fig)
 
     if "scatter" in cfg.sections:

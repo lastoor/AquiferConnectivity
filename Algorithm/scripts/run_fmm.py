@@ -35,7 +35,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 10
+MC_SCHEMA_VERSION = 11
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -97,6 +97,12 @@ MC_FIELDS = [
     "variance_seed_override",
     "seed_mc",
     "seed_trial",
+    "comp_time_lrp_dijkstra",
+    "comp_time_lrp_fmm",
+    "comp_time_fp_dijkstra",
+    "comp_time_fp_fmm",
+    "comp_time_fp_fsm",
+    "comp_time_fp",
 ]
 
 OBJECT_FIELDS = {
@@ -642,9 +648,11 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             # 2) Least-resistance path
             source = [(int(y), x0) for y in source_rows]
             target = [(int(y), x1) for y in target_rows]
+            _t0 = time.perf_counter()
             lrp, total_R, _s_node, _e_node, _Rmap = sim_path.dijkstra_2d_least_resistance(
                 k_field, source, target, average="harmonic"
             )
+            _t_lrp_dijkstra = time.perf_counter() - _t0
             if lrp.size == 0 or not sim_path.is_path_valid(lrp, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 2
                 record["status_message"] = "Invalid LRP geometry"
@@ -652,6 +660,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             k_traversable_mask = np.isfinite(k_field) & (k_field > 0.0)
+            _t0 = time.perf_counter()
             lrp_fmm, total_R_fmm, lrp_fmm_error = compute_fmm_path_regions(
                 k_field,
                 source_rows=source_rows,
@@ -663,6 +672,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 backtracking=config_mc["fmm_arg"]["backtracking"],
                 traversable_mask=k_traversable_mask,
             )
+            _t_lrp_fmm = time.perf_counter() - _t0
             if lrp_fmm is None:
                 record["status_code"] = 10
                 record["status_message"] = lrp_fmm_error or "LRP(FMM) path extraction failed"
@@ -675,6 +685,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             # 3) Hydraulic head and velocity
+            _t0 = time.perf_counter()
             h, msg, is_successful = sim_hyd.solve_head(
                 k_field,
                 config_mc["x"],
@@ -684,12 +695,14 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 atol=config_mc["headSolver_arg"]["atol"],
                 max_it=config_mc["headSolver_arg"]["max_it"],
             )
+            _t_head = time.perf_counter() - _t0
             if not is_successful:
                 record["status_code"] = 3
                 record["status_message"] = f"Head solver failed: {msg}"
                 logger.warning(f"[MC {mc_index}] Head not converged, retrying next trial. {msg}")
                 continue
             align_with_modflow = bool(config_mc["particleTracking_arg"]["align_with_modflow_velocity"])
+            _t0 = time.perf_counter()
             if config_mc["fmm_arg"]["velocity_layout"] == "face":
                 vx_fmm, vy_fmm = sim_hyd.compute_velocity(
                     k_field,
@@ -719,6 +732,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 zero_policy=config_mc["fmm_arg"]["zero_policy"],
                 min_speed=config_mc["fmm_arg"]["min_speed"],
             )
+            _t_vel_speed = time.perf_counter() - _t0
             nontraversable_count = int((~traversable_mask).sum())
             logger.info(
                 f"[MC {mc_index}] FMM speed prep: layout={speed_diag['layout']}, "
@@ -728,9 +742,11 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             )
 
             # 3.1) Dijkstra on speed
+            _t0 = time.perf_counter()
             fp_dijkstra, total_t_dijkstra, _sd, _ed, _Rmap_v = sim_path.dijkstra_2d_least_resistance(
                 speed_fmm, source, target, average="arithmetic"
             )
+            _t_fp_dijkstra_solver = time.perf_counter() - _t0
             if fp_dijkstra.size == 0 or not sim_path.is_path_valid(fp_dijkstra, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 4
                 record["status_message"] = "Invalid FP(Dijkstra) geometry"
@@ -738,6 +754,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             # 3.2) FMM on speed
+            _t0 = time.perf_counter()
             fp_fmm, total_t_fmm, fp_fmm_error = compute_fmm_path_regions(
                 speed_fmm,
                 source_rows=source_rows,
@@ -749,6 +766,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 backtracking=config_mc["fmm_arg"]["backtracking"],
                 traversable_mask=traversable_mask,
             )
+            _t_fp_fmm_solver = time.perf_counter() - _t0
             if fp_fmm is None:
                 record["status_code"] = 5
                 record["status_message"] = fp_fmm_error or "FMM path extraction failed"
@@ -761,6 +779,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             # 3.3) FSM path (MAC-face Darcy velocity, non-fatal)
+            _t0 = time.perf_counter()
             vx_face, vy_face = sim_hyd.compute_velocity(
                 k_field,
                 config_mc["x"],
@@ -770,6 +789,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 align_with_modflow=align_with_modflow,
                 face_output="full",
             )
+            _t_vel_face = time.perf_counter() - _t0
             _n_y_fsm, _n_x_fsm = k_field.shape
             fsm_source_mask = np.zeros((_n_y_fsm, _n_x_fsm), dtype=bool)
             fsm_source_mask[source_rows, x0] = True
@@ -780,6 +800,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             fp_fsm: np.ndarray | None = None
             arrival_fsm: float | None = None
             fp_fsm_error: str | None = None
+            _t_fp_fsm_solver: float = np.nan
             try:
                 fsm_solver = str(fp_fsm_cfg.get("solver", "fipy"))
                 if fsm_solver == "new":
@@ -800,6 +821,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     fsm_effective_mse_check_every = int(fp_fsm_cfg.get("mse_check_every", 5))
                     fsm_effective_mse_activation_factor = float(fp_fsm_cfg.get("mse_activation_factor", 10.0))
                     fsm_effective_consecutive_passes = int(fp_fsm_cfg.get("consecutive_passes", 1))
+                _t0 = time.perf_counter()
                 fp_fsm, _t_field_fsm, arrival_fsm = compute_fsm_path_velocity(
                     vx_face,
                     vy_face,
@@ -819,12 +841,14 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     dt=float(fp_fsm_cfg.get("dt", 0.5)),
                     max_steps=int(fp_fsm_cfg.get("max_steps", 10_000)),
                 )
+                _t_fp_fsm_solver = time.perf_counter() - _t0
             except Exception as exc:
                 fp_fsm_error = str(exc)
                 logger.warning(f"[MC {mc_index}] FSM path failed (non-fatal): {exc}")
 
             # 4) Particle tracking
             try:
+                _t0 = time.perf_counter()
                 fp, pt_res, _pt_velocity = run_particle_tracking(
                     config_mc=config_mc,
                     x0=x0,
@@ -834,6 +858,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     h_field=h,
                     logger=logger,
                 )
+                _t_fp_pt = time.perf_counter() - _t0
             except ValueError as exc:
                 record["status_code"] = 6
                 record["status_message"] = str(exc)
@@ -901,6 +926,13 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "nontraversable_count": int(nontraversable_count),
                 },
             }
+
+            _comp_time_lrp_dijkstra = _t_lrp_dijkstra
+            _comp_time_lrp_fmm = _t_lrp_fmm
+            _comp_time_fp_dijkstra = _t_head + _t_vel_speed + _t_fp_dijkstra_solver
+            _comp_time_fp_fmm = _t_head + _t_vel_speed + _t_fp_fmm_solver
+            _comp_time_fp_fsm = _t_head + _t_vel_face + _t_fp_fsm_solver
+            _comp_time_fp = _t_head + _t_fp_pt
 
             consolidated = {
                 "meta": {
@@ -979,6 +1011,14 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "S1": renyi_s1,
                     "S2": renyi_s2,
                 },
+                "computation_time": {
+                    "lrp_dijkstra": _comp_time_lrp_dijkstra,
+                    "lrp_fmm": _comp_time_lrp_fmm,
+                    "fp_dijkstra": _comp_time_fp_dijkstra,
+                    "fp_fmm": _comp_time_fp_fmm,
+                    "fp_fsm": _comp_time_fp_fsm,
+                    "fp": _comp_time_fp,
+                },
             }
 
             save_mc_consolidated(config_mc=config_mc, mc_index=mc_index, consolidated=consolidated)
@@ -1032,6 +1072,12 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fmm_min_speed": config_dict["fmm"]["min_speed"],
                     "fmm_zero_count": config_dict["fmm"]["zero_count"],
                     "fmm_nontraversable_count": config_dict["fmm"]["nontraversable_count"],
+                    "comp_time_lrp_dijkstra": _comp_time_lrp_dijkstra,
+                    "comp_time_lrp_fmm": _comp_time_lrp_fmm,
+                    "comp_time_fp_dijkstra": _comp_time_fp_dijkstra,
+                    "comp_time_fp_fmm": _comp_time_fp_fmm,
+                    "comp_time_fp_fsm": _comp_time_fp_fsm,
+                    "comp_time_fp": _comp_time_fp,
                 }
             )
 

@@ -28,7 +28,7 @@ fsm_convergence_mode=""
 fsm_mse_check_every="5"
 fsm_mse_activation_factor="10.0"
 fsm_consecutive_passes="2"
-fsm_solver="new" # Options: sweep, fipy, legacy, new
+fsm_solver="fd" # Options: sweep, fipy, legacy, new, fd
 fsm_dt="0.5"
 fsm_max_steps="1000000"
 
@@ -110,15 +110,18 @@ else
 fi
 fsm_args+=" --fsm-max-sweeps ${fsm_max_sweeps}"
 fsm_args+=" --fsm-tol ${fsm_tol}"
-if [[ -n "${fsm_mse_tol}" ]]; then
-    fsm_args+=" --fsm-mse-tol ${fsm_mse_tol}"
+# MSE/convergence-mode params are not used by solver=fd (PDE residual is the loss directly)
+if [[ "${fsm_solver}" != "fd" ]]; then
+    if [[ -n "${fsm_mse_tol}" ]]; then
+        fsm_args+=" --fsm-mse-tol ${fsm_mse_tol}"
+    fi
+    if [[ -n "${fsm_convergence_mode}" ]]; then
+        fsm_args+=" --fsm-convergence-mode ${fsm_convergence_mode}"
+    fi
+    fsm_args+=" --fsm-mse-check-every ${fsm_mse_check_every}"
+    fsm_args+=" --fsm-mse-activation-factor ${fsm_mse_activation_factor}"
+    fsm_args+=" --fsm-consecutive-passes ${fsm_consecutive_passes}"
 fi
-if [[ -n "${fsm_convergence_mode}" ]]; then
-    fsm_args+=" --fsm-convergence-mode ${fsm_convergence_mode}"
-fi
-fsm_args+=" --fsm-mse-check-every ${fsm_mse_check_every}"
-fsm_args+=" --fsm-mse-activation-factor ${fsm_mse_activation_factor}"
-fsm_args+=" --fsm-consecutive-passes ${fsm_consecutive_passes}"
 fsm_args+=" --fsm-solver ${fsm_solver}"
 fsm_args+=" --fsm-dt ${fsm_dt}"
 fsm_args+=" --fsm-max-steps ${fsm_max_steps}"
@@ -246,7 +249,11 @@ print_run_context() {
     echo "Output dir: ${output_dir}"
     echo "FlowSimulation path: ${FLOWSIM_PATH}"
     echo "logK source: ${logk_source}"
-    echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, mse_tol=${fsm_mse_tol:-disabled}, mode=${fsm_convergence_mode:-auto}, mse_check_every=${fsm_mse_check_every}, mse_activation_factor=${fsm_mse_activation_factor}, consecutive_passes=${fsm_consecutive_passes}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
+    if [[ "${fsm_solver}" == "fd" ]]; then
+        echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol} [PDE-loss], dt=${fsm_dt}, max_steps=${fsm_max_steps})"
+    else
+        echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, mse_tol=${fsm_mse_tol:-disabled}, mode=${fsm_convergence_mode:-auto}, mse_check_every=${fsm_mse_check_every}, mse_activation_factor=${fsm_mse_activation_factor}, consecutive_passes=${fsm_consecutive_passes}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
+    fi
     echo "Linearized FP: ${linearized_fp}"
     echo "Linearized scheme: ${linearized_scheme}"
     echo "Check path geometry: ${check_path_geometry}"

@@ -53,6 +53,12 @@ VARIANCE_METRIC_KEY_CANDIDATES: dict[str, tuple[str, ...]] = {
     "travel_time_fp_fsm": ("travel_time_fsm",),
     "resistance_lrp": ("resistance_lrp", "mhr_m"),
     "resistance_lrp_fmm": ("resistance_lrp_fmm", "mhr_fmm_m"),
+    "comp_time_lrp_dijkstra": ("comp_time_lrp_dijkstra",),
+    "comp_time_lrp_fmm": ("comp_time_lrp_fmm",),
+    "comp_time_fp_dijkstra": ("comp_time_fp_dijkstra",),
+    "comp_time_fp_fmm": ("comp_time_fp_fmm",),
+    "comp_time_fp_fsm": ("comp_time_fp_fsm",),
+    "comp_time_fp": ("comp_time_fp",),
 }
 
 
@@ -164,6 +170,13 @@ def _consolidated_to_output_data(mc: dict[str, Any]) -> dict[str, Any]:
     renyi = mc.get("renyi_entropy", {})
     out["renyi_entropy_S1"] = np.asarray(renyi.get("S1", [np.nan]), dtype=float)
     out["renyi_entropy_S2"] = np.asarray(renyi.get("S2", [np.nan]), dtype=float)
+    ct = mc.get("computation_time", {})
+    out["comp_time_lrp_dijkstra"] = float(ct.get("lrp_dijkstra", np.nan))
+    out["comp_time_lrp_fmm"] = float(ct.get("lrp_fmm", np.nan))
+    out["comp_time_fp_dijkstra"] = float(ct.get("fp_dijkstra", np.nan))
+    out["comp_time_fp_fmm"] = float(ct.get("fp_fmm", np.nan))
+    out["comp_time_fp_fsm"] = float(ct.get("fp_fsm", np.nan))
+    out["comp_time_fp"] = float(ct.get("fp", np.nan))
     return out
 
 
@@ -527,6 +540,10 @@ def _init_times() -> dict[str, list[np.ndarray]]:
     return {"fpt": [], "fpt_dijkstra": [], "fpt_fmm": [], "fpt_fsm": [], "mhr": [], "mhr_fmm": []}
 
 
+def _init_comp_times() -> dict[str, list[np.ndarray]]:
+    return {"ct_lrp_dijkstra": [], "ct_lrp_fmm": [], "ct_fp_dijkstra": [], "ct_fp_fmm": [], "ct_fp_fsm": [], "ct_fp": []}
+
+
 def _init_distances() -> dict[str, dict[str, list[np.ndarray]]]:
     return {
         "hausdorff": {"fp_lrp": [], "fp_lrpFMM": [], "fp_fpDijkstra": [], "fp_fpFMM": [], "fp_fpFSM": []},
@@ -539,8 +556,8 @@ def _append_stat_row(container: dict[str, list[np.ndarray]], key: str, values: l
     container[key].append(np.asarray(values, dtype=float))
 
 
-def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[np.ndarray]], distances: dict[str, dict[str, list[np.ndarray]]]) -> dict[str, Any]:
-    return {
+def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[np.ndarray]], distances: dict[str, dict[str, list[np.ndarray]]], comp_times: dict[str, list[np.ndarray]] | None = None) -> dict[str, Any]:
+    out: dict[str, Any] = {
         "lengths": {
             "fp": mean_std_matrix(lengths["fp"]),
             "fp_dijkstra": mean_std_matrix(lengths["fp_dijkstra"]),
@@ -581,6 +598,16 @@ def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[n
             },
         },
     }
+    if comp_times is not None:
+        out["comp_times"] = {
+            "ct_lrp_dijkstra": mean_std_matrix(comp_times["ct_lrp_dijkstra"], filter_positive=True),
+            "ct_lrp_fmm": mean_std_matrix(comp_times["ct_lrp_fmm"], filter_positive=True),
+            "ct_fp_dijkstra": mean_std_matrix(comp_times["ct_fp_dijkstra"], filter_positive=True),
+            "ct_fp_fmm": mean_std_matrix(comp_times["ct_fp_fmm"], filter_positive=True),
+            "ct_fp_fsm": mean_std_matrix(comp_times["ct_fp_fsm"], filter_positive=True),
+            "ct_fp": mean_std_matrix(comp_times["ct_fp"], filter_positive=True),
+        }
+    return out
 
 
 def _compute_line_integrals_for_var(
@@ -682,6 +709,7 @@ def run_variance_analysis_from_discovered(
         field_size_list: list[float] = []
         lengths = _init_lengths()
         times = _init_times()
+        comp_times = _init_comp_times()
         distances = _init_distances()
 
         run_iter = tqdm(run_paths, desc=f"var={var_} sizes", unit="size", leave=False) if show_progress else run_paths
@@ -706,6 +734,12 @@ def run_variance_analysis_from_discovered(
             fpt_fsm_m: list[float] = []
             mhr_m: list[float] = []
             mhr_fmm_m: list[float] = []
+            ct_lrp_dijkstra_m: list[float] = []
+            ct_lrp_fmm_m: list[float] = []
+            ct_fp_dijkstra_m: list[float] = []
+            ct_fp_fmm_m: list[float] = []
+            ct_fp_fsm_m: list[float] = []
+            ct_fp_m: list[float] = []
             haus_fp_lrp: list[float] = []
             haus_fp_lrp_fmm: list[float] = []
             haus_fp_d: list[float] = []
@@ -753,6 +787,12 @@ def run_variance_analysis_from_discovered(
                 fpt_fsm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fp_fsm"])
                 mhr_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["resistance_lrp"])
                 mhr_fmm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["resistance_lrp_fmm"])
+                ct_lrp_dijkstra_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["comp_time_lrp_dijkstra"])
+                ct_lrp_fmm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["comp_time_lrp_fmm"])
+                ct_fp_dijkstra_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["comp_time_fp_dijkstra"])
+                ct_fp_fmm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["comp_time_fp_fmm"])
+                ct_fp_fsm_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["comp_time_fp_fsm"])
+                ct_fp_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["comp_time_fp"])
                 metric_values = {
                     "len_fp": len_fp_val,
                     "len_fp_dijkstra": len_fp_dijkstra_val,
@@ -788,6 +828,12 @@ def run_variance_analysis_from_discovered(
                 fpt_fsm_m.append(fpt_fsm_val)
                 mhr_m.append(mhr_val)
                 mhr_fmm_m.append(mhr_fmm_val)
+                ct_lrp_dijkstra_m.append(ct_lrp_dijkstra_val)
+                ct_lrp_fmm_m.append(ct_lrp_fmm_val)
+                ct_fp_dijkstra_m.append(ct_fp_dijkstra_val)
+                ct_fp_fmm_m.append(ct_fp_fmm_val)
+                ct_fp_fsm_m.append(ct_fp_fsm_val)
+                ct_fp_m.append(ct_fp_val)
 
                 if use_consolidated and mc_consolidated is not None:
                     pathset_loader_fn = lambda mc=mc_consolidated: _consolidated_to_pathset(mc)
@@ -834,6 +880,12 @@ def run_variance_analysis_from_discovered(
             _append_stat_row(times, "fpt_fsm", fpt_fsm_m)
             _append_stat_row(times, "mhr", mhr_m)
             _append_stat_row(times, "mhr_fmm", mhr_fmm_m)
+            _append_stat_row(comp_times, "ct_lrp_dijkstra", ct_lrp_dijkstra_m)
+            _append_stat_row(comp_times, "ct_lrp_fmm", ct_lrp_fmm_m)
+            _append_stat_row(comp_times, "ct_fp_dijkstra", ct_fp_dijkstra_m)
+            _append_stat_row(comp_times, "ct_fp_fmm", ct_fp_fmm_m)
+            _append_stat_row(comp_times, "ct_fp_fsm", ct_fp_fsm_m)
+            _append_stat_row(comp_times, "ct_fp", ct_fp_m)
             distances["hausdorff"]["fp_lrp"].append(np.asarray(haus_fp_lrp, dtype=float))
             distances["hausdorff"]["fp_lrpFMM"].append(np.asarray(haus_fp_lrp_fmm, dtype=float))
             distances["hausdorff"]["fp_fpDijkstra"].append(np.asarray(haus_fp_d, dtype=float))
@@ -855,9 +907,10 @@ def run_variance_analysis_from_discovered(
             "field_size": np.asarray(field_size_list, dtype=float),
             "lengths": lengths,
             "times": times,
+            "comp_times": comp_times,
             "distances": distances,
         }
-        stats[key] = _summary_stats(lengths, times, distances)
+        stats[key] = _summary_stats(lengths, times, distances, comp_times)
         line_integrals[key] = _compute_line_integrals_for_var(cfg, run_paths, max_mc_per_size=max_mc_per_size)
 
     first_key = f"var_{var_values[0]}" if var_values else ""

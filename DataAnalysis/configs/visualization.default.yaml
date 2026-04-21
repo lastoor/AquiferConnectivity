@@ -1,5 +1,5 @@
 data_root: /project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod
-run_id: 10_fsm_new #9_newoutput_fmmconti_renyi
+run_id: 11_computation_time #9_newoutput_fmmconti_renyi
 length_scale: 0.05
 dh: 0.1
 field_size_ref: 200
@@ -12,7 +12,7 @@ std_values: [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5
 figure_dpi: 400
 workers: -1
 save_formats: [png]
-sections: [times, times_box, scatter, hausdorff, hausdorff_box, frechet, endpoint, ratio_mean, ratio_var, wasserstein_len]
+sections: [times, times_box, comp_time_mean, comp_time_box, scatter, hausdorff, hausdorff_box, frechet, endpoint, ratio_mean, ratio_var, wasserstein_len]
 
 distance_mode:
   end_point: load_from_main_output

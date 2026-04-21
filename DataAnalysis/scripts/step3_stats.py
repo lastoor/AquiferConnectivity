@@ -90,6 +90,12 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_fpt_dijkstra = []
     stats_fpt_fmm = []
     stats_fpt_fsm = []
+    stats_ct_lrp_dijkstra = []
+    stats_ct_lrp_fmm = []
+    stats_ct_fp_dijkstra = []
+    stats_ct_fp_fmm = []
+    stats_ct_fp_fsm = []
+    stats_ct_fp = []
     stats_hausdorff_lrp = []
     stats_hausdorff_lrp_fmm = []
     stats_hausdorff_dijkstra = []
@@ -121,6 +127,13 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_fpt_dijkstra.append(_mean_std_pair(entry["times"]["fpt_dijkstra"]))
         stats_fpt_fmm.append(_mean_std_pair(entry["times"]["fpt_fmm"]))
         stats_fpt_fsm.append(_mean_std_pair(entry["times"].get("fpt_fsm", [np.nan, np.nan])))
+        ct = entry.get("comp_times", {})
+        stats_ct_lrp_dijkstra.append(_mean_std_pair(ct.get("ct_lrp_dijkstra", [np.nan, np.nan])))
+        stats_ct_lrp_fmm.append(_mean_std_pair(ct.get("ct_lrp_fmm", [np.nan, np.nan])))
+        stats_ct_fp_dijkstra.append(_mean_std_pair(ct.get("ct_fp_dijkstra", [np.nan, np.nan])))
+        stats_ct_fp_fmm.append(_mean_std_pair(ct.get("ct_fp_fmm", [np.nan, np.nan])))
+        stats_ct_fp_fsm.append(_mean_std_pair(ct.get("ct_fp_fsm", [np.nan, np.nan])))
+        stats_ct_fp.append(_mean_std_pair(ct.get("ct_fp", [np.nan, np.nan])))
         stats_hausdorff_lrp.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrp"]))
         stats_hausdorff_lrp_fmm.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrpFMM"]))
         stats_hausdorff_dijkstra.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_fpDijkstra"]))
@@ -165,6 +178,12 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_endpoint_dijkstra": np.asarray(stats_endpoint_dijkstra, dtype=float),
         "stats_endpoint_fmm": np.asarray(stats_endpoint_fmm, dtype=float),
         "stats_endpoint_fsm": np.asarray(stats_endpoint_fsm, dtype=float),
+        "stats_ct_lrp_dijkstra": np.asarray(stats_ct_lrp_dijkstra, dtype=float),
+        "stats_ct_lrp_fmm": np.asarray(stats_ct_lrp_fmm, dtype=float),
+        "stats_ct_fp_dijkstra": np.asarray(stats_ct_fp_dijkstra, dtype=float),
+        "stats_ct_fp_fmm": np.asarray(stats_ct_fp_fmm, dtype=float),
+        "stats_ct_fp_fsm": np.asarray(stats_ct_fp_fsm, dtype=float),
+        "stats_ct_fp": np.asarray(stats_ct_fp, dtype=float),
     }
 
 
@@ -345,6 +364,38 @@ def collect_scatter_time_samples(var_data: dict[str, dict[str, Any]], var_values
             if aligned[k]:
                 result[k] = np.concatenate(aligned[k]).astype(float)
         out[var_key] = result
+
+    return out, warnings
+
+
+def collect_comp_time_samples(var_data: dict[str, dict[str, Any]], var_values: list[float]) -> tuple[dict[str, dict[str, np.ndarray]], list[str]]:
+    out: dict[str, dict[str, np.ndarray]] = {}
+    warnings: list[str] = []
+    all_keys = ("ct_lrp_dijkstra", "ct_lrp_fmm", "ct_fp_dijkstra", "ct_fp_fmm", "ct_fp_fsm", "ct_fp")
+
+    for var_ in var_values:
+        var_key = f"var_{var_}"
+        entry = var_data.get(var_key)
+        if entry is None:
+            warnings.append(f"Missing variance entry for comp_time samples at sigma2={var_}.")
+            continue
+        ct = entry.get("comp_times", {})
+        if not ct:
+            warnings.append(f"No comp_times data found at sigma2={var_}.")
+            continue
+
+        result: dict[str, np.ndarray] = {}
+        for k in all_keys:
+            merged: list[np.ndarray] = []
+            for arr in ct.get(k, []):
+                flat = np.asarray(arr, dtype=float).ravel()
+                finite = flat[np.isfinite(flat) & (flat > 0)]
+                if finite.size > 0:
+                    merged.append(finite)
+            if merged:
+                result[k] = np.concatenate(merged).astype(float)
+        if result:
+            out[var_key] = result
 
     return out, warnings
 
@@ -648,10 +699,12 @@ def prepare_plot_inputs(
     scatter_time_samples, scatter_warnings = collect_scatter_time_samples(var_data, var_values)
     endpoint_box_samples, endpoint_box_warnings = collect_endpoint_box_samples(var_data, var_values)
     hausdorff_box_samples, hausdorff_box_warnings = collect_hausdorff_box_samples(var_data, var_values)
+    comp_time_samples, comp_time_warnings = collect_comp_time_samples(var_data, var_values)
     derived_warnings.extend(cdf_warnings)
     derived_warnings.extend(scatter_warnings)
     derived_warnings.extend(endpoint_box_warnings)
     derived_warnings.extend(hausdorff_box_warnings)
+    derived_warnings.extend(comp_time_warnings)
 
     hausdorff_cdf_ensemble: dict[str, dict[str, dict[str, np.ndarray]]] = {}
     entropy_hausdorff_samples: dict[str, dict[str, Any]] = {}
@@ -705,6 +758,7 @@ def prepare_plot_inputs(
         "hausdorff_box_samples": hausdorff_box_samples,
         "hausdorff_cdf_ensemble": hausdorff_cdf_ensemble,
         "entropy_hausdorff_samples": entropy_hausdorff_samples,
+        "comp_time_samples": comp_time_samples,
         "derived_warnings": derived_warnings,
     }
 
