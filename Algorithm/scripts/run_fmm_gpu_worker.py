@@ -641,7 +641,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fmm_backtracking", type=str, default="discrete", choices=["discrete", "continuous"])
     parser.add_argument("--fmm_zero_policy", type=str, default="obstacle", choices=["obstacle", "clip", "error"])
     parser.add_argument("--fmm_min_speed", type=float, default=1e-12)
-    parser.add_argument("--fsm_solver", type=str, default="fipy", choices=["fipy", "sweep", "legacy", "new"])
+    parser.add_argument("--fsm_solver", type=str, default="fipy", choices=["fipy", "sweep", "legacy", "new", "fd"])
     parser.add_argument("--fsm_max_sweeps", type=int, default=100)
     parser.add_argument("--fsm_tol", type=float, default=1e-6)
     parser.add_argument("--fsm_mse_tol", type=float, default=None)

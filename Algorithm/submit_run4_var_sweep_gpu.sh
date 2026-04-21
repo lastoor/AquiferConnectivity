@@ -5,14 +5,14 @@ VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
 # VAR=("0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
 # VAR=("1" "5")
 length_scale="0.05"
-run="11_computation_time"
+run="11p2_fd"
 dh="0.1"
 
 num_mc="1000"
 field_size="200"
 num_particles="1000000"
 cpu_workers="6"
-fsm_solver="new" # Options: fipy, sweep, legacy, new
+fsm_solver="fd" # Options: fipy, sweep, legacy, new, fd
 fsm_max_sweeps="100000"
 fsm_tol="1e-8"
 fsm_mse_tol=""
@@ -35,6 +35,20 @@ repo_root="/home1/binhaoli/FMM_FastestPath/Algorithm"
 run_root="/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run${run}"
 log_dir="${run_root}/slurm_logs"
 mkdir -p "${log_dir}"
+
+# MSE/convergence-mode args are not used by solver=fd
+fsm_extra_args=""
+if [[ "${fsm_solver}" != "fd" ]]; then
+    fsm_extra_args+=" --fsm_mse_check_every ${fsm_mse_check_every}"
+    fsm_extra_args+=" --fsm_mse_activation_factor ${fsm_mse_activation_factor}"
+    fsm_extra_args+=" --fsm_consecutive_passes ${fsm_consecutive_passes}"
+    if [[ -n "${fsm_mse_tol}" ]]; then
+        fsm_extra_args+=" --fsm_mse_tol ${fsm_mse_tol}"
+    fi
+    if [[ -n "${fsm_convergence_mode}" ]]; then
+        fsm_extra_args+=" --fsm_convergence_mode ${fsm_convergence_mode}"
+    fi
+fi
 
 for var in "${VAR[@]}"; do
     sbatch <<EOF
@@ -98,13 +112,9 @@ TAICHI_PY=/home1/binhaoli/.conda/envs/taichi_env/bin/python
   --fsm_solver ${fsm_solver} \\
   --fsm_max_sweeps ${fsm_max_sweeps} \\
   --fsm_tol ${fsm_tol} \\
-  --fsm_mse_check_every ${fsm_mse_check_every} \\
-  --fsm_mse_activation_factor ${fsm_mse_activation_factor} \\
-  --fsm_consecutive_passes ${fsm_consecutive_passes} \\
   --fsm_dt ${fsm_dt} \\
   --fsm_max_steps ${fsm_max_steps} \\
-  ${fsm_mse_tol:+--fsm_mse_tol ${fsm_mse_tol}} \\
-  ${fsm_convergence_mode:+--fsm_convergence_mode ${fsm_convergence_mode}}
+  ${fsm_extra_args}
 
 echo "End Time: \$(date)"
 EOF
