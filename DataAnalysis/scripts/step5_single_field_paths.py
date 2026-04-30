@@ -49,7 +49,7 @@ LINESTYLES = {
     "fpFSM": (0, (3, 1, 1, 1)),
 }
 
-LINEWIDTHS = 2
+LINEWIDTHS = 1.2
 
 @dataclass(slots=True)
 class SelectedRun:
@@ -2481,15 +2481,15 @@ def plot_isochrones_with_plume(
                 levels=[t_level_lrp], linewidths=LINEWIDTHS, colors=COLORS["lrpFMM"],
             )
 
-        # FSM isochrone contour — relative to FSM first arrival
-        if t_min_fsm_dimless is not None:
-            t_level_fsm = f * t_fsm_arrival
-            if t_fsm_min <= t_level_fsm <= t_fsm_max:
-                ax.contour(
-                    x_norm, y_norm, t_min_fsm_dimless,
-                    levels=[t_level_fsm], linewidths=LINEWIDTHS, colors=COLORS["fpFSM"],
-                    linestyles=["-"],
-                )
+        # # FSM isochrone contour — relative to FSM first arrival
+        # if t_min_fsm_dimless is not None:
+        #     t_level_fsm = f * t_fsm_arrival
+        #     if t_fsm_min <= t_level_fsm <= t_fsm_max:
+        #         ax.contour(
+        #             x_norm, y_norm, t_min_fsm_dimless,
+        #             levels=[t_level_fsm], linewidths=LINEWIDTHS, colors=COLORS["fpFSM"],
+        #             linestyles=["-"],
+        #         )
 
         # Particle plume scatter
         x_j = snaps.x[:, j]
@@ -2531,14 +2531,14 @@ def plot_isochrones_with_plume(
         line.set_solid_capstyle("round")
         line.set_dash_capstyle("round")
 
-        # FSM path
-        if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
-            line, = ax.plot(
-                result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y,
-                color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"],
-                linewidth=LINEWIDTHS,
-            )
-            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        # # FSM path
+        # if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
+        #     line, = ax.plot(
+        #         result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y,
+        #         color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"],
+        #         linewidth=LINEWIDTHS,
+        #     )
+        #     line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
 
         # Source line
         ax.plot(
@@ -2555,7 +2555,7 @@ def plot_isochrones_with_plume(
         # Legend on first panel only
         if j == 0:
             h_fp = Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, ls=LINESTYLES["fp"],
-                          label=r"$\gamma^*$")
+                          label=r"$\gamma^*_\mathcal{A}$")
             h_fp.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
             h_fp.set_solid_capstyle("round")
             h_fp.set_dash_capstyle("round")
@@ -2574,28 +2574,28 @@ def plot_isochrones_with_plume(
 
             handles = [
                 h_fp, h_fp_fmm, h_lrp_fmm,
-                Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*$ isochrone"),
+                Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{A}$ isochrone"),
                 Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{E}$ isochrone"),
                 Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{R}$ isochrone"),
             ]
-            if t_min_fsm_dimless is not None:
-                h_fp_fsm = Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFSM"],
-                                  label=r"$\gamma^*_\mathcal{S}$")
-                h_fp_fsm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
-                handles += [
-                    h_fp_fsm,
-                    Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
-                ]
+            # if t_min_fsm_dimless is not None:
+            #     h_fp_fsm = Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFSM"],
+            #                       label=r"$\gamma^*_\mathcal{S}$")
+            #     h_fp_fsm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            #     handles += [
+            #         h_fp_fsm,
+            #         Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
+            #     ]
             ax.legend(handles=handles, fontsize=6, loc="upper left", framealpha=0.5)
 
         if j == n_snaps - 1:
             arrival_lines = [
-                rf"$t_{{a,\mathrm{{FP}}}}^* = {t_fp_pt_arrival:.3g}$",
-                rf"$t_{{a,\mathcal{{E}}}}^* = {t_fp_arrival:.3g}$",
-                rf"$t_{{a,\mathcal{{R}}}}^* = {t_lrp_arrival:.3g}$",
+                rf"$t_{{\mathcal{{A}}}}^* = {t_fp_pt_arrival:.3g}$",
+                rf"$t_{{\mathcal{{E}}}}^* = {t_fp_arrival:.3g}$",
+                rf"$t_{{\mathcal{{R}}}}^* = {t_lrp_arrival:.3g}$",
             ]
-            if t_min_fsm_dimless is not None:
-                arrival_lines.append(rf"$t_{{a,\mathcal{{S}}}}^* = {t_fsm_arrival:.3g}$")
+            # if t_min_fsm_dimless is not None:
+            #     arrival_lines.append(rf"$t_{{a,\mathcal{{S}}}}^* = {t_fsm_arrival:.3g}$")
             ax.text(
                 0.98,
                 0.02,

@@ -225,19 +225,27 @@ def plot_characteristic_time(
     analytical_label: str = "Analytical $t_{\\mathrm{min}}$",
     stats_fpt_fsm: np.ndarray | None = None,
 ):
-    fig, ax = plt.subplots(figsize=[5, 4])
-    ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="FP")
-    ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), stats_mhr[:, 1] / (t_ref * dh), color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="LRP")
-    ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), stats_mhr_fmm[:, 1] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="LRP (FMM)")
-    ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, stats_fpt_fmm[:, 1] / t_ref, color=COLORS["fpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FMM)")
-    ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, stats_fpt_dijkstra[:, 1] / t_ref, color=COLORS["fpDijkstra"], linestyle="-", marker="o", markerfacecolor="None", label="FP (Dijkstra)")
-    if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
-        ax.errorbar(var, stats_fpt_fsm[:, 0] / t_ref, stats_fpt_fsm[:, 1] / t_ref, color=COLORS["fpFSM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FSM)")
+    fig, ax = plt.subplots(figsize=[6, 3])
+    # fig, ax = plt.subplots(figsize=[5, 4])
+
     if analytical_tmin is not None:
-        ax.plot(var, analytical_tmin, color="black", linestyle="--", linewidth=1.8, label=analytical_label)
+        ax.plot(var[:5], analytical_tmin[:5], color="black", linestyle="-", linewidth=1.8, marker="o", markersize=6, markerfacecolor="None", label=analytical_label)
+    if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
+        pass
+        # ax.errorbar(var, stats_fpt_fsm[:, 0] / t_ref, stats_fpt_fsm[:, 1] / t_ref, color=COLORS["fpFSM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FSM)")
+    ax.errorbar(var, stats_fpt[:, 0] / t_ref, color=COLORS["fp"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label=r"FP (RK45)")
+    ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="FP (FMM)")
+    ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="FP (Dijkstra)")
+    ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="LRP (FMM)")
+    ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="LRP (Dijkstra)")
+    # ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="FP")
+    # ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), stats_mhr[:, 1] / (t_ref * dh), color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="LRP")
+    # ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), stats_mhr_fmm[:, 1] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="LRP (FMM)")
+    # ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, stats_fpt_fmm[:, 1] / t_ref, color=COLORS["fpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FMM)")
+    # ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, stats_fpt_dijkstra[:, 1] / t_ref, color=COLORS["fpDijkstra"], linestyle="-", marker="o", markerfacecolor="None", label="FP (Dijkstra)")
     # ax.set_yscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
-    ax.set_ylabel(r"$\mathbb{E}\left[ tU / I_Y \right]$")
+    ax.set_ylabel(r"$\mathbb{E}\left[ t^* \right] U / I_Y$")
     ax.legend()
     ax.grid(True, which="both")
     fig.tight_layout()
@@ -512,17 +520,24 @@ def plot_hausdorff_vs_variance(
     i_y: float,
     stats_hausdorff_fsm: np.ndarray | None = None,
 ):
-    fig, ax = plt.subplots(figsize=[5, 4])
-    ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, yerr=stats_hausdorff_lrp[:, 1] / i_y, label="$d_H$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
-    ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, yerr=stats_hausdorff_lrp_fmm[:, 1] / i_y, label="$d_H$[FP, LRP(FMM)]", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
-    ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, yerr=stats_hausdorff_fmm[:, 1] / i_y, label="$d_H$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")
-    ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, yerr=stats_hausdorff_dijkstra[:, 1] / i_y, label="$d_H$[FP, FP(Dijkstra)]", linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None")
+    fig, ax = plt.subplots(figsize=[6, 3])
+    # fig, ax = plt.subplots(figsize=[5, 4])
+
+    ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, label="FP (FMM)", linestyle="--", color=COLORS["fpFMM"], marker="x", markersize=4, markerfacecolor="None")
+    ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, label="FP (Dijkstra)", linestyle="--", color=COLORS["fpDijkstra"], marker="x", markersize=4, markerfacecolor="None")
+    ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, label="LRP (FMM)", linestyle="--", color=COLORS["lrpFMM"], marker="x", markersize=4, markerfacecolor="None")
+    ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, label="LRP (Dijkstra)", linestyle="--", color=COLORS["lrp"], marker="x", markersize=4, markerfacecolor="None")
+    # ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, yerr=stats_hausdorff_lrp[:, 1] / i_y, label="$d_H$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
+    # ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, yerr=stats_hausdorff_lrp_fmm[:, 1] / i_y, label="$d_H$[FP, LRP(FMM)]", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
+    # ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, yerr=stats_hausdorff_fmm[:, 1] / i_y, label="$d_H$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")
+    # ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, yerr=stats_hausdorff_dijkstra[:, 1] / i_y, label="$d_H$[FP, FP(Dijkstra)]", linestyle="-", color=COLORS["fpDijkstra"], marker="o", markerfacecolor="None")
     if stats_hausdorff_fsm is not None and np.any(np.isfinite(stats_hausdorff_fsm[:, 0])):
-        ax.errorbar(var, stats_hausdorff_fsm[:, 0] / i_y, yerr=stats_hausdorff_fsm[:, 1] / i_y, label="$d_H$[FP, FP(FSM)]", linestyle="-", color=COLORS["fpFSM"], marker="o", markerfacecolor="None")
+        pass
+        # ax.errorbar(var, stats_hausdorff_fsm[:, 0] / i_y, yerr=stats_hausdorff_fsm[:, 1] / i_y, label="$d_H$[FP, FP(FSM)]", linestyle="-", color=COLORS["fpFSM"], marker="o", markerfacecolor="None")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ d_H / I_Y \right]$")
-    ax.legend(fontsize="9", loc="upper left")
+    ax.legend(fontsize="9", loc="best")
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "hausdorff_variance"}
@@ -1155,7 +1170,7 @@ def run_stage4(
             t_ref,
             cfg.dh,
             analytical_tmin=analytical_tmin,
-            analytical_label=f"Analytical $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
+            analytical_label="Analytical", # f" $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
             stats_fpt_fsm=s.get("stats_fpt_fsm"),
         )
         artifacts.extend(save_figure(fig, section="times", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))

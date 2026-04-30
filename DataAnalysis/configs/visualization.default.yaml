@@ -1,5 +1,5 @@
 data_root: /project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod
-run_id: 11p2_fd #9_newoutput_fmmconti_renyi
+run_id: 11p1_computation_time
 length_scale: 0.05
 dh: 0.1
 field_size_ref: 200

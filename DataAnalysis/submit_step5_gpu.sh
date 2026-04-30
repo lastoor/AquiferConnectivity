@@ -14,7 +14,7 @@ synthetic_offset="-3.0"
 # GRF logK source (used when logk_source="grf")
 grf_std="2.25"
 grf_length_scale=""   # leave empty to use cfg.length_scale
-grf_seed="3"
+grf_seed="2"
 grf_minpadding="0"
 
 run_tag="3_synthetic_plume"
