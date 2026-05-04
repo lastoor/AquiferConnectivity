@@ -151,3 +151,20 @@
 - Limitations/follow-up:
   - Live CLI smoke checks still depend on the external `../../FlowSimulation` import path being available in the runtime environment.
   - `pytest` is still not installed in the current environment, so unit tests were not executed here.
+
+## 2026-05-04
+
+- Reworked `./src/fmm_core/fm_asr.py` toward a faithful smooth-norm Mirebeau FM-ASR implementation:
+  - `build_f_acute_mesh` now returns unique cyclic stencil vertices instead of a duplicated closing vertex
+  - added stencil validation for elementary F-acute edges
+  - added paper-style exterior discrete boundary nodes for escape-time solves
+  - preserved in-domain source masks as an explicit compatibility mode
+- Exported FM-ASR symbols from `./src/fmm_core/__init__.py` and documented the module in `./README.md`.
+- Added focused FM-ASR tests for stencil construction, edge updates, exterior-boundary escape time, and asymmetric source-mask behavior.
+- Validation:
+  - `PYTHONPYCACHEPREFIX=/private/tmp/fmm_pycache python3 -m py_compile src/fmm_core/fm_asr.py tests/test_fm_asr.py src/fmm_core/__init__.py`
+  - `PYTHONPYCACHEPREFIX=/private/tmp/fmm_pycache python3 -m py_compile scripts/run_fmm.py src/fmm_core/*.py`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q tests/test_fm_asr.py` (7 passed)
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q` (11 passed, 5 pre-existing FSM warnings)
+- Limitations/follow-up:
+  - The preferred wrapper `./scripts/run_in_fmm_env.sh` currently targets missing Conda env `taichi_env`; available envs are `pytorch`, `taichi`, `base`, and `general`, so validation used `conda run -n taichi` directly.

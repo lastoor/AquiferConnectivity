@@ -22,6 +22,7 @@ FMM-specific code lives in `./src/fmm_core`:
 
 - `fmm.py`: travel-time solvers (`custom`, `scikit`) and path backtracking (`discrete`, `continuous`).
 - `fsm.py`: velocity-driven FSM travel-time solve/path extraction for `v·∇T = 1`, including residual-field and residual-MSE helpers for convergence checks.
+- `fm_asr.py`: 2D Mirebeau-style FM-ASR solver for smooth Finsler norms, with paper-style exterior discrete boundary handling for escape-time solves.
 - `metrics.py`: path comparison metrics (`distance_distribution`).
 
 ## Dependency on FlowSimulation

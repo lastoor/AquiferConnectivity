@@ -24,6 +24,15 @@ from .fsm import (
     solve_fsm_travel_time,
     solve_fsm_travel_time_new,
 )
+from .fm_asr import (
+    AsymmetricEuclideanNorm,
+    FMASR2D,
+    FinslerNorm,
+    LocalStencil,
+    build_f_acute_mesh,
+    is_f_acute,
+    validate_f_acute_mesh,
+)
 from .metrics import distance_distribution, directed_nn_distances, resample_by_arclength
 from .speed import prepare_fmm_speed
 
@@ -54,4 +63,11 @@ __all__ = [
     "compute_fsm_residual_field",
     "compute_fsm_residual_field_new",
     "compute_fsm_residual_mse",
+    "FinslerNorm",
+    "AsymmetricEuclideanNorm",
+    "LocalStencil",
+    "FMASR2D",
+    "build_f_acute_mesh",
+    "is_f_acute",
+    "validate_f_acute_mesh",
 ]
