@@ -30,8 +30,14 @@ from .fm_asr import (
     FinslerNorm,
     LocalStencil,
     build_f_acute_mesh,
+    build_randers_from_W,
+    check_randers_condition,
     is_f_acute,
+    plot_randers_indicatrix,
+    randers_indicatrix_points,
+    randers_r_of_theta,
     validate_f_acute_mesh,
+    visualize_indicatrix_field,
 )
 from .metrics import distance_distribution, directed_nn_distances, resample_by_arclength
 from .speed import prepare_fmm_speed
@@ -68,6 +74,12 @@ __all__ = [
     "LocalStencil",
     "FMASR2D",
     "build_f_acute_mesh",
+    "build_randers_from_W",
+    "check_randers_condition",
     "is_f_acute",
+    "plot_randers_indicatrix",
+    "randers_indicatrix_points",
+    "randers_r_of_theta",
     "validate_f_acute_mesh",
+    "visualize_indicatrix_field",
 ]

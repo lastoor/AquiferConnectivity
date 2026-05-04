@@ -152,6 +152,33 @@ Defaults:
 - `--fmm_solver scikit`
 - `--fmm_backtracking continuous`
 
+## FM-ASR Finsler Solver
+
+`FMASR2D` supports smooth Finsler/Randers norms, including metrics built from a cell-centered velocity field. A source-line travel-time solve can be run directly from a `(ny, nx, 2)` velocity array:
+
+```python
+import numpy as np
+from fmm_core import FMASR2D
+
+ny, nx = 101, 101
+W = np.zeros((ny, nx, 2), dtype=float)
+W[..., 0] = 1.0  # rightward local velocity
+
+source = np.zeros((ny, nx), dtype=bool)
+source[:, 0] = True
+
+solver = FMASR2D.from_velocity_field(
+    W,
+    h=1.0,
+    perp_ratio=0.5,
+    back_factor=2.0,
+    direction="from_source",
+)
+T = solver.solve(source)
+```
+
+Use `isotropic_only=True` to reduce the local indicatrix to a circle whose radius is the velocity magnitude. Use `direction="to_source"` for the backward/escape orientation.
+
 ## FMM Velocity Options
 
 FMM speed preparation is configurable:

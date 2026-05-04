@@ -168,3 +168,35 @@
   - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q` (11 passed, 5 pre-existing FSM warnings)
 - Limitations/follow-up:
   - The preferred wrapper `./scripts/run_in_fmm_env.sh` currently targets missing Conda env `taichi_env`; available envs are `pytorch`, `taichi`, `base`, and `general`, so validation used `conda run -n taichi` directly.
+
+## 2026-05-04
+
+- Integrated velocity-derived Randers/Finsler fields with the FM-ASR solver:
+  - added `FMASR2D.from_velocity_field(...)` for `(ny, nx, 2)` cell-centered velocity arrays
+  - defaulted the factory to `direction="from_source"` by reversing the local Randers norm for source-outward travel times
+  - kept `direction="to_source"` for the existing backward/escape orientation
+  - generalized `build_randers_from_W` and validation helpers to rectangular fields
+- Made FM-ASR plotting helpers import `matplotlib` and optional `cmasher` lazily so solver imports do not require plotting dependencies.
+- Exported Randers helper functions from `./src/fmm_core/__init__.py` and documented source-line velocity-field usage in `./README.md`.
+- Added FM-ASR tests for isotropic velocity reduction, source-line scaling, directionality, zero-velocity floors, rectangular fields, and invalid inputs.
+- Validation:
+  - `PYTHONPYCACHEPREFIX=/private/tmp/fmm_pycache python3 -m py_compile scripts/run_fmm.py src/fmm_core/*.py tests/test_fm_asr.py`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q tests/test_fm_asr.py` (13 passed)
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q` (17 passed, 5 pre-existing FSM warnings)
+
+## 2026-05-04
+
+- Added standalone comparison script `./tests/compare_fm_asr_velocity_paths.py`:
+  - generates one logK/K field from the existing GRF framework
+  - solves hydraulic head and full face/cell velocity fields
+  - runs GPU Pollock particle tracking through `particle_tracking_summary`
+  - computes scalar-speed FMM, FM-ASR acentric Randers, and FM-ASR reduced-isotropic paths
+  - saves `results.npz`, `summary.json`, `comparison.png`, and optional `indicatrix_field.png`
+- Added `./tests/run_compare_fm_asr_velocity_paths.sh` wrapper exposing every Python CLI option through environment-variable defaults while forwarding trailing CLI overrides.
+- Validation:
+  - `PYTHONPYCACHEPREFIX=/private/tmp/fmm_pycache python3 -m py_compile tests/compare_fm_asr_velocity_paths.py src/fmm_core/*.py`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi python tests/compare_fm_asr_velocity_paths.py --help`
+  - `tests/run_compare_fm_asr_velocity_paths.sh --help`
+  - `bash -n tests/run_compare_fm_asr_velocity_paths.sh`
+- Limitations/follow-up:
+  - A smoke run reached Taichi/Metal GPU initialization, then failed on local GPU/cache setup (`ticache.lock` and RHI device map assertion). This is an environment/runtime GPU failure rather than a script syntax/import issue.

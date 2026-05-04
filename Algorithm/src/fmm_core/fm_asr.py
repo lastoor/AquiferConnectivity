@@ -368,6 +368,64 @@ class FMASR2D:
             self._stencil_cache[key] = stencil
         return stencil
 
+    @classmethod
+    def from_velocity_field(
+        cls,
+        W_field: np.ndarray,
+        h: float,
+        origin: Tuple[float, float] = (0.0, 0.0),
+        perp_ratio: float = 0.5,
+        back_factor: float = 2.0,
+        min_speed: float = 1e-6,
+        isotropic_only: bool = False,
+        direction: str = "from_source",
+        stencil_strategy: str = "precompute",
+    ) -> "FMASR2D":
+        """Build an FM-ASR solver from a cell-centered velocity field.
+
+        ``direction="from_source"`` is the physical source-outward travel-time
+        convention. Since the marching update queries the cost from trial nodes
+        back to accepted nodes, this mode uses the reversed Randers norm.
+        ``direction="to_source"`` keeps the escape/backward orientation.
+        """
+        c_iso, M_field, beta_field, _ = build_randers_from_W(
+            W_field,
+            perp_ratio=perp_ratio,
+            back_factor=back_factor,
+            min_speed=min_speed,
+            isotropic_only=isotropic_only,
+        )
+        del c_iso
+
+        if direction == "from_source":
+            solver_beta = -beta_field
+        elif direction == "to_source":
+            solver_beta = beta_field
+        else:
+            raise ValueError("direction must be 'from_source' or 'to_source'")
+
+        condition = check_randers_condition(M_field, solver_beta)
+        if not np.all(np.isfinite(condition)) or np.nanmax(condition) >= 1.0:
+            raise ValueError("velocity-derived Randers field violates beta^T M^{-1} beta < 1")
+
+        ny, nx = M_field.shape[:2]
+        ox, oy = origin
+
+        def metric_at(x: float, y: float) -> FinslerNorm:
+            i = int(round((x - ox) / h))
+            j = int(round((y - oy) / h))
+            i = min(nx - 1, max(0, i))
+            j = min(ny - 1, max(0, j))
+            return AsymmetricEuclideanNorm(M=M_field[j, i], beta=solver_beta[j, i])
+
+        return cls(
+            shape=(ny, nx),
+            h=h,
+            metric_at=metric_at,
+            origin=origin,
+            stencil_strategy=stencil_strategy,
+        )
+
     @property
     def boundary_nodes(self) -> Set[Tuple[int, int]]:
         """Exterior discrete boundary nodes in partial Omega*."""
@@ -578,14 +636,276 @@ class FMASR2D:
 
         return float(cand_edge)
 
+def randers_r_of_theta(M, b, theta):
+    M = np.asarray(M, dtype=float)
+    b = np.asarray(b, dtype=float)
+    d = np.stack([np.cos(theta), np.sin(theta)], axis=0)  # (2, K)
+    # compute sqrt(d^T M d) for each theta
+    Md = M @ d                         # (2, K)
+    quad = np.sum(d * Md, axis=0)      # (K,)
+    sym = np.sqrt(np.maximum(quad, 0))
 
-if __name__ == "__main__":
-    # Homogeneous example.
-    M = np.array([[4.0, 0.0], [0.0, 1.0]], dtype=float)
-    beta = np.array([0.2, 0.0], dtype=float)
-    F = AsymmetricEuclideanNorm(M=M, beta=beta)
+    asym = b @ d                       # (K,)
+    denom = sym - asym                 # (K,)
 
-    solver = FMASR2D(shape=(51, 51), h=1.0, F=F)
-    dist = solver.solve()
-    print("stencil size at center:", len(solver.stencil_at(25, 25).offsets))
-    print("center distance:", dist[25, 25])
+    # denom must be > 0 for a valid Randers indicatrix in that direction
+    # mask invalid directions (can happen if b is too strong)
+    valid = denom > 1e-12
+    r = np.empty_like(denom)
+    r[valid] = 1.0 / denom[valid]
+    r[~valid] = np.nan
+    return r, valid
+
+def plot_randers_indicatrix(M, b, K=720, ax=None, show_vectors=True):
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError as exc:
+        raise ImportError("plot_randers_indicatrix requires matplotlib") from exc
+
+    M = np.asarray(M, dtype=float)
+    b = np.asarray(b, dtype=float)
+    theta = np.linspace(0, 2*np.pi, K, endpoint=False)
+    r, valid = randers_r_of_theta(M, b, theta)
+
+    x = r * np.cos(theta)
+    y = r * np.sin(theta)
+
+    if ax is None:
+        fig, ax = plt.subplots()
+
+    ax.plot(x, y)
+    ax.axhline(0, linewidth=0.8)
+    ax.axvline(0, linewidth=0.8)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_title("Randers indicatrix: F(u)=1")
+
+    if show_vectors:
+        ax.quiver(0, 0, b[0], b[1], angles="xy", scale_units="xy", scale=1, width=0.003)
+        # optionally plot principal directions of M^{-1} as "fast axes" (not required)
+
+    # report invalid angles if any
+    frac_invalid = np.mean(~valid)
+    if frac_invalid > 0:
+        ax.text(0.02, 0.98, f"Invalid directions: {100*frac_invalid:.1f}%",
+                transform=ax.transAxes, va="top")
+
+    return ax
+
+def build_randers_from_W(
+    W_field,                 # (ny,nx,2) vector field
+    perp_ratio=0.5,          # in (0,1]: sideways speed = perp_ratio * |W|
+    back_factor=2.0,         # >=1: backward speed = |W| / back_factor
+    min_speed=1e-6,          # floor for |W| to avoid divide-by-zero
+    isotropic_only=False     # if True: returns pure isotropic metric (b=0, M=I/|W|^2)
+):
+    """
+    Construct Randers metric F(u)=sqrt(u^T M u) - b·u from a given velocity field W(x),
+    such that:
+      - baseline isotropic speed is c(x)=|W(x)|
+      - when isotropic_only=True => M=I/c^2 and b=0 exactly
+      - otherwise, we enforce:
+            c_eff(+e) = |W|
+            c_eff(-e) = |W|/back_factor
+            c_eff(perp) = perp_ratio*|W|
+        where e = W/|W| and c_eff(d)=1/F(d) for unit direction d.
+
+    Returns:
+      c_iso : (ny,nx)  baseline speed c(x)=|W| (floored by min_speed)
+      M     : (ny,nx,2,2)
+      b     : (ny,nx,2)
+      e     : (ny,nx,2) unit direction W/|W| (arbitrary where |W|~0)
+    """
+    W = np.asarray(W_field, dtype=float)
+    if W.ndim != 3 or W.shape[-1] != 2:
+        raise ValueError("W_field must have shape (ny,nx,2).")
+    if not np.all(np.isfinite(W)):
+        raise ValueError("W_field must contain only finite values")
+    if min_speed <= 0.0:
+        raise ValueError("min_speed must be positive")
+
+    ny, nx, _ = W.shape
+
+    s = np.linalg.norm(W, axis=2)                   # |W|
+    c_iso = np.maximum(s, float(min_speed))         # baseline isotropic speed
+
+    # Allocate
+    M = np.zeros((ny, nx, 2, 2), dtype=float)
+    b = np.zeros((ny, nx, 2), dtype=float)
+    e = np.zeros((ny, nx, 2), dtype=float)
+
+    # Validate knobs
+    if not (0.0 < perp_ratio <= 1.0):
+        raise ValueError("perp_ratio must be in (0,1].")
+    if back_factor < 1.0:
+        raise ValueError("back_factor must be >= 1.")
+
+    # If you want the isotropic approximation exactly:
+    if isotropic_only:
+        for j in range(ny):
+            for i in range(nx):
+                c = c_iso[j, i]
+                M[j, i] = np.eye(2) / (c * c)
+                b[j, i] = 0.0
+                # direction (just for reference)
+                if s[j, i] > 0:
+                    e[j, i] = W[j, i] / s[j, i]
+                else:
+                    e[j, i] = np.array([1.0, 0.0])
+        return c_iso, M, b, e
+
+    # Otherwise: anisotropic + asymmetric refinement
+    for j in range(ny):
+        for i in range(nx):
+            c = c_iso[j, i]
+
+            # unit direction e = W/|W|
+            if s[j, i] > 0:
+                ex, ey = W[j, i] / s[j, i]
+            else:
+                # arbitrary if |W|=0 (metric reverts to isotropic-ish via c_iso floor)
+                ex, ey = 1.0, 0.0
+            e[j, i] = np.array([ex, ey])
+
+            # perpendicular direction
+            px, py = -ey, ex
+
+            # rotation matrix R = [e, e_perp]
+            R = np.array([[ex, px],
+                          [ey, py]], dtype=float)
+
+            # Target directional speeds
+            c_plus  = c                       # max speed along +e: |W|
+            c_minus = c / back_factor          # reduced speed along -e
+            c_perp  = perp_ratio * c           # reduced sideways speed
+
+            # Choose Randers parameters to match c_plus and c_minus exactly.
+            # For unit direction d:
+            #   F(d) = sqrt(d^T M d) - b·d
+            # Along +e: F(+e) = 1/c_plus
+            # Along -e: F(-e) = 1/c_minus
+            #
+            # If we set (in the local (e, e_perp) frame):
+            #   sqrt(d^T M d) gives 1/c_sym_para along ±e
+            #   b·d = beta * (e·d) with b parallel to e
+            #
+            # Then:
+            #   1/c_sym_para - beta = 1/c_plus
+            #   1/c_sym_para + beta = 1/c_minus
+            inv_csym_para = 0.5 * (1.0/c_plus + 1.0/c_minus)
+            beta          = 0.5 * (1.0/c_minus - 1.0/c_plus)  # >=0 if c_minus<=c_plus
+
+            c_sym_para = 1.0 / inv_csym_para
+            c_sym_perp = c_perp  # keep perpendicular purely symmetric
+
+            # Build symmetric tensor M (slowness^2 tensor)
+            D = np.diag([1.0/(c_sym_para**2), 1.0/(c_sym_perp**2)])
+            M[j, i] = R @ D @ R.T
+
+            # Build b (covector) aligned with e
+            b[j, i] = beta * np.array([ex, ey], dtype=float)
+
+    return c_iso, M, b, e
+
+def check_randers_condition(M0, b):
+    M0 = np.asarray(M0, dtype=float)
+    b = np.asarray(b, dtype=float)
+    if M0.shape[:2] != b.shape[:2] or M0.shape[-2:] != (2, 2) or b.shape[-1] != 2:
+        raise ValueError("M0 must have shape (ny,nx,2,2) and b must have shape (ny,nx,2)")
+    ny, nx = b.shape[:2]
+    vals = np.zeros((ny, nx), float)
+    for j in range(ny):
+        for i in range(nx):
+            Minv = np.linalg.inv(M0[j, i])
+            vals[j, i] = np.sqrt(b[j, i] @ (Minv @ b[j, i]))
+    return vals  # should be < 1 everywhere
+
+def randers_indicatrix_points(M, b, K=240, eps=1e-12):
+    """
+    Points u(theta) on indicatrix F(u)=1 for F(u)=sqrt(u^T M u)-b·u.
+    u = r(theta) d(theta), r = 1/(sqrt(d^T M d) - b·d)
+    """
+    M = np.asarray(M, dtype=float)
+    b = np.asarray(b, dtype=float)
+    theta = np.linspace(0, 2*np.pi, K, endpoint=False)
+    d = np.stack([np.cos(theta), np.sin(theta)], axis=0)  # (2,K)
+    Md = M @ d
+    quad = np.sum(d * Md, axis=0)
+    sym = np.sqrt(np.maximum(quad, 0.0))
+    asym = b @ d
+    denom = sym - asym
+
+    valid = denom > eps
+    r = np.full_like(denom, np.nan, dtype=float)
+    r[valid] = 1.0 / denom[valid]
+
+    x = r * np.cos(theta)
+    y = r * np.sin(theta)
+    return x, y
+
+
+def visualize_indicatrix_field(
+    W_field,
+    perp_ratio=0.5,
+    back_factor=2.0,
+    h=1.0,
+    stride=10,
+    K=180,
+    glyph_scale=0.30,          # scales glyph size in plot units (~h)
+    show_W_quiver=True,
+    quiver_stride=None
+):
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.colors import to_rgba
+    except ImportError as exc:
+        raise ImportError("visualize_indicatrix_field requires matplotlib") from exc
+    try:
+        import cmasher as cm
+        cmap = cm.batlowW.reversed()
+    except ImportError:
+        cmap = "viridis"
+
+    W = np.asarray(W_field, float)
+    if W.ndim != 3 or W.shape[-1] != 2:
+        raise ValueError("W_field must have shape (ny,nx,2).")
+    ny, nx, _ = W.shape
+
+    c_iso, M_field, b_field, _ = build_randers_from_W(
+        W, perp_ratio=perp_ratio, back_factor=back_factor
+    )
+    del c_iso
+
+    if quiver_stride is None:
+        quiver_stride = stride
+
+    fig, ax = plt.subplots()
+
+    # Optional: plot W in the background
+    if show_W_quiver:
+        ys = np.arange(0, ny, quiver_stride)
+        xs = np.arange(0, nx, quiver_stride)
+        X, Y = np.meshgrid(xs * h, ys * h)
+        U = W[ys[:, None], xs[None, :], 0]
+        V = W[ys[:, None], xs[None, :], 1]
+        v_mag_log = np.log10(np.sqrt(W[:,:,0]**2 + W[:,:,1]**2))
+        # ax.quiver(X, Y, U, V, angles="xy", scale_units="xy", scale=None, width=0.0025)
+        ax.streamplot(X, Y, U, V, color=to_rgba('black', alpha=0.45), linewidth=0.8, arrowsize=0.6)
+        im = ax.imshow(v_mag_log, origin='lower', cmap=cmap)
+        fig.colorbar(im, ax=ax, label='$\\log_{10} |\\mathbf{v}|$', fraction=0.046, pad=0.04)
+
+
+    # Indicatrix glyphs
+    for j in range(0, ny, stride):
+        for i in range(0, nx, stride):
+            M = M_field[j, i]
+            b = b_field[j, i]
+            xi, yi = i * h, j * h  # (x,y) from (j,i)
+
+            gx, gy = randers_indicatrix_points(M, b, K=K)
+            ax.plot(xi + glyph_scale * h * gx, yi + glyph_scale * h * gy, color='white', linewidth=0.8)
+
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_title(f"Randers indicatrix field (stride={stride}, perp_ratio={perp_ratio}, back_factor={back_factor})")
+    plt.show()
