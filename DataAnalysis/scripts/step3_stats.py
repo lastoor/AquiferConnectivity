@@ -84,33 +84,45 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_fp_dijkstra = []
     stats_fp_fmm = []
     stats_fp_fsm = []
+    stats_fp_fm_asr = []
+    stats_fp_fm_asr_iso = []
     stats_mhr = []
     stats_mhr_fmm = []
     stats_fpt = []
     stats_fpt_dijkstra = []
     stats_fpt_fmm = []
     stats_fpt_fsm = []
+    stats_fpt_fm_asr = []
+    stats_fpt_fm_asr_iso = []
     stats_ct_lrp_dijkstra = []
     stats_ct_lrp_fmm = []
     stats_ct_fp_dijkstra = []
     stats_ct_fp_fmm = []
     stats_ct_fp_fsm = []
     stats_ct_fp = []
+    stats_ct_fp_fm_asr = []
+    stats_ct_fp_fm_asr_iso = []
     stats_hausdorff_lrp = []
     stats_hausdorff_lrp_fmm = []
     stats_hausdorff_dijkstra = []
     stats_hausdorff_fmm = []
     stats_hausdorff_fsm = []
+    stats_hausdorff_fm_asr = []
+    stats_hausdorff_fm_asr_iso = []
     stats_frechet_lrp = []
     stats_frechet_lrp_fmm = []
     stats_frechet_dijkstra = []
     stats_frechet_fmm = []
     stats_frechet_fsm = []
+    stats_frechet_fm_asr = []
+    stats_frechet_fm_asr_iso = []
     stats_endpoint_lrp = []
     stats_endpoint_lrp_fmm = []
     stats_endpoint_dijkstra = []
     stats_endpoint_fmm = []
     stats_endpoint_fsm = []
+    stats_endpoint_fm_asr = []
+    stats_endpoint_fm_asr_iso = []
 
     for var_ in var_values:
         key = f"var_{var_}"
@@ -121,12 +133,16 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_fp_dijkstra.append(_mean_std_pair(entry["lengths"]["fp_dijkstra"]))
         stats_fp_fmm.append(_mean_std_pair(entry["lengths"]["fp_fmm"]))
         stats_fp_fsm.append(_mean_std_pair(entry["lengths"].get("fp_fsm", [np.nan, np.nan])))
+        stats_fp_fm_asr.append(_mean_std_pair(entry["lengths"].get("fp_fm_asr", [np.nan, np.nan])))
+        stats_fp_fm_asr_iso.append(_mean_std_pair(entry["lengths"].get("fp_fm_asr_iso", [np.nan, np.nan])))
         stats_mhr.append(_mean_std_pair(entry["times"]["mhr"]))
         stats_mhr_fmm.append(_mean_std_pair(entry["times"]["mhr_fmm"]))
         stats_fpt.append(_mean_std_pair(entry["times"]["fpt"]))
         stats_fpt_dijkstra.append(_mean_std_pair(entry["times"]["fpt_dijkstra"]))
         stats_fpt_fmm.append(_mean_std_pair(entry["times"]["fpt_fmm"]))
         stats_fpt_fsm.append(_mean_std_pair(entry["times"].get("fpt_fsm", [np.nan, np.nan])))
+        stats_fpt_fm_asr.append(_mean_std_pair(entry["times"].get("fpt_fm_asr", [np.nan, np.nan])))
+        stats_fpt_fm_asr_iso.append(_mean_std_pair(entry["times"].get("fpt_fm_asr_iso", [np.nan, np.nan])))
         ct = entry.get("comp_times", {})
         stats_ct_lrp_dijkstra.append(_mean_std_pair(ct.get("ct_lrp_dijkstra", [np.nan, np.nan])))
         stats_ct_lrp_fmm.append(_mean_std_pair(ct.get("ct_lrp_fmm", [np.nan, np.nan])))
@@ -134,21 +150,29 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_ct_fp_fmm.append(_mean_std_pair(ct.get("ct_fp_fmm", [np.nan, np.nan])))
         stats_ct_fp_fsm.append(_mean_std_pair(ct.get("ct_fp_fsm", [np.nan, np.nan])))
         stats_ct_fp.append(_mean_std_pair(ct.get("ct_fp", [np.nan, np.nan])))
+        stats_ct_fp_fm_asr.append(_mean_std_pair(ct.get("ct_fp_fm_asr", [np.nan, np.nan])))
+        stats_ct_fp_fm_asr_iso.append(_mean_std_pair(ct.get("ct_fp_fm_asr_iso", [np.nan, np.nan])))
         stats_hausdorff_lrp.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrp"]))
         stats_hausdorff_lrp_fmm.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrpFMM"]))
         stats_hausdorff_dijkstra.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_fpDijkstra"]))
         stats_hausdorff_fmm.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_fpFMM"]))
         stats_hausdorff_fsm.append(_mean_std_pair(entry["distances"]["hausdorff"].get("fp_fpFSM", [np.nan, np.nan])))
+        stats_hausdorff_fm_asr.append(_mean_std_pair(entry["distances"]["hausdorff"].get("fp_fm_asr", [np.nan, np.nan])))
+        stats_hausdorff_fm_asr_iso.append(_mean_std_pair(entry["distances"]["hausdorff"].get("fp_fm_asr_iso", [np.nan, np.nan])))
         stats_frechet_lrp.append(_mean_std_pair(entry["distances"]["frechet"]["fp_lrp"]))
         stats_frechet_lrp_fmm.append(_mean_std_pair(entry["distances"]["frechet"]["fp_lrpFMM"]))
         stats_frechet_dijkstra.append(_mean_std_pair(entry["distances"]["frechet"]["fp_fpDijkstra"]))
         stats_frechet_fmm.append(_mean_std_pair(entry["distances"]["frechet"]["fp_fpFMM"]))
         stats_frechet_fsm.append(_mean_std_pair(entry["distances"]["frechet"].get("fp_fpFSM", [np.nan, np.nan])))
+        stats_frechet_fm_asr.append(_mean_std_pair(entry["distances"]["frechet"].get("fp_fm_asr", [np.nan, np.nan])))
+        stats_frechet_fm_asr_iso.append(_mean_std_pair(entry["distances"]["frechet"].get("fp_fm_asr_iso", [np.nan, np.nan])))
         stats_endpoint_lrp.append(_mean_std_pair(entry["distances"]["end_point"]["fp_lrp"]))
         stats_endpoint_lrp_fmm.append(_mean_std_pair(entry["distances"]["end_point"]["fp_lrpFMM"]))
         stats_endpoint_dijkstra.append(_mean_std_pair(entry["distances"]["end_point"]["fp_fpDijkstra"]))
         stats_endpoint_fmm.append(_mean_std_pair(entry["distances"]["end_point"]["fp_fpFMM"]))
         stats_endpoint_fsm.append(_mean_std_pair(entry["distances"]["end_point"].get("fp_fpFSM", [np.nan, np.nan])))
+        stats_endpoint_fm_asr.append(_mean_std_pair(entry["distances"]["end_point"].get("fp_fm_asr", [np.nan, np.nan])))
+        stats_endpoint_fm_asr_iso.append(_mean_std_pair(entry["distances"]["end_point"].get("fp_fm_asr_iso", [np.nan, np.nan])))
 
     return {
         "stats_lrp": np.asarray(stats_lrp, dtype=float),
@@ -157,33 +181,45 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_fp_dijkstra": np.asarray(stats_fp_dijkstra, dtype=float),
         "stats_fp_fmm": np.asarray(stats_fp_fmm, dtype=float),
         "stats_fp_fsm": np.asarray(stats_fp_fsm, dtype=float),
+        "stats_fp_fm_asr": np.asarray(stats_fp_fm_asr, dtype=float),
+        "stats_fp_fm_asr_iso": np.asarray(stats_fp_fm_asr_iso, dtype=float),
         "stats_mhr": np.asarray(stats_mhr, dtype=float),
         "stats_mhr_fmm": np.asarray(stats_mhr_fmm, dtype=float),
         "stats_fpt": np.asarray(stats_fpt, dtype=float),
         "stats_fpt_dijkstra": np.asarray(stats_fpt_dijkstra, dtype=float),
         "stats_fpt_fmm": np.asarray(stats_fpt_fmm, dtype=float),
         "stats_fpt_fsm": np.asarray(stats_fpt_fsm, dtype=float),
+        "stats_fpt_fm_asr": np.asarray(stats_fpt_fm_asr, dtype=float),
+        "stats_fpt_fm_asr_iso": np.asarray(stats_fpt_fm_asr_iso, dtype=float),
         "stats_hausdorff_lrp": np.asarray(stats_hausdorff_lrp, dtype=float),
         "stats_hausdorff_lrp_fmm": np.asarray(stats_hausdorff_lrp_fmm, dtype=float),
         "stats_hausdorff_dijkstra": np.asarray(stats_hausdorff_dijkstra, dtype=float),
         "stats_hausdorff_fmm": np.asarray(stats_hausdorff_fmm, dtype=float),
         "stats_hausdorff_fsm": np.asarray(stats_hausdorff_fsm, dtype=float),
+        "stats_hausdorff_fm_asr": np.asarray(stats_hausdorff_fm_asr, dtype=float),
+        "stats_hausdorff_fm_asr_iso": np.asarray(stats_hausdorff_fm_asr_iso, dtype=float),
         "stats_frechet_lrp": np.asarray(stats_frechet_lrp, dtype=float),
         "stats_frechet_lrp_fmm": np.asarray(stats_frechet_lrp_fmm, dtype=float),
         "stats_frechet_dijkstra": np.asarray(stats_frechet_dijkstra, dtype=float),
         "stats_frechet_fmm": np.asarray(stats_frechet_fmm, dtype=float),
         "stats_frechet_fsm": np.asarray(stats_frechet_fsm, dtype=float),
+        "stats_frechet_fm_asr": np.asarray(stats_frechet_fm_asr, dtype=float),
+        "stats_frechet_fm_asr_iso": np.asarray(stats_frechet_fm_asr_iso, dtype=float),
         "stats_endpoint_lrp": np.asarray(stats_endpoint_lrp, dtype=float),
         "stats_endpoint_lrp_fmm": np.asarray(stats_endpoint_lrp_fmm, dtype=float),
         "stats_endpoint_dijkstra": np.asarray(stats_endpoint_dijkstra, dtype=float),
         "stats_endpoint_fmm": np.asarray(stats_endpoint_fmm, dtype=float),
         "stats_endpoint_fsm": np.asarray(stats_endpoint_fsm, dtype=float),
+        "stats_endpoint_fm_asr": np.asarray(stats_endpoint_fm_asr, dtype=float),
+        "stats_endpoint_fm_asr_iso": np.asarray(stats_endpoint_fm_asr_iso, dtype=float),
         "stats_ct_lrp_dijkstra": np.asarray(stats_ct_lrp_dijkstra, dtype=float),
         "stats_ct_lrp_fmm": np.asarray(stats_ct_lrp_fmm, dtype=float),
         "stats_ct_fp_dijkstra": np.asarray(stats_ct_fp_dijkstra, dtype=float),
         "stats_ct_fp_fmm": np.asarray(stats_ct_fp_fmm, dtype=float),
         "stats_ct_fp_fsm": np.asarray(stats_ct_fp_fsm, dtype=float),
         "stats_ct_fp": np.asarray(stats_ct_fp, dtype=float),
+        "stats_ct_fp_fm_asr": np.asarray(stats_ct_fp_fm_asr, dtype=float),
+        "stats_ct_fp_fm_asr_iso": np.asarray(stats_ct_fp_fm_asr_iso, dtype=float),
     }
 
 
@@ -201,6 +237,10 @@ def collect_integral_stats(line_integrals: dict[str, dict[str, Any]], var_values
         "int2_fp_fmm": [],
         "int_fp_fsm": [],
         "int2_fp_fsm": [],
+        "int_fp_fm_asr": [],
+        "int2_fp_fm_asr": [],
+        "int_fp_fm_asr_iso": [],
+        "int2_fp_fm_asr_iso": [],
     }
     for var_ in var_values:
         li = line_integrals[f"var_{var_}"]
@@ -218,6 +258,14 @@ def collect_integral_stats(line_integrals: dict[str, dict[str, Any]], var_values
         _fsm_int2 = li.get("int_logk2_fp_fsm", {"mean": np.nan, "std": np.nan})
         out["int_fp_fsm"].append([_fsm_int["mean"], _fsm_int["std"]])
         out["int2_fp_fsm"].append([_fsm_int2["mean"], _fsm_int2["std"]])
+        _asr = li.get("int_logk_fp_fm_asr", {"mean": np.nan, "std": np.nan})
+        _asr2 = li.get("int_logk2_fp_fm_asr", {"mean": np.nan, "std": np.nan})
+        out["int_fp_fm_asr"].append([_asr["mean"], _asr["std"]])
+        out["int2_fp_fm_asr"].append([_asr2["mean"], _asr2["std"]])
+        _asri = li.get("int_logk_fp_fm_asr_iso", {"mean": np.nan, "std": np.nan})
+        _asri2 = li.get("int_logk2_fp_fm_asr_iso", {"mean": np.nan, "std": np.nan})
+        out["int_fp_fm_asr_iso"].append([_asri["mean"], _asri["std"]])
+        out["int2_fp_fm_asr_iso"].append([_asri2["mean"], _asri2["std"]])
 
     return {k: np.asarray(v, dtype=float) for k, v in out.items()}
 
@@ -242,6 +290,8 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
         "fp_fpDijkstra": [],
         "fp_fpFMM": [],
         "fp_fpFSM": [],
+        "fp_fm_asr": [],
+        "fp_fm_asr_iso": [],
     }
     warnings: list[str] = []
 
@@ -253,6 +303,8 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
             out["fp_fpDijkstra"].append(np.nan)
             out["fp_fpFMM"].append(np.nan)
             out["fp_fpFSM"].append(np.nan)
+            out["fp_fm_asr"].append(np.nan)
+            out["fp_fm_asr_iso"].append(np.nan)
             warnings.append(f"Missing variance entry for Wasserstein length metric at sigma2={var_}.")
             continue
 
@@ -263,6 +315,8 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
         fp_dijkstra = _safe_first_size_samples(lengths, "fp_dijkstra")
         fp_fmm = _safe_first_size_samples(lengths, "fp_fmm")
         fp_fsm = _safe_first_size_samples(lengths, "fp_fsm")
+        fp_fm_asr = _safe_first_size_samples(lengths, "fp_fm_asr")
+        fp_fm_asr_iso = _safe_first_size_samples(lengths, "fp_fm_asr_iso")
 
         pair_data = {
             "fp_lrp": lrp,
@@ -270,6 +324,8 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
             "fp_fpDijkstra": fp_dijkstra,
             "fp_fpFMM": fp_fmm,
             "fp_fpFSM": fp_fsm,
+            "fp_fm_asr": fp_fm_asr,
+            "fp_fm_asr_iso": fp_fm_asr_iso,
         }
         for pair_key, other in pair_data.items():
             if fp is None or other is None:
@@ -300,6 +356,8 @@ def collect_length_cdf_samples(var_data: dict[str, dict[str, Any]], var_values: 
             "fp_fmm": _safe_first_size_samples(lengths, "fp_fmm"),
             "fp_dijkstra": _safe_first_size_samples(lengths, "fp_dijkstra"),
             "fp_fsm": _safe_first_size_samples(lengths, "fp_fsm"),
+            "fp_fm_asr": _safe_first_size_samples(lengths, "fp_fm_asr"),
+            "fp_fm_asr_iso": _safe_first_size_samples(lengths, "fp_fm_asr_iso"),
         }
         required_keys = ("fp", "lrp", "lrp_fmm", "fp_fmm", "fp_dijkstra")
         if any(samples[k] is None for k in required_keys):
@@ -315,6 +373,12 @@ def collect_length_cdf_samples(var_data: dict[str, dict[str, Any]], var_values: 
         }
         if samples["fp_fsm"] is not None:
             out[key]["fp_fsm"] = np.asarray(samples["fp_fsm"], dtype=float)
+        fm_asr_s = _safe_first_size_samples(lengths, "fp_fm_asr")
+        fm_iso_s = _safe_first_size_samples(lengths, "fp_fm_asr_iso")
+        if fm_asr_s is not None:
+            out[key]["fp_fm_asr"] = np.asarray(fm_asr_s, dtype=float)
+        if fm_iso_s is not None:
+            out[key]["fp_fm_asr_iso"] = np.asarray(fm_iso_s, dtype=float)
 
     return out, warnings
 
@@ -324,7 +388,7 @@ def collect_scatter_time_samples(var_data: dict[str, dict[str, Any]], var_values
     warnings: list[str] = []
 
     required_keys = ("fpt", "fpt_fmm", "fpt_dijkstra", "mhr", "mhr_fmm")
-    optional_keys = ("fpt_fsm",)
+    optional_keys = ("fpt_fsm", "fpt_fm_asr", "fpt_fm_asr_iso")
     keys = required_keys + optional_keys
     for var_ in var_values:
         var_key = f"var_{var_}"
@@ -371,7 +435,16 @@ def collect_scatter_time_samples(var_data: dict[str, dict[str, Any]], var_values
 def collect_comp_time_samples(var_data: dict[str, dict[str, Any]], var_values: list[float]) -> tuple[dict[str, dict[str, np.ndarray]], list[str]]:
     out: dict[str, dict[str, np.ndarray]] = {}
     warnings: list[str] = []
-    all_keys = ("ct_lrp_dijkstra", "ct_lrp_fmm", "ct_fp_dijkstra", "ct_fp_fmm", "ct_fp_fsm", "ct_fp")
+    all_keys = (
+        "ct_lrp_dijkstra",
+        "ct_lrp_fmm",
+        "ct_fp_dijkstra",
+        "ct_fp_fmm",
+        "ct_fp_fsm",
+        "ct_fp",
+        "ct_fp_fm_asr",
+        "ct_fp_fm_asr_iso",
+    )
 
     for var_ in var_values:
         var_key = f"var_{var_}"
@@ -404,7 +477,7 @@ def collect_endpoint_box_samples(var_data: dict[str, dict[str, Any]], var_values
     out: dict[str, dict[str, np.ndarray]] = {}
     warnings: list[str] = []
     required_pair_keys = ("fp_lrp", "fp_lrpFMM", "fp_fpFMM", "fp_fpDijkstra")
-    optional_pair_keys = ("fp_fpFSM",)
+    optional_pair_keys = ("fp_fpFSM", "fp_fm_asr", "fp_fm_asr_iso")
 
     for var_ in var_values:
         key = f"var_{var_}"
@@ -451,7 +524,7 @@ def collect_hausdorff_box_samples(var_data: dict[str, dict[str, Any]], var_value
     out: dict[str, dict[str, np.ndarray]] = {}
     warnings: list[str] = []
     required_pair_keys = ("fp_lrp", "fp_lrpFMM", "fp_fpFMM", "fp_fpDijkstra")
-    optional_pair_keys = ("fp_fpFSM",)
+    optional_pair_keys = ("fp_fpFSM", "fp_fm_asr", "fp_fm_asr_iso")
 
     for var_ in var_values:
         key = f"var_{var_}"
@@ -500,6 +573,8 @@ _MC_HAUSDORFF_PAIRS = (
     ("fp_vs_dijkstra", "fp_fpDijkstra"),
     ("fp_vs_fmm", "fp_fpFMM"),
     ("fp_vs_fsm", "fp_fpFSM"),
+    ("fp_vs_fm_asr", "fp_fm_asr"),
+    ("fp_vs_fm_asr_iso", "fp_fm_asr_iso"),
 )
 _CDF_GRID_SIZE = 500
 
@@ -539,9 +614,13 @@ def collect_hausdorff_cdf_ensemble(
                 mc = load_mc_consolidated(mc_path)
             except Exception:
                 continue
-            hausdorff_block = mc.get("hausdorff", {})
+            hausdorff_block = mc.get("hausdorff") or {}
+            if not isinstance(hausdorff_block, dict):
+                continue
             for mc_key, display_key in _MC_HAUSDORFF_PAIRS:
-                d = hausdorff_block.get(mc_key, {}).get("distances")
+                pair_raw = hausdorff_block.get(mc_key)
+                pair_data = pair_raw if isinstance(pair_raw, dict) else {}
+                d = pair_data.get("distances")
                 if d is None:
                     continue
                 arr = np.asarray(d, dtype=float).ravel()
@@ -615,9 +694,12 @@ def collect_entropy_hausdorff_samples(
             renyi_s1_list.append(np.asarray(renyi.get("S1", [np.nan]), dtype=float))
             renyi_s2_list.append(np.asarray(renyi.get("S2", [np.nan]), dtype=float))
 
-            hausdorff_block = mc.get("hausdorff", {})
+            hausdorff_block = mc.get("hausdorff") or {}
+            if not isinstance(hausdorff_block, dict):
+                continue
             for mc_key, display_key in _MC_HAUSDORFF_PAIRS:
-                pair_data = hausdorff_block.get(mc_key, {})
+                pair_raw = hausdorff_block.get(mc_key)
+                pair_data = pair_raw if isinstance(pair_raw, dict) else {}
                 for stat in _HAUSDORFF_STAT_KEYS:
                     haus[stat][display_key].append(float(pair_data.get(stat, np.nan)))
 
