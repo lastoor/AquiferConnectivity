@@ -17,6 +17,7 @@ std="${STD:-1.0}"
 fbm_alpha="${FBM_ALPHA:-0.8}"
 fbm_c="${FBM_C:-1.0}"
 minpadding="${MINPADDING:-0}"
+domain_margin="${DOMAIN_MARGIN:-}"
 dh="${DH:-0.01}"
 num_particles="${NUM_PARTICLES:-20000}"
 perp_ratio="${PERP_RATIO:-0.5}"
@@ -28,7 +29,7 @@ max_points="${MAX_POINTS:-100000}"
 max_iters="${MAX_ITERS:-1000000}"
 asr_max_steps="${ASR_MAX_STEPS:-200000}"
 indicatrix_stride="${INDICATRIX_STRIDE:-8}"
-indicatrix_glyph_scale="${INDICATRIX_GLYPH_SCALE:-100}"
+indicatrix_glyph_scale="${INDICATRIX_GLYPH_SCALE:-150}"
 
 align_flag="--no-align-with-modflow-velocity"
 if [[ "${ALIGN_WITH_MODFLOW_VELOCITY:-0}" == "1" || "${ALIGN_WITH_MODFLOW_VELOCITY:-false}" == "true" ]]; then
@@ -60,6 +61,10 @@ cmd=(
   --indicatrix-stride "${indicatrix_stride}"
   --indicatrix-glyph-scale "${indicatrix_glyph_scale}"
 )
+
+if [[ -n "${domain_margin}" ]]; then
+  cmd+=(--domain-margin "${domain_margin}")
+fi
 
 if [[ "${NO_INDICATRIX:-0}" == "1" || "${NO_INDICATRIX:-false}" == "true" ]]; then
   cmd+=(--no-indicatrix)

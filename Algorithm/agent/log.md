@@ -200,3 +200,33 @@
   - `bash -n tests/run_compare_fm_asr_velocity_paths.sh`
 - Limitations/follow-up:
   - A smoke run reached Taichi/Metal GPU initialization, then failed on local GPU/cache setup (`ticache.lock` and RHI device map assertion). This is an environment/runtime GPU failure rather than a script syntax/import issue.
+
+## 2026-05-04
+
+- Fixed the FM-ASR comparison demo source/target setup:
+  - `./tests/compare_fm_asr_velocity_paths.py` now uses inset source/target vertical lines matching the `scripts/run_fmm.py` convention instead of physical domain boundaries
+  - GPU Pollock seeds start on the inset source column and `right_x` is the inset target column, avoiding false "fastest" paths that exit through the top/bottom domain boundary
+  - added `--domain-margin` and `DOMAIN_MARGIN` override support
+- Made FM-ASR backtracking more robust:
+  - `trace_minimal_path` now accepts `source_mask`
+  - if a Hopf-Lax edge step does not decrease interpolated distance, it falls back to the lowest-distance stencil vertex instead of stopping halfway
+- Validation:
+  - `conda run -n taichi python -m py_compile src/fmm_core/fm_asr.py tests/compare_fm_asr_velocity_paths.py`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q tests/test_fm_asr.py` (15 passed)
+  - `tests/run_compare_fm_asr_velocity_paths.sh --help`
+  - `tests/run_compare_fm_asr_velocity_paths.sh --no-indicatrix` outside the sandbox, using Taichi/Metal GPU, regenerated `output/fm_asr_demo/comparison.png`
+
+## 2026-05-04
+
+- Integrated FM-ASR Hopf-Lax backtracking into `./src/fmm_core/fm_asr.py`:
+  - moved draft backtracking helpers into the existing module structure
+  - added `AsymmetricEuclideanNorm.edge_argmin`
+  - added `trace_minimal_path` and `extract_fm_asr_path`
+  - updated the comparison script to use the core extractor instead of local 8-neighbor descent
+- Exported the new FM-ASR path extraction helpers from `./src/fmm_core/__init__.py`.
+- Added tests for exact edge argmin and source-to-target FM-ASR path extraction.
+- Validation:
+  - `PYTHONPYCACHEPREFIX=/private/tmp/fmm_pycache python3 -m py_compile src/fmm_core/fm_asr.py src/fmm_core/__init__.py tests/test_fm_asr.py tests/compare_fm_asr_velocity_paths.py`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q tests/test_fm_asr.py` (15 passed)
+  - `tests/run_compare_fm_asr_velocity_paths.sh --help`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q` (19 passed, 5 pre-existing FSM warnings)

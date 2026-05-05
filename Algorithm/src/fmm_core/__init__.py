@@ -32,11 +32,13 @@ from .fm_asr import (
     build_f_acute_mesh,
     build_randers_from_W,
     check_randers_condition,
+    extract_fm_asr_path,
     is_f_acute,
     plot_randers_indicatrix,
     randers_indicatrix_points,
     randers_r_of_theta,
     validate_f_acute_mesh,
+    trace_minimal_path,
     visualize_indicatrix_field,
 )
 from .metrics import distance_distribution, directed_nn_distances, resample_by_arclength
@@ -76,10 +78,12 @@ __all__ = [
     "build_f_acute_mesh",
     "build_randers_from_W",
     "check_randers_condition",
+    "extract_fm_asr_path",
     "is_f_acute",
     "plot_randers_indicatrix",
     "randers_indicatrix_points",
     "randers_r_of_theta",
     "validate_f_acute_mesh",
+    "trace_minimal_path",
     "visualize_indicatrix_field",
 ]

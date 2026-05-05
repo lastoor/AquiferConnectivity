@@ -177,6 +177,68 @@ class AsymmetricEuclideanNorm(FinslerNorm):
         best = min(phi(t) for t in candidates)
         return best
 
+    def edge_argmin(
+        self,
+        p: ArrayLike,
+        a: ArrayLike,
+        b: ArrayLike,
+        da: float,
+        db: float,
+    ) -> Optional[Tuple[float, np.ndarray, float]]:
+        """Closed-form segment argmin for Hopf-Lax backtracking.
+
+        Returns ``(t*, q*, phi(t*))`` for
+            phi(t) = F((1-t)a + t b - p) + (1-t)da + t db.
+        """
+        p = np.asarray(p, dtype=float)
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+
+        r = a - p
+        s = b - a
+
+        A = float(s.T @ self.M @ s)
+        B = float(2.0 * (r.T @ self.M @ s))
+        C = float(r.T @ self.M @ r)
+        c = float(db - da - self.beta @ s)
+        const = float(da - self.beta @ r)
+
+        def phi(t: float) -> float:
+            q = A * t * t + B * t + C
+            if q < 0.0:
+                q = 0.0
+            return math.sqrt(q) + c * t + const
+
+        candidates = [0.0, 1.0]
+
+        if A > 1e-18:
+            p2 = A * (A - c * c)
+            p1 = B * (A - c * c)
+            p0 = 0.25 * B * B - c * c * C
+            roots: List[float] = []
+
+            if abs(p2) <= 1e-18:
+                if abs(p1) > 1e-18:
+                    roots.append(-p0 / p1)
+            else:
+                disc = p1 * p1 - 4.0 * p2 * p0
+                if disc >= -1e-14:
+                    disc = max(0.0, disc)
+                    sqrt_disc = math.sqrt(disc)
+                    q = -0.5 * (p1 + math.copysign(sqrt_disc, p1))
+                    roots.append(q / p2)
+                    if abs(q) > 1e-18:
+                        roots.append(p0 / q)
+
+            for t in roots:
+                if -1e-12 <= t <= 1.0 + 1e-12:
+                    candidates.append(min(1.0, max(0.0, t)))
+
+        best_t = min(candidates, key=phi)
+        best_q = (1.0 - best_t) * a + best_t * b
+        best_val = phi(best_t)
+        return best_t, best_q, best_val
+
 
 def build_f_acute_mesh(F: FinslerNorm, max_iter: int = 10000) -> List[Tuple[int, int]]:
     """Build the unique cyclic boundary vertex list of T(F)."""
@@ -908,4 +970,249 @@ def visualize_indicatrix_field(
     ax.set_xlabel("x")
     ax.set_ylabel("y")
     ax.set_title(f"Randers indicatrix field (stride={stride}, perp_ratio={perp_ratio}, back_factor={back_factor})")
-    plt.show()
+    # plt.show()
+
+
+def _bilinear_interp(d: np.ndarray, p: np.ndarray, origin: Tuple[float, float], h: float) -> float:
+    """Bilinear interpolation of a scalar grid d at physical point p."""
+    oy, ox = origin[1], origin[0]
+    x = float(p[0])
+    y = float(p[1])
+
+    i = int(math.floor((x - ox) / h))
+    j = int(math.floor((y - oy) / h))
+
+    i = max(0, min(i, d.shape[1] - 2))
+    j = max(0, min(j, d.shape[0] - 2))
+
+    x0 = ox + i * h
+    y0 = oy + j * h
+    tx = (x - x0) / h
+    ty = (y - y0) / h
+
+    d00 = float(d[j, i])
+    d10 = float(d[j, i + 1])
+    d01 = float(d[j + 1, i])
+    d11 = float(d[j + 1, i + 1])
+
+    return (
+        (1.0 - tx) * (1.0 - ty) * d00
+        + tx * (1.0 - ty) * d10
+        + (1.0 - tx) * ty * d01
+        + tx * ty * d11
+    )
+
+
+def _nearest_grid_node(p: np.ndarray, origin: Tuple[float, float], h: float, shape: Tuple[int, int]) -> Tuple[int, int]:
+    """Nearest grid node indices (j, i) to a physical point p."""
+    ox, oy = origin
+    x = float(p[0])
+    y = float(p[1])
+
+    i = int(round((x - ox) / h))
+    j = int(round((y - oy) / h))
+
+    i = max(0, min(i, shape[1] - 1))
+    j = max(0, min(j, shape[0] - 1))
+    return j, i
+
+
+def _segment_minimize(
+    F,
+    p: np.ndarray,
+    a: np.ndarray,
+    b: np.ndarray,
+    da: float,
+    db: float,
+    tol: float = 1e-12,
+) -> Tuple[float, np.ndarray, float]:
+    """
+    Minimize over t in [0,1]:
+        phi(t) = (1-t) da + t db + F((1-t)a + t b - p)
+
+    Returns (t*, q*, phi(t*)), where q* = (1-t*)a + t*b.
+    """
+    # Exact method when available.
+    edge_argmin = getattr(F, "edge_argmin", None)
+    if callable(edge_argmin):
+        out = edge_argmin(p, a, b, da, db)
+        if out is not None:
+            return out
+
+    def phi(t: float) -> float:
+        q = (1.0 - t) * a + t * b
+        return (1.0 - t) * da + t * db + float(F(q - p))
+
+    # Robust fallback: golden-section search.
+    gr = (math.sqrt(5.0) - 1.0) / 2.0
+    left, right = 0.0, 1.0
+    c = right - gr * (right - left)
+    d = left + gr * (right - left)
+    fc = phi(c)
+    fd = phi(d)
+
+    for _ in range(120):
+        if abs(right - left) <= tol:
+            break
+        if fc <= fd:
+            right, d, fd = d, c, fc
+            c = right - gr * (right - left)
+            fc = phi(c)
+        else:
+            left, c, fc = c, d, fd
+            d = left + gr * (right - left)
+            fd = phi(d)
+
+    t = c if fc <= fd else d
+    q = (1.0 - t) * a + t * b
+    val = min(fc, fd)
+    return t, q, val
+
+
+def trace_minimal_path(
+    solver,
+    dist: np.ndarray,
+    target_xy: Sequence[float],
+    max_steps: int = 10000,
+    stop_tol: float = 1e-10,
+    source_mask: Optional[np.ndarray] = None,
+) -> np.ndarray:
+    """
+    Backtrack a shortest path from target_xy to the zero-distance set.
+
+    Parameters
+    ----------
+    solver:
+        An FMASR2D instance.
+    dist:
+        Distance map returned by solver.solve(...).
+    target_xy:
+        Physical coordinates of the starting point for backtracking.
+    max_steps:
+        Safety cap on the number of path samples.
+    stop_tol:
+        Stop once interpolated distance is below this tolerance.
+    source_mask:
+        Optional source mask. When provided, also stop once the current sample
+        rounds to a source node.
+
+    Returns
+    -------
+    path:
+        Array of shape (K, 2) listing the path samples from target to source.
+    """
+    p = np.asarray(target_xy, dtype=float).copy()
+    path: List[np.ndarray] = [p.copy()]
+
+    ny, nx = dist.shape
+    if source_mask is not None:
+        source_mask = np.asarray(source_mask, dtype=bool)
+        if source_mask.shape != dist.shape:
+            raise ValueError("source_mask must match dist shape")
+
+    for _ in range(max_steps):
+        d_here = _bilinear_interp(dist, p, solver.origin, solver.h)
+        if d_here <= stop_tol:
+            break
+
+        j, i = _nearest_grid_node(p, solver.origin, solver.h, (ny, nx))
+        if source_mask is not None and source_mask[j, i]:
+            p = solver._cell_position(j, i)
+            path[-1] = p.copy()
+            break
+
+        stencil = solver.stencil_at(j, i).cyclic_offsets
+        x_pos = solver._cell_position(j, i)
+        F_p = solver.metric_at(float(p[0]), float(p[1]))
+
+        best_val = float("inf")
+        best_q: Optional[np.ndarray] = None
+        best_vertex_dist = float("inf")
+        best_vertex: Optional[np.ndarray] = None
+
+        # Search all boundary edges of the local stencil.
+        for k in range(len(stencil) - 1):
+            dx1, dy1 = stencil[k]
+            dx2, dy2 = stencil[k + 1]
+
+            ja, ia = j + dy1, i + dx1
+            jb, ib = j + dy2, i + dx2
+
+            if not (0 <= ia < nx and 0 <= ja < ny and 0 <= ib < nx and 0 <= jb < ny):
+                continue
+
+            a = x_pos + solver.h * np.array([dx1, dy1], dtype=float)
+            b = x_pos + solver.h * np.array([dx2, dy2], dtype=float)
+
+            da = float(dist[ja, ia])
+            db = float(dist[jb, ib])
+
+            if np.isfinite(da) and da < best_vertex_dist:
+                best_vertex_dist = da
+                best_vertex = a
+            if np.isfinite(db) and db < best_vertex_dist:
+                best_vertex_dist = db
+                best_vertex = b
+
+            _, q, val = _segment_minimize(F_p, p, a, b, da, db)
+
+            if val < best_val:
+                best_val = val
+                best_q = q
+
+        # Hopf-Lax equality can make best_val equal d_here. What matters for
+        # backtracking is that the next point lies lower on the distance field.
+        if best_q is None:
+            break
+        next_dist = _bilinear_interp(dist, best_q, solver.origin, solver.h)
+        if next_dist >= d_here - 1e-14:
+            if best_vertex is None or best_vertex_dist >= d_here - 1e-14:
+                break
+            best_q = best_vertex
+
+        p = best_q
+        path.append(p.copy())
+
+    return np.asarray(path, dtype=float)
+
+def extract_fm_asr_path(
+    solver: FMASR2D,
+    dist: np.ndarray,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    max_steps: int = 10000,
+    stop_tol: float = 1e-10,
+) -> Tuple[np.ndarray, float, Tuple[int, int]]:
+    """Extract an approximate FM-ASR minimal path from source to target.
+
+    The returned path is physical ``(x, y)`` coordinates in source-to-target
+    order, matching ``fmm.compute_fmm_path`` conventions.
+    """
+    dist = np.asarray(dist, dtype=float)
+    source_mask = np.asarray(source_mask, dtype=bool)
+    target_mask = np.asarray(target_mask, dtype=bool)
+    if source_mask.shape != dist.shape or target_mask.shape != dist.shape:
+        raise ValueError("source_mask and target_mask must match dist shape")
+
+    masked = np.where(target_mask, dist, np.inf)
+    flat = int(np.argmin(masked))
+    travel_value = float(masked.flat[flat])
+    if not np.isfinite(travel_value):
+        raise RuntimeError("No finite FM-ASR target travel time")
+
+    tj, ti = np.unravel_index(flat, dist.shape)
+    chosen_target = (int(tj), int(ti))
+    target_xy = solver._cell_position(int(tj), int(ti))
+
+    path_target_to_source = trace_minimal_path(
+        solver,
+        dist,
+        target_xy,
+        max_steps=max_steps,
+        stop_tol=stop_tol,
+        source_mask=source_mask,
+    )
+    if path_target_to_source.shape[0] < 2:
+        raise RuntimeError("FM-ASR path extraction produced fewer than two points")
+
+    return path_target_to_source[::-1], travel_value, chosen_target

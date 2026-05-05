@@ -28,7 +28,7 @@ for path in (SRC_ROOT, SCRIPTS_ROOT, FLOWSIM_ROOT):
         sys.path.insert(0, path_str)
 
 import run_fmm as base
-from fmm_core.fm_asr import FMASR2D, visualize_indicatrix_field
+from fmm_core.fm_asr import FMASR2D, extract_fm_asr_path, visualize_indicatrix_field
 from fmm_core.fmm import compute_fmm_path, solve_travel_time
 from fmm_core.speed import _face_to_cell_speed_full, prepare_fmm_speed
 from simulation import hydraulic as sim_hyd
@@ -48,6 +48,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fbm-alpha", type=float, default=0.8)
     parser.add_argument("--fbm-c", type=float, default=1.0)
     parser.add_argument("--minpadding", type=int, default=0)
+    parser.add_argument(
+        "--domain-margin",
+        type=int,
+        default=None,
+        help=(
+            "Inset for the vertical source/target lines in grid cells. "
+            "Default matches scripts/run_fmm.py: field_size//20 - 1."
+        ),
+    )
     parser.add_argument("--dh", type=float, default=0.01)
     parser.add_argument("--num-particles", type=int, default=20_000)
     parser.add_argument("--perp-ratio", type=float, default=0.5)
@@ -90,13 +99,43 @@ def generate_k_field(args: argparse.Namespace) -> tuple[np.ndarray, np.ndarray]:
     return np.exp(logk), logk
 
 
-def make_masks(ny: int, nx: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def resolve_domain_margin(args: argparse.Namespace, ny: int, nx: int) -> int:
+    if args.domain_margin is None:
+        margin = min(ny, nx) // 20 - 1
+    else:
+        margin = int(args.domain_margin)
+    margin = max(0, margin)
+    max_margin = max(0, (min(ny, nx) - 3) // 2)
+    if margin > max_margin:
+        raise ValueError(
+            f"--domain-margin={margin} leaves no room for separated source/target lines "
+            f"on a {ny}x{nx} grid; maximum is {max_margin}."
+        )
+    return margin
+
+
+def make_masks(
+    ny: int,
+    nx: int,
+    args: argparse.Namespace,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, int, int]:
+    margin = resolve_domain_margin(args, ny, nx)
+    source_col = margin
+    target_col = nx - margin - 1
+    source_row0 = margin
+    source_row1 = ny - margin - 1
+    if source_col >= target_col:
+        raise ValueError(
+            f"Source column {source_col} must be left of target column {target_col}."
+        )
+
     source_mask = np.zeros((ny, nx), dtype=bool)
     target_mask = np.zeros((ny, nx), dtype=bool)
-    source_mask[:, 0] = True
-    target_mask[:, -1] = True
-    source_rows = np.arange(ny, dtype=int)
-    return source_mask, target_mask, source_rows
+    source_rows = np.arange(source_row0, source_row1 + 1, dtype=int)
+    target_rows = np.arange(ny, dtype=int)
+    source_mask[source_rows, source_col] = True
+    target_mask[target_rows, target_col] = True
+    return source_mask, target_mask, source_rows, target_rows, source_col, target_col
 
 
 def run_gpu_pollock(
@@ -108,6 +147,8 @@ def run_gpu_pollock(
     vx_face: np.ndarray,
     vy_face: np.ndarray,
     source_rows: np.ndarray,
+    source_col: int,
+    target_col: int,
     args: argparse.Namespace,
 ) -> tuple[np.ndarray, float, dict[str, Any]]:
     params: dict[str, Any] = {
@@ -122,7 +163,7 @@ def run_gpu_pollock(
         "y_faces": y_faces.astype(np.float32),
         "vx": np.asarray(vx_face),
         "vy": np.asarray(vy_face),
-        "seeds_x": np.full(int(args.num_particles), float(x[0]), dtype=np.float32),
+        "seeds_x": np.full(int(args.num_particles), float(x[source_col]), dtype=np.float32),
         "seeds_y": np.linspace(
             float(y[source_rows[0]]),
             float(y[source_rows[-1]]),
@@ -130,7 +171,7 @@ def run_gpu_pollock(
             endpoint=True,
             dtype=np.float32,
         ),
-        "right_x": float(x[-1]),
+        "right_x": float(x[target_col]),
         "max_points": int(args.max_points),
         "max_steps": int(args.max_iters),
     }
@@ -148,6 +189,12 @@ def run_gpu_pollock(
     if fastest is None:
         raise RuntimeError("GPU Pollock summary did not include a fastest path")
     path = np.vstack((fastest["x"], fastest["y"])).T.astype(float)
+    right_x = float(x[target_col])
+    if path.size == 0 or path[-1, 0] < right_x - 1e-4:
+        raise RuntimeError(
+            "GPU Pollock fastest replay did not reach the target line: "
+            f"last_x={path[-1, 0] if path.size else np.nan:.6g}, right_x={right_x:.6g}"
+        )
     travel_time = float(fastest["travel_time"])
     meta = {
         "backend": backend_used,
@@ -158,53 +205,11 @@ def run_gpu_pollock(
         },
         "travel_time": travel_time,
         "particle_id": int(fastest.get("particle_id", -1)),
+        "source_col": int(source_col),
+        "target_col": int(target_col),
+        "right_x": right_x,
     }
     return path, travel_time, meta
-
-
-def backtrack_asr_path(
-    T: np.ndarray,
-    source_mask: np.ndarray,
-    target_mask: np.ndarray,
-    *,
-    h: float,
-    max_steps: int,
-) -> tuple[np.ndarray, tuple[int, int], float]:
-    T = np.asarray(T, dtype=float)
-    masked = np.where(target_mask, T, np.inf)
-    flat = int(np.argmin(masked))
-    best_t = float(masked.flat[flat])
-    if not np.isfinite(best_t):
-        raise RuntimeError("No finite FM-ASR target travel time")
-    j, i = np.unravel_index(flat, T.shape)
-    target = (int(j), int(i))
-    path_yx = [(int(j), int(i))]
-
-    nbrs = [
-        (-1, -1), (-1, 0), (-1, 1),
-        (0, -1),           (0, 1),
-        (1, -1),  (1, 0),  (1, 1),
-    ]
-    ny, nx = T.shape
-    for _ in range(max_steps):
-        if source_mask[j, i]:
-            break
-        best_node = (j, i)
-        best_val = float(T[j, i])
-        for dj, di in nbrs:
-            nj, ni = j + dj, i + di
-            if 0 <= nj < ny and 0 <= ni < nx and np.isfinite(T[nj, ni]) and T[nj, ni] < best_val:
-                best_node = (nj, ni)
-                best_val = float(T[nj, ni])
-        if best_node == (j, i):
-            break
-        j, i = best_node
-        path_yx.append((int(j), int(i)))
-
-    path = np.asarray(path_yx, dtype=float)[:, [1, 0]][::-1] * float(h)
-    if path.shape[0] < 2:
-        raise RuntimeError("FM-ASR path extraction produced fewer than two points")
-    return path, target, best_t
 
 
 def solve_asr_path(
@@ -226,11 +231,11 @@ def solve_asr_path(
         direction="from_source",
     )
     T = solver.solve(source_mask)
-    path, target, travel_time = backtrack_asr_path(
+    path, travel_time, target = extract_fm_asr_path(
+        solver,
         T,
         source_mask,
         target_mask,
-        h=h,
         max_steps=int(args.asr_max_steps),
     )
     return T, path, travel_time, target
@@ -317,7 +322,11 @@ def main() -> None:
     h_grid = 1.0
     x = np.arange(nx, dtype=float) * h_grid
     y = np.arange(ny, dtype=float) * h_grid
-    source_mask, target_mask, source_rows = make_masks(ny, nx)
+    source_mask, target_mask, source_rows, target_rows, source_col, target_col = make_masks(
+        ny,
+        nx,
+        args,
+    )
 
     head, msg, ok = sim_hyd.solve_head(
         K,
@@ -363,6 +372,8 @@ def main() -> None:
         vx_face=vx_face,
         vy_face=vy_face,
         source_rows=source_rows,
+        source_col=source_col,
+        target_col=target_col,
         args=args,
     )
 
@@ -408,6 +419,14 @@ def main() -> None:
         "fm_asr_isotropic": {
             "travel_time": float(t_asr_iso),
             "target": tuple(map(int, target_asr_iso)),
+        },
+        "domain": {
+            "source_col": int(source_col),
+            "target_col": int(target_col),
+            "source_row0": int(source_rows[0]),
+            "source_row1": int(source_rows[-1]),
+            "target_row0": int(target_rows[0]),
+            "target_row1": int(target_rows[-1]),
         },
         "speed_diag": speed_diag,
         "runtime_seconds": float(time.perf_counter() - t0),
