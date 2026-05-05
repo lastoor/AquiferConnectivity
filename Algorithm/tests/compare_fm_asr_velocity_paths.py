@@ -260,17 +260,47 @@ def json_safe_config(args: argparse.Namespace) -> dict[str, Any]:
     return config
 
 
+def travel_time_error_metrics(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | int]:
+    """Return L2 and relative L2 errors on mutually finite travel-time entries."""
+    reference = np.asarray(reference, dtype=float)
+    candidate = np.asarray(candidate, dtype=float)
+    mask = np.isfinite(reference) & np.isfinite(candidate)
+    count = int(np.count_nonzero(mask))
+    if count == 0:
+        return {
+            "finite_count": 0,
+            "l2_error": float("nan"),
+            "relative_l2_error": float("nan"),
+            "reference_l2_norm": float("nan"),
+        }
+
+    diff = candidate[mask] - reference[mask]
+    ref = reference[mask]
+    l2_error = float(np.linalg.norm(diff.ravel()))
+    reference_l2_norm = float(np.linalg.norm(ref.ravel()))
+    relative_l2_error = l2_error / reference_l2_norm if reference_l2_norm > 0.0 else float("nan")
+    return {
+        "finite_count": count,
+        "l2_error": l2_error,
+        "relative_l2_error": float(relative_l2_error),
+        "reference_l2_norm": reference_l2_norm,
+    }
+
+
 def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
+    from matplotlib.colors import TwoSlopeNorm
 
     logk = results["logk"]
-    speed = results["speed"]
     T_fmm = results["T_fmm"]
     T_asr = results["T_asr"]
     T_asr_iso = results["T_asr_iso"]
+    diff_asr = T_asr - T_fmm
+    diff_asr_iso = T_asr_iso - T_fmm
     paths = {
         "GPU Pollock": (results["path_pt"], "white", 2.4),
         "FMM speed": (results["path_fmm"], "tab:orange", 1.8),
@@ -278,33 +308,80 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
         "FM-ASR isotropic": (results["path_asr_iso"], "tab:cyan", 1.8),
     }
 
+    def diff_norm(arr: np.ndarray) -> TwoSlopeNorm | None:
+        finite = np.asarray(arr, dtype=float)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return None
+        vmax = float(np.nanpercentile(np.abs(finite), 99.0))
+        if vmax <= 0.0:
+            vmax = 1.0
+        return TwoSlopeNorm(vmin=-vmax, vcenter=0.0, vmax=vmax)
+
+    rel_l2_asr = float(results.get("relative_l2_error_asr_vs_fmm", np.nan))
+    rel_l2_asr_iso = float(results.get("relative_l2_error_asr_iso_vs_fmm", np.nan))
+
     fig, axes = plt.subplots(2, 3, figsize=(15, 9), constrained_layout=True)
     panels = [
-        (axes[0, 0], logk, "log K", "viridis"),
-        (axes[0, 1], speed, "|v| for scalar FMM", "magma"),
-        (axes[0, 2], T_fmm, "FMM travel time", "plasma"),
-        (axes[1, 0], T_asr, "FM-ASR acentric ellipse T", "plasma"),
-        (axes[1, 1], T_asr_iso, "FM-ASR reduced isotropic T", "plasma"),
+        (axes[0, 0], logk, "log K", "viridis", None, None),
+        (
+            axes[0, 1],
+            diff_asr,
+            "FM-ASR ellipse T - FMM T",
+            "coolwarm",
+            diff_norm(diff_asr),
+            rel_l2_asr,
+        ),
+        (axes[0, 2], T_fmm, "FMM travel time", "plasma", None, None),
+        (axes[1, 0], T_asr, "FM-ASR acentric ellipse T", "plasma", None, None),
+        (axes[1, 1], T_asr_iso, "FM-ASR reduced isotropic T", "plasma", None, None),
+        (
+            axes[1, 2],
+            diff_asr_iso,
+            "FM-ASR isotropic T - FMM T",
+            "coolwarm",
+            diff_norm(diff_asr_iso),
+            rel_l2_asr_iso,
+        ),
     ]
-    for ax, arr, title, cmap in panels:
-        im = ax.imshow(arr, origin="lower", cmap=cmap)
+    for ax, arr, title, cmap, norm, rel_l2 in panels:
+        im = ax.imshow(arr, origin="lower", cmap=cmap, norm=norm)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         ax.set_title(title)
         ax.set_aspect("equal")
         for label, (path, color, linewidth) in paths.items():
             ax.plot(path[:, 0], path[:, 1], color=color, linewidth=linewidth, label=label)
+        if rel_l2 is not None:
+            ax.text(
+                0.02,
+                0.96,
+                f"rel L2 = {rel_l2:.4g}",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=9,
+                bbox={
+                    "boxstyle": "round,pad=0.25",
+                    "facecolor": "white",
+                    "edgecolor": "0.35",
+                    "alpha": 0.82,
+                },
+            )
         ax.set_xlim(0, logk.shape[1] - 1)
         ax.set_ylim(0, logk.shape[0] - 1)
 
-    ax = axes[1, 2]
-    ax.imshow(speed, origin="lower", cmap="gray")
-    for label, (path, color, linewidth) in paths.items():
-        ax.plot(path[:, 0], path[:, 1], color=color, linewidth=linewidth, label=label)
-    ax.set_title("Path overlay")
-    ax.set_aspect("equal")
-    ax.legend(loc="upper right", fontsize=8)
-    ax.set_xlim(0, logk.shape[1] - 1)
-    ax.set_ylim(0, logk.shape[0] - 1)
+    legend_handles = [
+        Line2D([0], [0], color=color, linewidth=linewidth, label=label)
+        for label, (_path, color, linewidth) in paths.items()
+    ]
+    fig.legend(
+        handles=legend_handles,
+        loc="lower center",
+        ncol=len(legend_handles),
+        bbox_to_anchor=(0.5, -0.01),
+        frameon=True,
+        fontsize=9,
+    )
 
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
@@ -411,6 +488,10 @@ def main() -> None:
         isotropic_only=True,
     )
 
+    error_metrics = {
+        "fm_asr_vs_fmm": travel_time_error_metrics(T_fmm, T_asr),
+        "fm_asr_isotropic_vs_fmm": travel_time_error_metrics(T_fmm, T_asr_iso),
+    }
     config = json_safe_config(args)
     summary = {
         "particle_tracking": pt_meta,
@@ -428,6 +509,7 @@ def main() -> None:
             "target_row0": int(target_rows[0]),
             "target_row1": int(target_rows[-1]),
         },
+        "travel_time_errors": error_metrics,
         "speed_diag": speed_diag,
         "runtime_seconds": float(time.perf_counter() - t0),
         "config": config,
@@ -454,6 +536,16 @@ def main() -> None:
         "travel_time_fmm": np.array(float(t_fmm)),
         "travel_time_asr": np.array(float(t_asr)),
         "travel_time_asr_iso": np.array(float(t_asr_iso)),
+        "l2_error_asr_vs_fmm": np.array(float(error_metrics["fm_asr_vs_fmm"]["l2_error"])),
+        "relative_l2_error_asr_vs_fmm": np.array(
+            float(error_metrics["fm_asr_vs_fmm"]["relative_l2_error"])
+        ),
+        "l2_error_asr_iso_vs_fmm": np.array(
+            float(error_metrics["fm_asr_isotropic_vs_fmm"]["l2_error"])
+        ),
+        "relative_l2_error_asr_iso_vs_fmm": np.array(
+            float(error_metrics["fm_asr_isotropic_vs_fmm"]["relative_l2_error"])
+        ),
     }
     save_results_npz(args.output_dir / "results.npz", results)
     with (args.output_dir / "summary.json").open("w", encoding="utf-8") as f:

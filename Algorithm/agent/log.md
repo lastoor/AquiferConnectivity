@@ -203,6 +203,40 @@
 
 ## 2026-05-04
 
+- Updated comparison and indicatrix visualizations:
+  - `comparison.png` now shows a shared path legend and relative L2 labels on the two travel-time difference panels
+  - `indicatrix_field.png` now marks both grid-point origins and geometric centers of the Randers indicatrices
+  - added `randers_indicatrix_center(M, b)` for the geometric center calculation
+- Validation:
+  - `conda run -n taichi python -m py_compile tests/compare_fm_asr_velocity_paths.py src/fmm_core/fm_asr.py`
+  - `bash -n tests/run_compare_fm_asr_velocity_paths.sh`
+  - `tests/run_compare_fm_asr_velocity_paths.sh` outside the sandbox, using Taichi/Metal GPU, regenerated `comparison.png` and `indicatrix_field.png`
+
+## 2026-05-04
+
+- Added travel-time L2 error reporting to `./tests/compare_fm_asr_velocity_paths.py`:
+  - computes `||T_asr - T_fmm||_2 / ||T_fmm||_2`
+  - computes `||T_asr_iso - T_fmm||_2 / ||T_fmm||_2`
+  - writes absolute L2, relative L2, reference L2 norm, and finite comparison count to `summary.json`
+  - stores scalar L2 and relative L2 values in `results.npz`
+- Validation:
+  - `conda run -n taichi python -m py_compile tests/compare_fm_asr_velocity_paths.py`
+  - `bash -n tests/run_compare_fm_asr_velocity_paths.sh`
+  - `tests/run_compare_fm_asr_velocity_paths.sh --no-indicatrix` outside the sandbox, using Taichi/Metal GPU
+
+## 2026-05-04
+
+- Updated `./tests/compare_fm_asr_velocity_paths.py` comparison plotting:
+  - replaced the top-middle scalar-speed subplot with `FM-ASR ellipse T - FMM T`
+  - replaced the bottom-right path-overlay subplot with `FM-ASR isotropic T - FMM T`
+  - uses a zero-centered diverging color scale for signed travel-time differences
+- Validation:
+  - `conda run -n taichi python -m py_compile tests/compare_fm_asr_velocity_paths.py`
+  - `bash -n tests/run_compare_fm_asr_velocity_paths.sh`
+  - `tests/run_compare_fm_asr_velocity_paths.sh --no-indicatrix` outside the sandbox, using Taichi/Metal GPU, regenerated `output/fm_asr_demo/comparison.png`
+
+## 2026-05-04
+
 - Fixed the FM-ASR comparison demo source/target setup:
   - `./tests/compare_fm_asr_velocity_paths.py` now uses inset source/target vertical lines matching the `scripts/run_fmm.py` convention instead of physical domain boundaries
   - GPU Pollock seeds start on the inset source column and `right_x` is the inset target column, avoiding false "fastest" paths that exit through the top/bottom domain boundary

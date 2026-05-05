@@ -905,6 +905,14 @@ def randers_indicatrix_points(M, b, K=240, eps=1e-12):
     return x, y
 
 
+def randers_indicatrix_center(M, b):
+    """Geometric center of the Randers indicatrix F(u)=1."""
+    M = np.asarray(M, dtype=float)
+    b = np.asarray(b, dtype=float)
+    A = M - np.outer(b, b)
+    return np.linalg.solve(A, b)
+
+
 def visualize_indicatrix_field(
     W_field,
     perp_ratio=0.5,
@@ -918,6 +926,7 @@ def visualize_indicatrix_field(
 ):
     try:
         import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
         from matplotlib.colors import to_rgba
     except ImportError as exc:
         raise ImportError("visualize_indicatrix_field requires matplotlib") from exc
@@ -957,6 +966,10 @@ def visualize_indicatrix_field(
 
 
     # Indicatrix glyphs
+    origin_x: List[float] = []
+    origin_y: List[float] = []
+    center_x: List[float] = []
+    center_y: List[float] = []
     for j in range(0, ny, stride):
         for i in range(0, nx, stride):
             M = M_field[j, i]
@@ -965,6 +978,57 @@ def visualize_indicatrix_field(
 
             gx, gy = randers_indicatrix_points(M, b, K=K)
             ax.plot(xi + glyph_scale * h * gx, yi + glyph_scale * h * gy, color='white', linewidth=0.8)
+            origin_x.append(float(xi))
+            origin_y.append(float(yi))
+            center = randers_indicatrix_center(M, b)
+            center_x.append(float(xi + glyph_scale * h * center[0]))
+            center_y.append(float(yi + glyph_scale * h * center[1]))
+
+    if origin_x:
+        ax.scatter(
+            origin_x,
+            origin_y,
+            s=12,
+            marker="o",
+            facecolors="black",
+            edgecolors="white",
+            linewidths=0.45,
+            zorder=4,
+        )
+        ax.scatter(
+            center_x,
+            center_y,
+            s=22,
+            marker="x",
+            color="tab:red",
+            linewidths=1.2,
+            zorder=5,
+        )
+
+    legend_handles = [
+        Line2D([0], [0], color="white", linewidth=1.1, label="Indicatrix boundary"),
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="none",
+            markerfacecolor="black",
+            markeredgecolor="white",
+            markersize=5,
+            label="Grid point",
+        ),
+        Line2D(
+            [0],
+            [0],
+            marker="x",
+            color="tab:red",
+            linestyle="none",
+            markersize=6,
+            markeredgewidth=1.2,
+            label="Indicatrix center",
+        ),
+    ]
+    ax.legend(handles=legend_handles, loc="upper right", fontsize=8, framealpha=0.8)
 
     ax.set_aspect("equal", adjustable="box")
     ax.set_xlabel("x")
