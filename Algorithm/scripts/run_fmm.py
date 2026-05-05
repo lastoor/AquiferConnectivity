@@ -19,10 +19,10 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_ROOT))
 
-from fmm_core import compute_fmm_path
+from fmm_core import FMASR2D, compute_fmm_path, extract_fm_asr_path
 from fmm_core.fsm import compute_fsm_path as compute_fsm_path_velocity
 from fmm_core.metrics import distance_distribution
-from fmm_core.speed import prepare_fmm_speed
+from fmm_core.speed import _face_to_cell_speed_full, prepare_fmm_speed
 from simulation import grf_generation as sim_grf
 from simulation import hydraulic as sim_hyd
 from simulation import particle_tracking as sim_pt
@@ -35,7 +35,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 11
+MC_SCHEMA_VERSION = 12
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -50,10 +50,14 @@ MC_FIELDS = [
     "len_fp_dijkstra",
     "len_fp_fmm",
     "len_fp_fsm",
+    "len_fp_fm_asr",
+    "len_fp_fm_asr_iso",
     "travel_time_fp",
     "travel_time_dijkstra",
     "travel_time_fmm",
     "travel_time_fsm",
+    "travel_time_fm_asr",
+    "travel_time_fm_asr_iso",
     "resistance_lrp",
     "resistance_lrp_fmm",
     "endpoint_dy_fp_vs_lrp",
@@ -61,6 +65,8 @@ MC_FIELDS = [
     "endpoint_dy_fp_vs_dijkstra",
     "endpoint_dy_fp_vs_fmm",
     "endpoint_dy_fp_vs_fsm",
+    "endpoint_dy_fp_vs_fm_asr",
+    "endpoint_dy_fp_vs_fm_asr_iso",
     "endpoint_method",
     "endpoint_x_ref",
     "x_end_fp",
@@ -69,12 +75,16 @@ MC_FIELDS = [
     "x_end_fp_dijkstra",
     "x_end_fp_fmm",
     "x_end_fp_fsm",
+    "x_end_fp_fm_asr",
+    "x_end_fp_fm_asr_iso",
     "y_end_fp",
     "y_end_lrp",
     "y_end_lrp_fmm",
     "y_end_fp_dijkstra",
     "y_end_fp_fmm",
     "y_end_fp_fsm",
+    "y_end_fp_fm_asr",
+    "y_end_fp_fm_asr_iso",
     "pt_solver",
     "pt_backend",
     "pt_num_particles",
@@ -89,6 +99,11 @@ MC_FIELDS = [
     "fmm_min_speed",
     "fmm_zero_count",
     "fmm_nontraversable_count",
+    "fm_asr_enabled",
+    "fm_asr_perp_ratio",
+    "fm_asr_back_factor",
+    "fm_asr_min_speed",
+    "fm_asr_max_steps",
     "seed_base",
     "seed_effective_run",
     "seed_mode",
@@ -102,6 +117,8 @@ MC_FIELDS = [
     "comp_time_fp_dijkstra",
     "comp_time_fp_fmm",
     "comp_time_fp_fsm",
+    "comp_time_fp_fm_asr",
+    "comp_time_fp_fm_asr_iso",
     "comp_time_fp",
 ]
 
@@ -131,6 +148,7 @@ INT_FIELDS = {
 
 BOOL_FIELDS = {
     "pt_align_with_modflow_velocity",
+    "fm_asr_enabled",
 }
 
 
@@ -310,6 +328,13 @@ def resolve_effective_run_seed(args: argparse.Namespace) -> int | None:
             raise ValueError("--variance_seed is required when --variance_seed_policy explicit")
         return int(args.variance_seed)
     raise ValueError(f"Unsupported variance seed policy: {args.variance_seed_policy}")
+
+
+def available_cpu_count() -> int:
+    get_affinity = getattr(os, "sched_getaffinity", None)
+    if callable(get_affinity):
+        return max(1, len(get_affinity(0)))
+    return max(1, os.cpu_count() or 1)
 
 
 def generate_logk_field(seed_trial: int | None = None) -> tuple[np.ndarray | None, str]:
@@ -540,6 +565,42 @@ def compute_fmm_path_regions(
     except Exception as exc:
         return None, None, str(exc)
     return path_xy, travel_value, None
+
+
+def compute_fm_asr_path_velocity(
+    vx_face: np.ndarray,
+    vy_face: np.ndarray,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    *,
+    grid_spacing: float,
+    perp_ratio: float,
+    back_factor: float,
+    min_speed: float,
+    max_steps: int,
+    isotropic_only: bool,
+) -> tuple[np.ndarray, float]:
+    """Compute an FM-ASR fastest path from a full face velocity field."""
+    vx_cell, vy_cell = _face_to_cell_speed_full(vx_face, vy_face, return_vector=True)
+    W_cell = np.stack((vx_cell, vy_cell), axis=2)
+    solver = FMASR2D.from_velocity_field(
+        W_cell,
+        h=grid_spacing,
+        perp_ratio=perp_ratio,
+        back_factor=back_factor,
+        min_speed=min_speed,
+        isotropic_only=isotropic_only,
+        direction="from_source",
+    )
+    travel_time = solver.solve(source_mask)
+    path_xy, travel_value, _chosen_target = extract_fm_asr_path(
+        solver,
+        travel_time,
+        source_mask,
+        target_mask,
+        max_steps=max_steps,
+    )
+    return path_xy, float(travel_value)
 
 
 def make_config_for_size(config_base: dict[str, Any], idx_size: int) -> dict[str, Any]:
@@ -846,6 +907,64 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 fp_fsm_error = str(exc)
                 logger.warning(f"[MC {mc_index}] FSM path failed (non-fatal): {exc}")
 
+            # 3.4) FM-ASR paths (full-face Darcy velocity, non-fatal)
+            fp_fm_asr_cfg = config_mc.get("fm_asr_arg", {})
+            fm_asr_enabled = bool(fp_fm_asr_cfg.get("enabled", True))
+            fp_fm_asr: np.ndarray | None = None
+            arrival_fm_asr: float | None = None
+            fp_fm_asr_error: str | None = None
+            _t_fp_fm_asr_solver: float = np.nan
+            fp_fm_asr_iso: np.ndarray | None = None
+            arrival_fm_asr_iso: float | None = None
+            fp_fm_asr_iso_error: str | None = None
+            _t_fp_fm_asr_iso_solver: float = np.nan
+            if fm_asr_enabled:
+                try:
+                    _t0 = time.perf_counter()
+                    fp_fm_asr, arrival_fm_asr = compute_fm_asr_path_velocity(
+                        vx_face,
+                        vy_face,
+                        fsm_source_mask,
+                        fsm_target_mask,
+                        grid_spacing=config_mc["dx"],
+                        perp_ratio=float(fp_fm_asr_cfg.get("perp_ratio", 0.5)),
+                        back_factor=float(fp_fm_asr_cfg.get("back_factor", 2.0)),
+                        min_speed=float(fp_fm_asr_cfg.get("min_speed", config_mc["fmm_arg"]["min_speed"])),
+                        max_steps=int(fp_fm_asr_cfg.get("max_steps", 200_000)),
+                        isotropic_only=False,
+                    )
+                    _t_fp_fm_asr_solver = time.perf_counter() - _t0
+                    if not sim_path.is_path_valid(fp_fm_asr, domain_box, len_min=np.abs(x1 - x0)):
+                        fp_fm_asr_error = "Invalid FP(FM-ASR) geometry"
+                        fp_fm_asr = None
+                        arrival_fm_asr = None
+                except Exception as exc:
+                    fp_fm_asr_error = str(exc)
+                    logger.warning(f"[MC {mc_index}] FM-ASR path failed (non-fatal): {exc}")
+
+                try:
+                    _t0 = time.perf_counter()
+                    fp_fm_asr_iso, arrival_fm_asr_iso = compute_fm_asr_path_velocity(
+                        vx_face,
+                        vy_face,
+                        fsm_source_mask,
+                        fsm_target_mask,
+                        grid_spacing=config_mc["dx"],
+                        perp_ratio=float(fp_fm_asr_cfg.get("perp_ratio", 0.5)),
+                        back_factor=float(fp_fm_asr_cfg.get("back_factor", 2.0)),
+                        min_speed=float(fp_fm_asr_cfg.get("min_speed", config_mc["fmm_arg"]["min_speed"])),
+                        max_steps=int(fp_fm_asr_cfg.get("max_steps", 200_000)),
+                        isotropic_only=True,
+                    )
+                    _t_fp_fm_asr_iso_solver = time.perf_counter() - _t0
+                    if not sim_path.is_path_valid(fp_fm_asr_iso, domain_box, len_min=np.abs(x1 - x0)):
+                        fp_fm_asr_iso_error = "Invalid FP(FM-ASR iso) geometry"
+                        fp_fm_asr_iso = None
+                        arrival_fm_asr_iso = None
+                except Exception as exc:
+                    fp_fm_asr_iso_error = str(exc)
+                    logger.warning(f"[MC {mc_index}] FM-ASR isotropic path failed (non-fatal): {exc}")
+
             # 4) Particle tracking
             try:
                 _t0 = time.perf_counter()
@@ -881,6 +1000,12 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             D_fp_fsm: np.ndarray | None = None
             if fp_fsm is not None:
                 D_fp_fsm, _, _ = distance_distribution(fp, fp_fsm, ds=1.0)
+            D_fp_fm_asr: np.ndarray | None = None
+            if fp_fm_asr is not None:
+                D_fp_fm_asr, _, _ = distance_distribution(fp, fp_fm_asr, ds=1.0)
+            D_fp_fm_asr_iso: np.ndarray | None = None
+            if fp_fm_asr_iso is not None:
+                D_fp_fm_asr_iso, _, _ = distance_distribution(fp, fp_fm_asr_iso, ds=1.0)
 
             vx_pt = np.asarray(_pt_velocity["vx"])
             renyi_s1, renyi_s2 = _renyi_entropy_vx_profile(vx_pt)
@@ -891,6 +1016,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             y_end_fp_dij = endpoint_y_at_x(fp_dijkstra, x_ref=x_ref)
             y_end_fp_fmm = endpoint_y_at_x(fp_fmm, x_ref=x_ref)
             y_end_fp_fsm = endpoint_y_at_x(fp_fsm, x_ref=x_ref) if fp_fsm is not None else np.nan
+            y_end_fp_fm_asr = endpoint_y_at_x(fp_fm_asr, x_ref=x_ref) if fp_fm_asr is not None else np.nan
+            y_end_fp_fm_asr_iso = (
+                endpoint_y_at_x(fp_fm_asr_iso, x_ref=x_ref) if fp_fm_asr_iso is not None else np.nan
+            )
 
             seeds_dict = {
                 "base": none_to_nan(config_mc.get("seed_base", np.nan)),
@@ -925,6 +1054,13 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "zero_count": int(speed_diag["zero_or_bad_count"]),
                     "nontraversable_count": int(nontraversable_count),
                 },
+                "fm_asr": {
+                    "enabled": bool(fp_fm_asr_cfg.get("enabled", True)),
+                    "perp_ratio": float(fp_fm_asr_cfg.get("perp_ratio", 0.5)),
+                    "back_factor": float(fp_fm_asr_cfg.get("back_factor", 2.0)),
+                    "min_speed": float(fp_fm_asr_cfg.get("min_speed", config_mc["fmm_arg"]["min_speed"])),
+                    "max_steps": int(fp_fm_asr_cfg.get("max_steps", 200_000)),
+                },
             }
 
             _comp_time_lrp_dijkstra = _t_lrp_dijkstra
@@ -932,6 +1068,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             _comp_time_fp_dijkstra = _t_head + _t_vel_speed + _t_fp_dijkstra_solver
             _comp_time_fp_fmm = _t_head + _t_vel_speed + _t_fp_fmm_solver
             _comp_time_fp_fsm = _t_head + _t_vel_face + _t_fp_fsm_solver
+            _comp_time_fp_fm_asr = _t_head + _t_vel_face + _t_fp_fm_asr_solver
+            _comp_time_fp_fm_asr_iso = _t_head + _t_vel_face + _t_fp_fm_asr_iso_solver
             _comp_time_fp = _t_head + _t_fp_pt
 
             consolidated = {
@@ -979,6 +1117,22 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "travel_time": float(arrival_fsm) if arrival_fsm is not None else np.nan,
                         "error": fp_fsm_error,
                     },
+                    "fp_fm_asr": {
+                        "coords": fp_fm_asr,
+                        "length": float(sim_utils.euclidean_length(fp_fm_asr)) if fp_fm_asr is not None else np.nan,
+                        "travel_time": float(arrival_fm_asr) if arrival_fm_asr is not None else np.nan,
+                        "error": fp_fm_asr_error,
+                    },
+                    "fp_fm_asr_iso": {
+                        "coords": fp_fm_asr_iso,
+                        "length": (
+                            float(sim_utils.euclidean_length(fp_fm_asr_iso))
+                            if fp_fm_asr_iso is not None
+                            else np.nan
+                        ),
+                        "travel_time": float(arrival_fm_asr_iso) if arrival_fm_asr_iso is not None else np.nan,
+                        "error": fp_fm_asr_iso_error,
+                    },
                 },
                 "endpoint": {
                     "method": "interp_at_xref",
@@ -990,6 +1144,14 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "x": float(fp_fsm[-1, 0]) if fp_fsm is not None else np.nan,
                         "y": float(y_end_fp_fsm),
                     },
+                    "fp_fm_asr": {
+                        "x": float(fp_fm_asr[-1, 0]) if fp_fm_asr is not None else np.nan,
+                        "y": float(y_end_fp_fm_asr),
+                    },
+                    "fp_fm_asr_iso": {
+                        "x": float(fp_fm_asr_iso[-1, 0]) if fp_fm_asr_iso is not None else np.nan,
+                        "y": float(y_end_fp_fm_asr_iso),
+                    },
                     "lrp": {"x": float(lrp[-1, 0]), "y": float(y_end_lrp)},
                     "lrp_fmm": {"x": float(lrp_fmm[-1, 0]), "y": float(y_end_lrp_fmm)},
                     "dy": {
@@ -998,6 +1160,12 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "fp_vs_dijkstra": float(y_end_fp - y_end_fp_dij),
                         "fp_vs_fmm": float(y_end_fp - y_end_fp_fmm),
                         "fp_vs_fsm": float(y_end_fp - y_end_fp_fsm) if fp_fsm is not None else np.nan,
+                        "fp_vs_fm_asr": (
+                            float(y_end_fp - y_end_fp_fm_asr) if fp_fm_asr is not None else np.nan
+                        ),
+                        "fp_vs_fm_asr_iso": (
+                            float(y_end_fp - y_end_fp_fm_asr_iso) if fp_fm_asr_iso is not None else np.nan
+                        ),
                     },
                 },
                 "hausdorff": {
@@ -1006,6 +1174,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp_vs_dijkstra": _hausdorff_detail(D_fp_dij),
                     "fp_vs_fmm": _hausdorff_detail(D_fp_fmm),
                     "fp_vs_fsm": _hausdorff_detail(D_fp_fsm) if D_fp_fsm is not None else None,
+                    "fp_vs_fm_asr": _hausdorff_detail(D_fp_fm_asr) if D_fp_fm_asr is not None else None,
+                    "fp_vs_fm_asr_iso": (
+                        _hausdorff_detail(D_fp_fm_asr_iso) if D_fp_fm_asr_iso is not None else None
+                    ),
                 },
                 "renyi_entropy": {
                     "S1": renyi_s1,
@@ -1017,6 +1189,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp_dijkstra": _comp_time_fp_dijkstra,
                     "fp_fmm": _comp_time_fp_fmm,
                     "fp_fsm": _comp_time_fp_fsm,
+                    "fp_fm_asr": _comp_time_fp_fm_asr,
+                    "fp_fm_asr_iso": _comp_time_fp_fm_asr_iso,
                     "fp": _comp_time_fp,
                 },
             }
@@ -1033,10 +1207,14 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "len_fp_dijkstra": consolidated["paths"]["fp_dijkstra"]["length"],
                     "len_fp_fmm": consolidated["paths"]["fp_fmm"]["length"],
                     "len_fp_fsm": consolidated["paths"]["fp_fsm"]["length"],
+                    "len_fp_fm_asr": consolidated["paths"]["fp_fm_asr"]["length"],
+                    "len_fp_fm_asr_iso": consolidated["paths"]["fp_fm_asr_iso"]["length"],
                     "travel_time_fp": consolidated["paths"]["fp"]["travel_time"],
                     "travel_time_dijkstra": consolidated["paths"]["fp_dijkstra"]["travel_time"],
                     "travel_time_fmm": consolidated["paths"]["fp_fmm"]["travel_time"],
                     "travel_time_fsm": consolidated["paths"]["fp_fsm"]["travel_time"],
+                    "travel_time_fm_asr": consolidated["paths"]["fp_fm_asr"]["travel_time"],
+                    "travel_time_fm_asr_iso": consolidated["paths"]["fp_fm_asr_iso"]["travel_time"],
                     "resistance_lrp": consolidated["paths"]["lrp"]["resistance"],
                     "resistance_lrp_fmm": consolidated["paths"]["lrp_fmm"]["resistance"],
                     "endpoint_method": "interp_at_xref",
@@ -1047,17 +1225,23 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "x_end_fp_dijkstra": consolidated["endpoint"]["fp_dijkstra"]["x"],
                     "x_end_fp_fmm": consolidated["endpoint"]["fp_fmm"]["x"],
                     "x_end_fp_fsm": consolidated["endpoint"]["fp_fsm"]["x"],
+                    "x_end_fp_fm_asr": consolidated["endpoint"]["fp_fm_asr"]["x"],
+                    "x_end_fp_fm_asr_iso": consolidated["endpoint"]["fp_fm_asr_iso"]["x"],
                     "y_end_fp": consolidated["endpoint"]["fp"]["y"],
                     "y_end_lrp": consolidated["endpoint"]["lrp"]["y"],
                     "y_end_lrp_fmm": consolidated["endpoint"]["lrp_fmm"]["y"],
                     "y_end_fp_dijkstra": consolidated["endpoint"]["fp_dijkstra"]["y"],
                     "y_end_fp_fmm": consolidated["endpoint"]["fp_fmm"]["y"],
                     "y_end_fp_fsm": consolidated["endpoint"]["fp_fsm"]["y"],
+                    "y_end_fp_fm_asr": consolidated["endpoint"]["fp_fm_asr"]["y"],
+                    "y_end_fp_fm_asr_iso": consolidated["endpoint"]["fp_fm_asr_iso"]["y"],
                     "endpoint_dy_fp_vs_lrp": consolidated["endpoint"]["dy"]["fp_vs_lrp"],
                     "endpoint_dy_fp_vs_lrp_fmm": consolidated["endpoint"]["dy"]["fp_vs_lrp_fmm"],
                     "endpoint_dy_fp_vs_dijkstra": consolidated["endpoint"]["dy"]["fp_vs_dijkstra"],
                     "endpoint_dy_fp_vs_fmm": consolidated["endpoint"]["dy"]["fp_vs_fmm"],
                     "endpoint_dy_fp_vs_fsm": consolidated["endpoint"]["dy"]["fp_vs_fsm"],
+                    "endpoint_dy_fp_vs_fm_asr": consolidated["endpoint"]["dy"]["fp_vs_fm_asr"],
+                    "endpoint_dy_fp_vs_fm_asr_iso": consolidated["endpoint"]["dy"]["fp_vs_fm_asr_iso"],
                     "pt_solver": config_dict["particle_tracking"]["solver"],
                     "pt_backend": config_dict["particle_tracking"]["backend"],
                     "pt_num_particles": config_dict["particle_tracking"]["num_particles"],
@@ -1072,11 +1256,18 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fmm_min_speed": config_dict["fmm"]["min_speed"],
                     "fmm_zero_count": config_dict["fmm"]["zero_count"],
                     "fmm_nontraversable_count": config_dict["fmm"]["nontraversable_count"],
+                    "fm_asr_enabled": config_dict["fm_asr"]["enabled"],
+                    "fm_asr_perp_ratio": config_dict["fm_asr"]["perp_ratio"],
+                    "fm_asr_back_factor": config_dict["fm_asr"]["back_factor"],
+                    "fm_asr_min_speed": config_dict["fm_asr"]["min_speed"],
+                    "fm_asr_max_steps": config_dict["fm_asr"]["max_steps"],
                     "comp_time_lrp_dijkstra": _comp_time_lrp_dijkstra,
                     "comp_time_lrp_fmm": _comp_time_lrp_fmm,
                     "comp_time_fp_dijkstra": _comp_time_fp_dijkstra,
                     "comp_time_fp_fmm": _comp_time_fp_fmm,
                     "comp_time_fp_fsm": _comp_time_fp_fsm,
+                    "comp_time_fp_fm_asr": _comp_time_fp_fm_asr,
+                    "comp_time_fp_fm_asr_iso": _comp_time_fp_fm_asr_iso,
                     "comp_time_fp": _comp_time_fp,
                 }
             )
@@ -1102,6 +1293,11 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "fmm_solver": config_mc["fmm_arg"]["solver"],
             "fmm_backtracking": config_mc["fmm_arg"]["backtracking"],
             "fmm_face_output": config_mc["fmm_arg"]["face_output"],
+            "fm_asr_enabled": bool(config_mc.get("fm_asr_arg", {}).get("enabled", True)),
+            "fm_asr_perp_ratio": float(config_mc.get("fm_asr_arg", {}).get("perp_ratio", np.nan)),
+            "fm_asr_back_factor": float(config_mc.get("fm_asr_arg", {}).get("back_factor", np.nan)),
+            "fm_asr_min_speed": float(config_mc.get("fm_asr_arg", {}).get("min_speed", np.nan)),
+            "fm_asr_max_steps": int(config_mc.get("fm_asr_arg", {}).get("max_steps", -1)),
             "pt_solver": config_mc["particleTracking_arg"]["solver"],
             "pt_backend": config_mc["particleTracking_arg"].get("backend", "auto"),
             "pt_num_particles": int(resolve_particle_count(config_mc, source_rows)),
@@ -1155,6 +1351,13 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 "zero_count": np.nan,
                 "nontraversable_count": np.nan,
             },
+            "fm_asr": {
+                "enabled": bool(config_mc.get("fm_asr_arg", {}).get("enabled", True)),
+                "perp_ratio": float(config_mc.get("fm_asr_arg", {}).get("perp_ratio", np.nan)),
+                "back_factor": float(config_mc.get("fm_asr_arg", {}).get("back_factor", np.nan)),
+                "min_speed": float(config_mc.get("fm_asr_arg", {}).get("min_speed", np.nan)),
+                "max_steps": int(config_mc.get("fm_asr_arg", {}).get("max_steps", -1)),
+            },
         },
     }
     save_mc_consolidated(config_mc=config_mc, mc_index=mc_index, consolidated=failed_consolidated)
@@ -1173,7 +1376,7 @@ def run_field_size_simulation(idx_size: int, config_base: dict[str, Any]) -> dic
     grf_gen = make_grf_generator(config["grf_arg"], field_size_)
 
     num_mc_ = int(config["num_mc"][idx_size])
-    num_process = min(num_mc_, len(os.sched_getaffinity(0)))
+    num_process = min(num_mc_, available_cpu_count())
     with mp.Pool(
         processes=num_process,
         initializer=init_worker,
@@ -1330,6 +1533,11 @@ def parse_args() -> argparse.Namespace:
         default=1e-12,
         help="Minimum speed floor used by clip/obstacle policies.",
     )
+    parser.add_argument("--fm_asr", "--fm-asr", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fm_asr_perp_ratio", type=float, default=0.5)
+    parser.add_argument("--fm_asr_back_factor", type=float, default=2.0)
+    parser.add_argument("--fm_asr_min_speed", type=float, default=None)
+    parser.add_argument("--fm_asr_max_steps", type=int, default=200_000)
     group.add_argument("--std", type=float, default=None, help="Standard deviation for GRF generation.")
     group.add_argument("--var", type=float, default=None, help="Variance for GRF generation.")
     args = parser.parse_args()
@@ -1396,6 +1604,13 @@ def main() -> None:
             "backtracking": args.fmm_backtracking,
             "zero_policy": args.fmm_zero_policy,
             "min_speed": args.fmm_min_speed,
+        },
+        "fm_asr_arg": {
+            "enabled": bool(args.fm_asr),
+            "perp_ratio": float(args.fm_asr_perp_ratio),
+            "back_factor": float(args.fm_asr_back_factor),
+            "min_speed": float(args.fmm_min_speed if args.fm_asr_min_speed is None else args.fm_asr_min_speed),
+            "max_steps": int(args.fm_asr_max_steps),
         },
         "particleTracking_arg": {
             "solver": args.solver,

@@ -557,7 +557,7 @@ def run_field_size_simulation_gpu(
     grf_gen = base.make_grf_generator(config["grf_arg"], field_size_)
 
     num_mc_ = int(config["num_mc"][idx_size])
-    cpu_workers = int(config.get("cpu_workers") or min(num_mc_, len(os.sched_getaffinity(0))))
+    cpu_workers = int(config.get("cpu_workers") or min(num_mc_, base.available_cpu_count()))
     cpu_workers = max(1, min(num_mc_, cpu_workers))
     with mp.Pool(
         processes=cpu_workers,
@@ -656,6 +656,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fsm_consecutive_passes", type=int, default=1)
     parser.add_argument("--fsm_dt", type=float, default=0.5)
     parser.add_argument("--fsm_max_steps", type=int, default=10_000)
+    parser.add_argument("--fm_asr", "--fm-asr", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--fm_asr_perp_ratio", type=float, default=0.5)
+    parser.add_argument("--fm_asr_back_factor", type=float, default=2.0)
+    parser.add_argument("--fm_asr_min_speed", type=float, default=None)
+    parser.add_argument("--fm_asr_max_steps", type=int, default=200_000)
     parser.add_argument("--cpu_workers", type=int, default=None, help="CPU worker count for preprocessing/finalization.")
     parser.add_argument("--gpu_device", type=str, default=None, help="GPU token to pin the single GPU worker to.")
     group.add_argument("--std", type=float, default=None)
@@ -716,6 +721,13 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
             "consecutive_passes": args.fsm_consecutive_passes,
             "dt": args.fsm_dt,
             "max_steps": args.fsm_max_steps,
+        },
+        "fm_asr_arg": {
+            "enabled": bool(args.fm_asr),
+            "perp_ratio": float(args.fm_asr_perp_ratio),
+            "back_factor": float(args.fm_asr_back_factor),
+            "min_speed": float(args.fmm_min_speed if args.fm_asr_min_speed is None else args.fm_asr_min_speed),
+            "max_steps": int(args.fm_asr_max_steps),
         },
         "particleTracking_arg": {
             "solver": args.solver,

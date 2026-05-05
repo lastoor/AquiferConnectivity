@@ -33,7 +33,7 @@ The wrapper script `./scripts/run_in_fmm_env.sh` injects both `./src` and `../..
 
 ## Output Schema
 
-`scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py` write schema v10 outputs:
+`scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py` write schema v12 outputs:
 
 - Per MC run: `mainOutput_size{field_size}_mc{mc_index}.npz`
 - Per size aggregate: `mainOutput_size{field_size}.npz`
@@ -84,6 +84,11 @@ Options:
 - `--num_particles`: exact particle-count override for fastest-path tracking
 - `--velocity-location`: `face` or `cell`
 - `--align-with-modflow-velocity` / `--no-align-with-modflow-velocity`
+- `--fm_asr` / `--no-fm_asr`: enable or disable FM-ASR comparison paths
+- `--fm_asr_perp_ratio`: sideways anisotropic speed ratio for FM-ASR, default `0.5`
+- `--fm_asr_back_factor`: backward speed reduction factor for FM-ASR, default `2.0`
+- `--fm_asr_min_speed`: velocity magnitude floor for FM-ASR; defaults to `--fmm_min_speed`
+- `--fm_asr_max_steps`: FM-ASR backtracking step cap, default `200000`
 
 Defaults:
 
@@ -93,6 +98,7 @@ Defaults:
 - `scripts/run_fmm_gpu_worker.py --backend gpu`
 - `--velocity-location face`
 - `--no-align-with-modflow-velocity`
+- `--fm_asr`
 
 Notes:
 
@@ -108,6 +114,7 @@ Notes:
 - The current persistent GPU worker is intended to run one field size and one exact `--num_particles` value per job. Mixed tracker shapes in one worker process are rejected explicitly.
 - The GPU worker uses a single dedicated GPU process, compact `seed_spec` payloads, shared-memory transfer for `vx` / `vy` / face arrays, and exact winner replay in arrival mode.
 - `scripts/run_fmm_gpu_worker.py` is compatible with newer FlowSimulation Pollock GPU trackers that return extra snapshot arrays from `tracker.run()`; the worker uses the first two outputs (`travel_times`, `status`) and ignores additional values in the summary path.
+- FM-ASR comparison paths are non-fatal diagnostics. If either FM-ASR solve fails, the MC trial can still succeed and the FM-ASR fields are saved as `NaN` with an error string in the per-MC consolidated output.
 
 Example FBM run:
 
@@ -223,6 +230,11 @@ Additional schema fields now include:
 - `fmm_velocity_layout`, `fmm_face_output`, `fmm_face_mapping`, `fmm_solver`, `fmm_backtracking`, `fmm_zero_policy`, `fmm_min_speed`
 - `fmm_zero_count`, `fmm_nontraversable_count`
 - `pt_solver`, `pt_backend`, `pt_num_particles`, `pt_velocity_location`, `pt_align_with_modflow_velocity`
+- `len_fp_fm_asr`, `len_fp_fm_asr_iso`, `travel_time_fm_asr`, `travel_time_fm_asr_iso`
+- `endpoint_dy_fp_vs_fm_asr`, `endpoint_dy_fp_vs_fm_asr_iso`
+- `x_end_fp_fm_asr`, `y_end_fp_fm_asr`, `x_end_fp_fm_asr_iso`, `y_end_fp_fm_asr_iso`
+- `fm_asr_enabled`, `fm_asr_perp_ratio`, `fm_asr_back_factor`, `fm_asr_min_speed`, `fm_asr_max_steps`
+- `comp_time_fp_fm_asr`, `comp_time_fp_fm_asr_iso`
 
 ## Random Seed Control
 

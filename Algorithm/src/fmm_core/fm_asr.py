@@ -988,22 +988,22 @@ def visualize_indicatrix_field(
         ax.scatter(
             origin_x,
             origin_y,
-            s=12,
+            s=5,
             marker="o",
             facecolors="black",
             edgecolors="white",
-            linewidths=0.45,
+            linewidths=0.1,
             zorder=4,
         )
-        ax.scatter(
-            center_x,
-            center_y,
-            s=22,
-            marker="x",
-            color="tab:red",
-            linewidths=1.2,
-            zorder=5,
-        )
+        # ax.scatter(
+        #     center_x,
+        #     center_y,
+        #     s=22,
+        #     marker="x",
+        #     color="tab:red",
+        #     linewidths=1.2,
+        #     zorder=5,
+        # )
 
     legend_handles = [
         Line2D([0], [0], color="white", linewidth=1.1, label="Indicatrix boundary"),
@@ -1017,16 +1017,16 @@ def visualize_indicatrix_field(
             markersize=5,
             label="Grid point",
         ),
-        Line2D(
-            [0],
-            [0],
-            marker="x",
-            color="tab:red",
-            linestyle="none",
-            markersize=6,
-            markeredgewidth=1.2,
-            label="Indicatrix center",
-        ),
+        # Line2D(
+        #     [0],
+        #     [0],
+        #     marker="x",
+        #     color="tab:red",
+        #     linestyle="none",
+        #     markersize=6,
+        #     markeredgewidth=1.2,
+        #     label="Indicatrix center",
+        # ),
     ]
     ax.legend(handles=legend_handles, loc="upper right", fontsize=8, framealpha=0.8)
 

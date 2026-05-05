@@ -203,6 +203,24 @@
 
 ## 2026-05-04
 
+- Added FM-ASR fastest-path comparisons to the Monte Carlo runner pipeline:
+  - `scripts/run_fmm.py` now computes non-fatal `fp_fm_asr` and `fp_fm_asr_iso` paths from full face Darcy velocity converted to cell-centered vectors
+  - saved FM-ASR lengths, travel times, endpoints, endpoint deltas, Hausdorff details, path dictionaries, computation times, and config values
+  - bumped `MC_SCHEMA_VERSION` to 12
+  - added FM-ASR CLI/config knobs to both `scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py`
+  - added an `available_cpu_count()` fallback for macOS where `os.sched_getaffinity` is unavailable
+- Validation:
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi python -m py_compile scripts/run_fmm.py scripts/run_fmm_gpu_worker.py src/fmm_core/fm_asr.py`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi python scripts/run_fmm_gpu_worker.py --help`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q tests/test_fm_asr.py` (15 passed)
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi python scripts/run_fmm.py --path_workdir /private/tmp/fm_asr_cpu_smoke --num_mc 1 --field_size 32 --covariance exp --length_scale 0.1 --std 1.0 --seed 123 --backend cpu --solver pollock --fm_asr_max_steps 50000`
+  - inspected `/private/tmp/fm_asr_cpu_smoke/.../size32.npz` and `size32_mc0.npy` for new FM-ASR keys and finite values
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q` (19 passed, 5 pre-existing FSM warnings)
+- Note:
+  - a direct GPU-worker smoke could not start on this Mac because `scripts/run_fmm_gpu_worker.py` requires a visible CUDA-style GPU token; Taichi/Metal is not detected by that entrypoint's GPU discovery.
+
+## 2026-05-04
+
 - Updated comparison and indicatrix visualizations:
   - `comparison.png` now shows a shared path legend and relative L2 labels on the two travel-time difference panels
   - `indicatrix_field.png` now marks both grid-point origins and geometric centers of the Randers indicatrices
