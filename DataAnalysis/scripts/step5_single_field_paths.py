@@ -38,6 +38,7 @@ COLORS = {
     "lrp": "#F9B43F",
     "lrpFMM": "#F9B43F",
     "fpFSM": "#2CA02C",
+    "fpFmAsr": "#E377C2",
 }
 
 LINESTYLES = {
@@ -47,6 +48,7 @@ LINESTYLES = {
     "lrp": "-",
     "lrpFMM": "-.",
     "fpFSM": (0, (3, 1, 1, 1)),
+    "fpFmAsr": (0, (5, 2)),
 }
 
 LINEWIDTHS = 1.2
@@ -110,6 +112,9 @@ class PathSolveResult:
     t_min_lrp: np.ndarray
     fp_fsm: np.ndarray | None
     t_min_fsm: np.ndarray | None
+    fp_fm_asr: np.ndarray | None
+    fp_fm_asr_arrival_time: float | None
+    t_min_fm_asr: np.ndarray | None
     linearized_fp_paths: list[np.ndarray] | None
     linearized_fp_indices: list[int] | None
     linearized_fp_final: np.ndarray | None
@@ -477,6 +482,7 @@ def _import_solver_modules() -> dict[str, Any]:
 
     try:
         from fmm_core.fmm import extract_path_continuous, extract_path_source_to_target, fast_marching_2d_regions
+        from fmm_core.fm_asr import FMASR2D, extract_fm_asr_path
         from fmm_core.fsm import compute_fsm_path as shared_compute_fsm_path
         from simulation import hydraulic as sim_hyd
         from simulation import particle_tracking as sim_pt
@@ -491,6 +497,8 @@ def _import_solver_modules() -> dict[str, Any]:
         "extract_path_continuous": extract_path_continuous,
         "extract_path_source_to_target": extract_path_source_to_target,
         "fast_marching_2d_regions": fast_marching_2d_regions,
+        "FMASR2D": FMASR2D,
+        "extract_fm_asr_path": extract_fm_asr_path,
         "compute_fsm_path": shared_compute_fsm_path,
         "sim_hyd": sim_hyd,
         "sim_pt": sim_pt,
@@ -850,6 +858,57 @@ def _compute_fmm_path(
     return path_xy, t_field
 
 
+def _compute_fm_asr_path(
+    vx_cell: np.ndarray,
+    vy_cell: np.ndarray,
+    *,
+    geometry: Step5Geometry,
+    FMASR2D: Any,
+    extract_fm_asr_path: Any,
+    perp_ratio: float,
+    back_factor: float,
+    min_speed: float,
+    max_steps: int,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    traversable_mask = (
+        np.isfinite(vx_cell)
+        & np.isfinite(vy_cell)
+        & np.isfinite(np.hypot(vx_cell, vy_cell))
+    )
+    source_mask, target_mask, _traversable_mask = _build_source_target_masks(
+        field_shape=vx_cell.shape,
+        source_rows=geometry.source_rows,
+        target_rows=geometry.target_rows,
+        x0=geometry.source_x,
+        x1=geometry.target_x,
+        traversable_mask=traversable_mask,
+    )
+    if not np.any(source_mask) or not np.any(target_mask):
+        raise RuntimeError("No traversable source/target cells for FM-ASR.")
+
+    vx_safe = np.where(np.isfinite(vx_cell), vx_cell, 0.0)
+    vy_safe = np.where(np.isfinite(vy_cell), vy_cell, 0.0)
+    W_cell = np.stack((vx_safe, vy_safe), axis=2)
+    solver = FMASR2D.from_velocity_field(
+        W_cell,
+        h=1.0,
+        perp_ratio=perp_ratio,
+        back_factor=back_factor,
+        min_speed=min_speed,
+        isotropic_only=False,
+        direction="from_source",
+    )
+    t_field = solver.solve(source_mask)
+    path_xy, travel_value, _chosen_target = extract_fm_asr_path(
+        solver,
+        t_field,
+        source_mask,
+        target_mask,
+        max_steps=max_steps,
+    )
+    return path_xy, t_field, float(travel_value)
+
+
 def _run_particle_tracking(
     *,
     sim_hyd: Any,
@@ -1184,6 +1243,11 @@ def solve_single_field(
     fsm_solver: str = "fipy",
     fsm_dt: float = 0.5,
     fsm_max_steps: int = 10_000,
+    fm_asr_fp: bool = False,
+    fm_asr_perp_ratio: float = 0.5,
+    fm_asr_back_factor: float = 2.0,
+    fm_asr_min_speed: float = 1e-12,
+    fm_asr_max_steps: int = 200_000,
 ) -> PathSolveResult:
     modules = _import_solver_modules()
     linear_solver = _import_linear_eikonal_solver() if linearized_fp else None
@@ -1194,6 +1258,8 @@ def solve_single_field(
     fast_marching_2d_regions = modules["fast_marching_2d_regions"]
     extract_path_source_to_target = modules["extract_path_source_to_target"]
     compute_fsm_path = modules["compute_fsm_path"]
+    FMASR2D = modules["FMASR2D"]
+    extract_fm_asr_path = modules["extract_fm_asr_path"]
 
     if logk_field.shape != (field_size, field_size):
         raise ValueError(f"logK shape {logk_field.shape} does not match requested field-size={field_size}.")
@@ -1320,6 +1386,37 @@ def solve_single_field(
             max_steps=fsm_max_steps,
         )
 
+    fp_fm_asr: np.ndarray | None = None
+    fp_fm_asr_arrival_time: float | None = None
+    t_min_fm_asr: np.ndarray | None = None
+    if fm_asr_fp:
+        try:
+            fp_fm_asr, t_min_fm_asr, fp_fm_asr_arrival_time = _compute_fm_asr_path(
+                vx_cell,
+                vy_cell,
+                geometry=geometry,
+                FMASR2D=FMASR2D,
+                extract_fm_asr_path=extract_fm_asr_path,
+                perp_ratio=fm_asr_perp_ratio,
+                back_factor=fm_asr_back_factor,
+                min_speed=fm_asr_min_speed,
+                max_steps=fm_asr_max_steps,
+            )
+            if check_path_geometry and (
+                fp_fm_asr.size == 0
+                or not sim_path.is_path_valid(
+                    fp_fm_asr,
+                    domain_box,
+                    len_min=abs(geometry.target_x - geometry.source_x),
+                )
+            ):
+                raise RuntimeError("Invalid FP (FM-ASR) geometry.")
+        except Exception as exc:
+            print(f"Warning: FM-ASR FP solve failed; continuing without FM-ASR path: {exc}")
+            fp_fm_asr = None
+            fp_fm_asr_arrival_time = None
+            t_min_fm_asr = None
+
     linearized_series: LinearizedFpSeries | None = None
     if linearized_fp:
         linearized_series = _compute_linearized_fp_series(
@@ -1399,6 +1496,9 @@ def solve_single_field(
         t_min_lrp=t_min_lrp,
         fp_fsm=fp_fsm,
         t_min_fsm=t_min_fsm,
+        fp_fm_asr=fp_fm_asr,
+        fp_fm_asr_arrival_time=fp_fm_asr_arrival_time,
+        t_min_fm_asr=t_min_fm_asr,
         linearized_fp_paths=None if linearized_series is None else linearized_series.paths,
         linearized_fp_indices=None if linearized_series is None else linearized_series.path_indices,
         linearized_fp_final=None if linearized_series is None or not linearized_series.paths else linearized_series.paths[-1],
@@ -1451,6 +1551,8 @@ def _plot_common_overlays(
     ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
         ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
+        ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^*_{\mathcal{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if fp_diag is not None:
     #     ax.plot(
     #         fp_diag.spline_points[:, 0] / i_y,
@@ -2375,6 +2477,7 @@ def plot_isochrones_with_plume(
     i_y: float,
     fp_arrival_time_dimless: float | None = None,
     t_min_fsm_dimless: np.ndarray | None = None,
+    t_min_fm_asr_dimless: np.ndarray | None = None,
 ) -> plt.Figure | None:
     """Multi-panel figure: one panel per snapshot time showing isochrone + particle plume.
 
@@ -2383,8 +2486,9 @@ def plot_isochrones_with_plume(
     - FP (FMM) isochrone contour at fraction f of its own first arrival time
     - LRP isochrone contour at fraction f of its own first arrival time
     - FSM isochrone contour at fraction f of its own first arrival time (when available)
+    - FM-ASR isochrone contour at fraction f of its own first arrival time (when available)
     - Particle plume scatter (all particle positions at that snapshot time)
-    - FP (FMM), LRP (FMM), and FSM paths as thin overlays
+    - FP (FMM), LRP (FMM), FSM, and FM-ASR paths as thin overlays
     - Source line
 
     Parameters
@@ -2405,6 +2509,9 @@ def plot_isochrones_with_plume(
     t_min_fsm_dimless : ndarray (ny, nx) or None
         FSM travel-time field divided by t_ref (NaN where unreachable). When None,
         no FSM isochrone or path is drawn.
+    t_min_fm_asr_dimless : ndarray (ny, nx) or None
+        FM-ASR travel-time field divided by t_ref (NaN where unreachable). When None,
+        no FM-ASR isochrone or path is drawn.
 
     Returns None if result.snapshots is None or has no snapshots.
     """
@@ -2451,6 +2558,14 @@ def plot_isochrones_with_plume(
     else:
         t_fsm_arrival = t_fsm_min = t_fsm_max = 0.0
 
+    if t_min_fm_asr_dimless is not None:
+        t_fm_asr_arrival = float(np.nanmin(t_min_fm_asr_dimless[:, ix_target]))
+        t_fm_asr_valid = t_min_fm_asr_dimless[np.isfinite(t_min_fm_asr_dimless)]
+        t_fm_asr_min = float(np.nanmin(t_fm_asr_valid)) if t_fm_asr_valid.size > 0 else 0.0
+        t_fm_asr_max = float(np.nanmax(t_fm_asr_valid)) if t_fm_asr_valid.size > 0 else 1.0
+    else:
+        t_fm_asr_arrival = t_fm_asr_min = t_fm_asr_max = 0.0
+
     from matplotlib.lines import Line2D
 
     im_ref = None
@@ -2490,6 +2605,15 @@ def plot_isochrones_with_plume(
         #             levels=[t_level_fsm], linewidths=LINEWIDTHS, colors=COLORS["fpFSM"],
         #             linestyles=["-"],
         #         )
+
+        if t_min_fm_asr_dimless is not None:
+            t_level_fm_asr = f * t_fm_asr_arrival
+            if t_fm_asr_min <= t_level_fm_asr <= t_fm_asr_max:
+                ax.contour(
+                    x_norm, y_norm, t_min_fm_asr_dimless,
+                    levels=[t_level_fm_asr], linewidths=LINEWIDTHS, colors=COLORS["fpFmAsr"],
+                    linestyles=[LINESTYLES["fpFmAsr"]],
+                )
 
         # Particle plume scatter
         x_j = snaps.x[:, j]
@@ -2540,6 +2664,16 @@ def plot_isochrones_with_plume(
         #     )
         #     line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
 
+        if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
+            line, = ax.plot(
+                result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y,
+                color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"],
+                linewidth=LINEWIDTHS,
+            )
+            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            line.set_solid_capstyle("round")
+            line.set_dash_capstyle("round")
+
         # Source line
         ax.plot(
             result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y,
@@ -2572,12 +2706,23 @@ def plot_isochrones_with_plume(
             h_lrp_fmm.set_solid_capstyle("round")
             h_lrp_fmm.set_dash_capstyle("round")
 
+            h_fm_asr = Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"],
+                              label=r"$\gamma^*_\mathcal{F}$")
+            h_fm_asr.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            h_fm_asr.set_solid_capstyle("round")
+            h_fm_asr.set_dash_capstyle("round")
+
             handles = [
                 h_fp, h_fp_fmm, h_lrp_fmm,
                 Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{A}$ isochrone"),
                 Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{E}$ isochrone"),
                 Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{R}$ isochrone"),
             ]
+            if result.fp_fm_asr is not None and t_min_fm_asr_dimless is not None:
+                handles += [
+                    h_fm_asr,
+                    Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"], label=r"$\mathcal{T}^*_\mathcal{F}$ isochrone"),
+                ]
             # if t_min_fsm_dimless is not None:
             #     h_fp_fsm = Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFSM"],
             #                       label=r"$\gamma^*_\mathcal{S}$")
@@ -2594,6 +2739,8 @@ def plot_isochrones_with_plume(
                 rf"$t_{{\mathcal{{E}}}}^* = {t_fp_arrival:.3g}$",
                 rf"$t_{{\mathcal{{R}}}}^* = {t_lrp_arrival:.3g}$",
             ]
+            if t_min_fm_asr_dimless is not None:
+                arrival_lines.append(rf"$t_{{\mathcal{{F}}}}^* = {t_fm_asr_arrival:.3g}$")
             # if t_min_fsm_dimless is not None:
             #     arrival_lines.append(rf"$t_{{a,\mathcal{{S}}}}^* = {t_fsm_arrival:.3g}$")
             ax.text(
@@ -2717,6 +2864,11 @@ def run_step5(
     fsm_solver: str = "fipy",
     fsm_dt: float = 0.5,
     fsm_max_steps: int = 10_000,
+    fm_asr_fp: bool = False,
+    fm_asr_perp_ratio: float = 0.5,
+    fm_asr_back_factor: float = 2.0,
+    fm_asr_min_speed: float = 1e-12,
+    fm_asr_max_steps: int = 200_000,
 ) -> tuple[Path, Path, Path, Path, Path | None, Path | None]:
     selected: SelectedRun | None = None
     if logk_source == "dataset":
@@ -2811,6 +2963,11 @@ def run_step5(
         fsm_solver=fsm_solver,
         fsm_dt=fsm_dt,
         fsm_max_steps=fsm_max_steps,
+        fm_asr_fp=fm_asr_fp,
+        fm_asr_perp_ratio=fm_asr_perp_ratio,
+        fm_asr_back_factor=fm_asr_back_factor,
+        fm_asr_min_speed=fm_asr_min_speed,
+        fm_asr_max_steps=fm_asr_max_steps,
     )
     if linearized_fp:
         successful_indices = result.linearized_fp_indices or []
@@ -2930,6 +3087,10 @@ def run_step5(
             np.where(np.isfinite(result.t_min_fsm), result.t_min_fsm / t_ref, np.nan)
             if result.t_min_fsm is not None else None
         )
+        tmin_fm_asr_plot = (
+            np.where(np.isfinite(result.t_min_fm_asr), result.t_min_fm_asr / t_ref, np.nan)
+            if result.t_min_fm_asr is not None else None
+        )
         isochrone_plume_path = out_dir / f"{stem}_isochrone_plume.png"
         fig_plume = plot_isochrones_with_plume(
             logk_field,
@@ -2940,6 +3101,7 @@ def run_step5(
             i_y=i_y,
             fp_arrival_time_dimless=fp_arrival_time_dimless,
             t_min_fsm_dimless=tmin_fsm_plot,
+            t_min_fm_asr_dimless=tmin_fm_asr_plot,
         )
         if fig_plume is not None:
             fig_plume.savefig(isochrone_plume_path, dpi=cfg.figure_dpi, bbox_inches="tight")
@@ -3048,6 +3210,20 @@ def parse_args() -> argparse.Namespace:
         help="RK45 max step size (grid cells) for FSM path backtracking.")
     parser.add_argument("--fsm-max-steps", type=int, default=10000,
         help="Maximum RK45 backtracking steps for FSM path extraction.")
+    parser.add_argument(
+        "--fm-asr-fp",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Enable FM-ASR Finsler fastest-path travel-time solve and backtracking path.",
+    )
+    parser.add_argument("--fm-asr-perp-ratio", type=float, default=0.5,
+        help="FM-ASR sideways speed ratio relative to local velocity magnitude.")
+    parser.add_argument("--fm-asr-back-factor", type=float, default=2.0,
+        help="FM-ASR backward speed reduction factor.")
+    parser.add_argument("--fm-asr-min-speed", type=float, default=1e-12,
+        help="FM-ASR velocity magnitude floor.")
+    parser.add_argument("--fm-asr-max-steps", type=int, default=200000,
+        help="Maximum FM-ASR Hopf-Lax backtracking steps.")
     parser.add_argument("--source-x", type=int, default=None)
     parser.add_argument("--target-x", type=int, default=None)
     parser.add_argument("--source-y-start", type=int, default=None)
@@ -3137,6 +3313,14 @@ def parse_args() -> argparse.Namespace:
     else:
         parser.error(f"Unsupported --logk-source={args.logk_source!r}; expected 'dataset', 'synthetic', or 'grf'.")
     _validate_particle_tracking_options(solver=args.solver, velocity_location=args.velocity_location, backend=args.backend)
+    if args.fm_asr_perp_ratio <= 0.0 or not np.isfinite(args.fm_asr_perp_ratio):
+        parser.error("--fm-asr-perp-ratio must be a positive finite number.")
+    if args.fm_asr_back_factor < 1.0 or not np.isfinite(args.fm_asr_back_factor):
+        parser.error("--fm-asr-back-factor must be finite and >= 1.")
+    if args.fm_asr_min_speed <= 0.0 or not np.isfinite(args.fm_asr_min_speed):
+        parser.error("--fm-asr-min-speed must be a positive finite number.")
+    if args.fm_asr_max_steps < 1:
+        parser.error("--fm-asr-max-steps must be a positive integer.")
     if args.snapshot_mode is not None and args.snapshot_times is None:
         parser.error("--snapshot-times is required when --snapshot-mode is specified.")
     if args.snapshot_times is not None and args.snapshot_mode is None:
@@ -3231,6 +3415,11 @@ def main() -> int:
         fsm_solver=args.fsm_solver,
         fsm_dt=args.fsm_dt,
         fsm_max_steps=args.fsm_max_steps,
+        fm_asr_fp=args.fm_asr_fp,
+        fm_asr_perp_ratio=args.fm_asr_perp_ratio,
+        fm_asr_back_factor=args.fm_asr_back_factor,
+        fm_asr_min_speed=args.fm_asr_min_speed,
+        fm_asr_max_steps=args.fm_asr_max_steps,
     )
     print(f"Saved figure: {logk_path}")
     print(f"Saved figure: {tmin_path}")

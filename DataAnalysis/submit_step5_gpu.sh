@@ -32,6 +32,12 @@ fsm_solver="fd" # Options: sweep, fipy, legacy, new, fd
 fsm_dt="0.5"
 fsm_max_steps="1000000"
 
+fm_asr_fp="true"
+fm_asr_perp_ratio="0.5"
+fm_asr_back_factor="2.0"
+fm_asr_min_speed="1e-12"
+fm_asr_max_steps="200000"
+
 linearized_fp="false"
 linearized_scheme="linearized" # Options: linearized, full_eikonal
 linearized_outer_max="10"
@@ -126,6 +132,17 @@ fsm_args+=" --fsm-solver ${fsm_solver}"
 fsm_args+=" --fsm-dt ${fsm_dt}"
 fsm_args+=" --fsm-max-steps ${fsm_max_steps}"
 
+fm_asr_args=""
+if [[ "${fm_asr_fp}" == "true" ]]; then
+    fm_asr_args+=" --fm-asr-fp"
+else
+    fm_asr_args+=" --no-fm-asr-fp"
+fi
+fm_asr_args+=" --fm-asr-perp-ratio ${fm_asr_perp_ratio}"
+fm_asr_args+=" --fm-asr-back-factor ${fm_asr_back_factor}"
+fm_asr_args+=" --fm-asr-min-speed ${fm_asr_min_speed}"
+fm_asr_args+=" --fm-asr-max-steps ${fm_asr_max_steps}"
+
 linearized_args=""
 if [[ "${linearized_fp}" == "true" ]]; then
     linearized_args+=" --linearized-fp"
@@ -217,6 +234,7 @@ common_args="\
   --fmm-backtracking continuous \
   --fmm-continuous-step-size 0.1 \
   ${fsm_args} \
+  ${fm_asr_args} \
   ${linearized_args} \
   ${check_path_geometry_args} \
   ${geometry_args} \
@@ -255,6 +273,7 @@ print_run_context() {
         echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, mse_tol=${fsm_mse_tol:-disabled}, mode=${fsm_convergence_mode:-auto}, mse_check_every=${fsm_mse_check_every}, mse_activation_factor=${fsm_mse_activation_factor}, consecutive_passes=${fsm_consecutive_passes}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
     fi
     echo "Linearized FP: ${linearized_fp}"
+    echo "FM-ASR FP: ${fm_asr_fp} (perp_ratio=${fm_asr_perp_ratio}, back_factor=${fm_asr_back_factor}, min_speed=${fm_asr_min_speed}, max_steps=${fm_asr_max_steps})"
     echo "Linearized scheme: ${linearized_scheme}"
     echo "Check path geometry: ${check_path_geometry}"
     echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window}, savgol_window=${curvature_savgol_window}, savgol_poly=${curvature_savgol_poly}), normal_deriv_method=${normal_deriv_method}"
