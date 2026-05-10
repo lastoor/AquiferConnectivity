@@ -5,7 +5,7 @@ VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
 # VAR=("0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
 # VAR=("1" "5")
 length_scale="0.05"
-run="11p2_fd"
+run="12p5_fmasr_ratio0p01_factor50"
 dh="0.1"
 
 num_mc="1000"
@@ -23,7 +23,16 @@ fsm_consecutive_passes="2"
 fsm_dt="0.5"
 fsm_max_steps="1000000"
 
-time="00:60:00"
+# FM-ASR trajectory extraction (run_fmm_gpu_worker.py). Set fm_asr_enabled=0 to disable.
+# Leave fm_asr_min_speed empty to use --fmm_min_speed for FM-ASR (same as worker default).
+# Override via export before running this script if needed.
+fm_asr_enabled="${fm_asr_enabled:-1}"
+fm_asr_perp_ratio="${fm_asr_perp_ratio:-0.01}"
+fm_asr_back_factor="${fm_asr_back_factor:-50.0}"
+fm_asr_max_steps="${fm_asr_max_steps:-1000000}"
+fm_asr_min_speed="${fm_asr_min_speed:-}"
+
+time="08:00:00"
 mem_per_cpu="2GB"
 cpus_per_task="8"
 gpus_per_task="1"
@@ -47,6 +56,18 @@ if [[ "${fsm_solver}" != "fd" ]]; then
     fi
     if [[ -n "${fsm_convergence_mode}" ]]; then
         fsm_extra_args+=" --fsm_convergence_mode ${fsm_convergence_mode}"
+    fi
+fi
+
+fm_asr_args=""
+if [[ "${fm_asr_enabled}" == "0" ]]; then
+    fm_asr_args+=" --no-fm-asr"
+else
+    fm_asr_args+=" --fm_asr_perp_ratio ${fm_asr_perp_ratio}"
+    fm_asr_args+=" --fm_asr_back_factor ${fm_asr_back_factor}"
+    fm_asr_args+=" --fm_asr_max_steps ${fm_asr_max_steps}"
+    if [[ -n "${fm_asr_min_speed}" ]]; then
+        fm_asr_args+=" --fm_asr_min_speed ${fm_asr_min_speed}"
     fi
 fi
 
@@ -114,6 +135,7 @@ TAICHI_PY=/home1/binhaoli/.conda/envs/taichi_env/bin/python
   --fsm_tol ${fsm_tol} \\
   --fsm_dt ${fsm_dt} \\
   --fsm_max_steps ${fsm_max_steps} \\
+  ${fm_asr_args} \\
   ${fsm_extra_args}
 
 echo "End Time: \$(date)"
