@@ -72,6 +72,8 @@ normal_deriv_mls_nn="2"              # MLS Frenet: half-width of patch in normal
 normal_deriv_hessian_smooth="0.0"    # hessian_T: Gaussian pre-smooth sigma in grid cells (0=none)
 normal_deriv_hessian_window="5"      # hessian_T: SG stencil window (odd, >= 3; window=3 = original Sobel)
 normal_deriv_hessian_poly="3"        # hessian_T: SG polynomial degree (>= 2)
+fm_asr_hamiltonian_t_hessian="grid_savgol" # Options: grid_savgol, frenet_quadratic
+fm_asr_hamiltonian_p_dot="canonical" # Options: canonical, hessian_T
 snapshot_mode="fraction_of_first_arrival"  # Options: fraction_of_first_arrival, dt_interval, physical, or "" to disable
 snapshot_times="0.25 0.5 0.75 1.0"
 
@@ -254,7 +256,9 @@ common_args="\
   --normal-deriv-mls-nn ${normal_deriv_mls_nn} \
   --normal-deriv-hessian-smooth ${normal_deriv_hessian_smooth} \
   --normal-deriv-hessian-window ${normal_deriv_hessian_window} \
-  --normal-deriv-hessian-poly ${normal_deriv_hessian_poly}"
+  --normal-deriv-hessian-poly ${normal_deriv_hessian_poly} \
+  --fm-asr-hamiltonian-t-hessian ${fm_asr_hamiltonian_t_hessian} \
+  --fm-asr-hamiltonian-p-dot ${fm_asr_hamiltonian_p_dot}"
 
 print_run_context() {
     local backend_label="$1"
@@ -273,7 +277,7 @@ print_run_context() {
         echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, mse_tol=${fsm_mse_tol:-disabled}, mode=${fsm_convergence_mode:-auto}, mse_check_every=${fsm_mse_check_every}, mse_activation_factor=${fsm_mse_activation_factor}, consecutive_passes=${fsm_consecutive_passes}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
     fi
     echo "Linearized FP: ${linearized_fp}"
-    echo "FM-ASR FP: ${fm_asr_fp} (perp_ratio=${fm_asr_perp_ratio}, back_factor=${fm_asr_back_factor}, min_speed=${fm_asr_min_speed}, max_steps=${fm_asr_max_steps})"
+    echo "FM-ASR FP: ${fm_asr_fp} (perp_ratio=${fm_asr_perp_ratio}, back_factor=${fm_asr_back_factor}, min_speed=${fm_asr_min_speed}, max_steps=${fm_asr_max_steps}, T_hessian=${fm_asr_hamiltonian_t_hessian}, p_dot=${fm_asr_hamiltonian_p_dot})"
     echo "Linearized scheme: ${linearized_scheme}"
     echo "Check path geometry: ${check_path_geometry}"
     echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window}, savgol_window=${curvature_savgol_window}, savgol_poly=${curvature_savgol_poly}), normal_deriv_method=${normal_deriv_method}"

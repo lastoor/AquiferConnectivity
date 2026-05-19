@@ -5,7 +5,7 @@ set -euo pipefail
 # Override any setting at invocation time, e.g.:
 #   STEP5_PYTHON=/path/to/python STEP5_MAC_BACKEND=gpu bash DataAnalysis/submit_step5_mac_m4.sh
 
-logk_source="${LOGK_SOURCE:-grf}" # Options: dataset, synthetic, grf
+logk_source="${LOGK_SOURCE:-synthetic}" # Options: dataset, synthetic, grf
 sweep="${SWEEP:-variance}"
 value="${VALUE:-5}"
 field_size="${FIELD_SIZE:-200}"
@@ -78,6 +78,8 @@ normal_deriv_mls_nn="${NORMAL_DERIV_MLS_NN:-2}"
 normal_deriv_hessian_smooth="${NORMAL_DERIV_HESSIAN_SMOOTH:-0.0}"
 normal_deriv_hessian_window="${NORMAL_DERIV_HESSIAN_WINDOW:-5}"
 normal_deriv_hessian_poly="${NORMAL_DERIV_HESSIAN_POLY:-3}"
+fm_asr_hamiltonian_t_hessian="${FM_ASR_HAMILTONIAN_T_HESSIAN:-grid_savgol}" # Options: grid_savgol, frenet_quadratic
+fm_asr_hamiltonian_p_dot="${FM_ASR_HAMILTONIAN_P_DOT:-canonical}" # Options: canonical, hessian_T
 
 snapshot_mode="${SNAPSHOT_MODE:-fraction_of_first_arrival}" # Options: fraction_of_first_arrival, dt_interval, physical, or "" to disable
 snapshot_times="${SNAPSHOT_TIMES:-0.25 0.5 0.75 1.0}"
@@ -247,7 +249,7 @@ echo "Output dir: ${output_dir}"
 echo "FlowSimulation path: ${FLOWSIM_PATH}"
 echo "logK source: ${logk_source}"
 echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
-echo "FM-ASR FP: ${fm_asr_fp} (perp_ratio=${fm_asr_perp_ratio}, back_factor=${fm_asr_back_factor}, min_speed=${fm_asr_min_speed}, max_steps=${fm_asr_max_steps})"
+echo "FM-ASR FP: ${fm_asr_fp} (perp_ratio=${fm_asr_perp_ratio}, back_factor=${fm_asr_back_factor}, min_speed=${fm_asr_min_speed}, max_steps=${fm_asr_max_steps}, T_hessian=${fm_asr_hamiltonian_t_hessian}, p_dot=${fm_asr_hamiltonian_p_dot})"
 echo "Linearized FP: ${linearized_fp} (${linearized_scheme})"
 echo "Snapshot mode: ${snapshot_mode:-disabled}, times: ${snapshot_times:-n/a}"
 
@@ -284,6 +286,8 @@ echo "Snapshot mode: ${snapshot_mode:-disabled}, times: ${snapshot_times:-n/a}"
     --normal-deriv-hessian-smooth "${normal_deriv_hessian_smooth}" \
     --normal-deriv-hessian-window "${normal_deriv_hessian_window}" \
     --normal-deriv-hessian-poly "${normal_deriv_hessian_poly}" \
+    --fm-asr-hamiltonian-t-hessian "${fm_asr_hamiltonian_t_hessian}" \
+    --fm-asr-hamiltonian-p-dot "${fm_asr_hamiltonian_p_dot}" \
     --backend "${backend}" \
     ${snapshot_args[@]+"${snapshot_args[@]}"}
 

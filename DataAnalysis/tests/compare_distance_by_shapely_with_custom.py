@@ -3,16 +3,21 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
+SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
 import step1_index as step1
 import step2_metrics as step2
 
 _MC_PATTERN = re.compile(r"_mc(-?\d+)$")
-_PAIRS = ("fp_lrp", "fp_fpDijkstra", "fp_fpFMM")
+_PAIRS = tuple(step2.PAIR_TO_FIELDS)
 
 
 def _parse_mc_label(path: Path) -> int | None:
@@ -29,6 +34,36 @@ def _to_mc_map(paths: list[Path]) -> dict[int, Path]:
         if label is not None:
             out[label] = path
     return out
+
+
+def _safe_load_by_mc(paths: list[Path], mc: int) -> np.ndarray | None:
+    path = _to_mc_map(paths).get(mc)
+    if path is None:
+        return None
+    return np.load(path)
+
+
+def _load_pathset(run_paths: step1.RunPaths, mc: int) -> tuple[step2.PathSet | None, str]:
+    mc_map = _to_mc_map(run_paths.mc_files)
+    if mc in mc_map:
+        mc_data = step2.load_mc_consolidated(mc_map[mc])
+        return step2._consolidated_to_pathset(mc_data), f"consolidated: {mc_map[mc]}"
+
+    fp_map = _to_mc_map(run_paths.fp_files)
+    if mc not in fp_map:
+        return None, "missing fp path"
+
+    return (
+        step2.PathSet(
+            fp=np.load(fp_map[mc]),
+            lrp=_safe_load_by_mc(run_paths.lrp_files, mc),
+            lrp_fmm=_safe_load_by_mc(run_paths.lrp_fmm_files, mc),
+            fp_dijkstra=_safe_load_by_mc(run_paths.fp_dijkstra_files, mc),
+            fp_fmm=_safe_load_by_mc(run_paths.fp_fmm_files, mc),
+            fp_fsm=_safe_load_by_mc(run_paths.fp_fsm_files, mc),
+        ),
+        "legacy path files",
+    )
 
 
 def _resolve_variance_key(discovered: dict[float, list[step1.RunPaths]], value: float) -> float:
@@ -126,28 +161,19 @@ def main() -> int:
         print(f"Selection error: {exc}")
         return 2
 
-    fp_map = _to_mc_map(run_paths.fp_files)
-    lrp_map = _to_mc_map(run_paths.lrp_files)
-    fp_d_map = _to_mc_map(run_paths.fp_dijkstra_files)
-    fp_fmm_map = _to_mc_map(run_paths.fp_fmm_files)
-
-    if args.mc not in fp_map:
-        print(f"Selection error: MC label {args.mc} was not found in FP files.")
+    pathset, source_label = _load_pathset(run_paths, args.mc)
+    if pathset is None:
+        print(f"Selection error: MC label {args.mc} was not found in available path files.")
+        print(f"Available consolidated MC labels: {_available_labels_text(run_paths.mc_files)}")
         print(f"Available FP MC labels: {_available_labels_text(run_paths.fp_files)}")
         return 2
-
-    pathset = step2.PathSet(
-        fp=np.load(fp_map[args.mc]),
-        lrp=np.load(lrp_map[args.mc]) if args.mc in lrp_map else None,
-        fp_dijkstra=np.load(fp_d_map[args.mc]) if args.mc in fp_d_map else None,
-        fp_fmm=np.load(fp_fmm_map[args.mc]) if args.mc in fp_fmm_map else None,
-    )
 
     print("Selected sample")
     print(f"  variance: {variance_key}")
     print(f"  field_size: {run_paths.size_str}")
     print(f"  mc: {args.mc}")
     print(f"  size_dir: {run_paths.size_dir}")
+    print(f"  source: {source_label}")
     print(f"  workers: {workers}")
     print("")
 

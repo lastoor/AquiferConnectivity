@@ -922,17 +922,20 @@ def visualize_indicatrix_field(
     K=180,
     glyph_scale=0.30,          # scales glyph size in plot units (~h)
     show_W_quiver=True,
-    quiver_stride=None
+    quiver_stride=1,
+    K_field=None,
+    background="K",
 ):
     try:
         import matplotlib.pyplot as plt
         from matplotlib.lines import Line2D
-        from matplotlib.colors import to_rgba
+        from matplotlib.colors import LogNorm, to_rgba
+        import matplotlib.patheffects as pe
     except ImportError as exc:
         raise ImportError("visualize_indicatrix_field requires matplotlib") from exc
     try:
-        import cmasher as cm
-        cmap = cm.batlowW.reversed()
+        import cmcrameri.cm as cmc
+        cmap = cmc.batlowW.reversed()
     except ImportError:
         cmap = "viridis"
 
@@ -940,6 +943,9 @@ def visualize_indicatrix_field(
     if W.ndim != 3 or W.shape[-1] != 2:
         raise ValueError("W_field must have shape (ny,nx,2).")
     ny, nx, _ = W.shape
+    background = str(background).lower()
+    if background not in {"k", "velocity", "none"}:
+        raise ValueError("background must be one of 'K', 'velocity', or 'none'.")
 
     c_iso, M_field, b_field, _ = build_randers_from_W(
         W, perp_ratio=perp_ratio, back_factor=back_factor
@@ -949,20 +955,45 @@ def visualize_indicatrix_field(
     if quiver_stride is None:
         quiver_stride = stride
 
-    fig, ax = plt.subplots()
+    fig, ax = plt.subplots(figsize=(5, 5))
 
-    # Optional: plot W in the background
+    if background == "k" and K_field is not None:
+        K_arr = np.asarray(K_field, dtype=float)
+        if K_arr.shape != (ny, nx):
+            raise ValueError("K_field must have shape (ny,nx).")
+        if not np.all(np.isfinite(K_arr)):
+            raise ValueError("K_field must contain only finite values.")
+        positive = K_arr[K_arr > 0.0]
+        if positive.size == 0:
+            raise ValueError("K_field must contain positive values for LogNorm.")
+        im = ax.imshow(
+            K_arr,
+            origin="lower",
+            cmap=cmap,
+            norm=LogNorm(vmin=float(np.min(positive)), vmax=float(np.max(positive))),
+        )
+        fig.colorbar(im, ax=ax, label="$K$", fraction=0.046, pad=0.04)
+    elif background == "velocity" or (background == "k" and K_field is None):
+        v_mag = np.sqrt(W[:, :, 0] ** 2 + W[:, :, 1] ** 2)
+        positive = v_mag[v_mag > 0.0]
+        if positive.size:
+            im = ax.imshow(
+                v_mag,
+                origin="lower",
+                cmap=cmap,
+                norm=LogNorm(vmin=float(np.min(positive)), vmax=float(np.max(positive))),
+            )
+            fig.colorbar(im, ax=ax, label="$|\\mathbf{v}|$", fraction=0.046, pad=0.04)
+
+    # Optional: plot W streamlines over the background
     if show_W_quiver:
         ys = np.arange(0, ny, quiver_stride)
         xs = np.arange(0, nx, quiver_stride)
         X, Y = np.meshgrid(xs * h, ys * h)
         U = W[ys[:, None], xs[None, :], 0]
         V = W[ys[:, None], xs[None, :], 1]
-        v_mag_log = np.log10(np.sqrt(W[:,:,0]**2 + W[:,:,1]**2))
         # ax.quiver(X, Y, U, V, angles="xy", scale_units="xy", scale=None, width=0.0025)
-        ax.streamplot(X, Y, U, V, color=to_rgba('black', alpha=0.45), linewidth=0.8, arrowsize=0.6)
-        im = ax.imshow(v_mag_log, origin='lower', cmap=cmap)
-        fig.colorbar(im, ax=ax, label='$\\log_{10} |\\mathbf{v}|$', fraction=0.046, pad=0.04)
+        ax.streamplot(X, Y, U, V, color=to_rgba('black', alpha=0.45), linewidth=1.2, arrowsize=0.8)
 
 
     # Indicatrix glyphs
@@ -970,14 +1001,15 @@ def visualize_indicatrix_field(
     origin_y: List[float] = []
     center_x: List[float] = []
     center_y: List[float] = []
-    for j in range(0, ny, stride):
-        for i in range(0, nx, stride):
+    for j in np.linspace(ny//20, ny - ny//20 - 1, int(ny*0.9/stride), dtype=int):
+        for i in np.linspace(nx//20, nx - nx//20 - 1, int(nx*0.9/stride), dtype=int):
             M = M_field[j, i]
             b = b_field[j, i]
             xi, yi = i * h, j * h  # (x,y) from (j,i)
 
             gx, gy = randers_indicatrix_points(M, b, K=K)
-            ax.plot(xi + glyph_scale * h * gx, yi + glyph_scale * h * gy, color='white', linewidth=0.8)
+            line, = ax.plot(xi + glyph_scale * h * gx, yi + glyph_scale * h * gy, color='white', linewidth=1.2, zorder=3)
+            line.set_path_effects([pe.Stroke(linewidth=2.2, foreground='black'), pe.Normal()])
             origin_x.append(float(xi))
             origin_y.append(float(yi))
             center = randers_indicatrix_center(M, b)
@@ -988,11 +1020,11 @@ def visualize_indicatrix_field(
         ax.scatter(
             origin_x,
             origin_y,
-            s=5,
+            s=10,
             marker="o",
-            facecolors="black",
-            edgecolors="white",
-            linewidths=0.1,
+            facecolors="white",
+            edgecolors="black",
+            linewidths=0.6,
             zorder=4,
         )
         # ax.scatter(
@@ -1006,7 +1038,7 @@ def visualize_indicatrix_field(
         # )
 
     legend_handles = [
-        Line2D([0], [0], color="white", linewidth=1.1, label="Indicatrix boundary"),
+        Line2D([0], [0], color="white", linewidth=1.2, label="Connectivity"),
         Line2D(
             [0],
             [0],
@@ -1014,26 +1046,22 @@ def visualize_indicatrix_field(
             color="none",
             markerfacecolor="black",
             markeredgecolor="white",
+            markeredgewidth=0.8,
             markersize=5,
             label="Grid point",
         ),
-        # Line2D(
-        #     [0],
-        #     [0],
-        #     marker="x",
-        #     color="tab:red",
-        #     linestyle="none",
-        #     markersize=6,
-        #     markeredgewidth=1.2,
-        #     label="Indicatrix center",
-        # ),
     ]
-    ax.legend(handles=legend_handles, loc="upper right", fontsize=8, framealpha=0.8)
+    # ax.legend(handles=legend_handles, loc="upper right", framealpha=0.5)
 
     ax.set_aspect("equal", adjustable="box")
-    ax.set_xlabel("x")
-    ax.set_ylabel("y")
-    ax.set_title(f"Randers indicatrix field (stride={stride}, perp_ratio={perp_ratio}, back_factor={back_factor})")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlim(-h/2, (nx - 1) * h + h/2)
+    ax.set_ylim(-h/2, (ny - 1) * h + h/2)
+    fig.tight_layout()
+    # ax.set_xlabel("x")
+    # ax.set_ylabel("y")
+    # ax.set_title(f"Randers indicatrix field (stride={stride}, perp_ratio={perp_ratio}, back_factor={back_factor})")
     # plt.show()
 
 

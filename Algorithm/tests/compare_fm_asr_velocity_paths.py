@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import matplotlib.pyplot as plt
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,6 +35,29 @@ from fmm_core.speed import _face_to_cell_speed_full, prepare_fmm_speed
 from simulation import hydraulic as sim_hyd
 from simulation import particle_tracking as sim_pt
 
+def configure_style():
+    import glob
+    import matplotlib.font_manager as fm
+
+    family: str = "CMU Sans Serif"
+    mathtext_fontset: str = "cm"
+    unicode_minus: bool = False
+    cmu_font_glob: list = ["/home1/binhaoli/.local/share/fonts/cmun*.ttf", "/Users/binhaoli/Library/Fonts/cmun*.ttf"]
+
+    for paths in cmu_font_glob:
+        for path in glob.glob(paths):
+            fm.fontManager.addfont(path)
+            
+    plt.rcParams["font.family"] = family
+    plt.rcParams["mathtext.fontset"] = mathtext_fontset
+    plt.rcParams["axes.unicode_minus"] = unicode_minus
+
+    plt.rcParams["font.size"] = 14
+    plt.rcParams["axes.labelsize"] = 16
+    plt.rcParams["axes.titlesize"] = 16
+    plt.rcParams["xtick.labelsize"] = 13
+    plt.rcParams["ytick.labelsize"] = 13
+    plt.rcParams["legend.fontsize"] = 12
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -291,7 +315,6 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
     from matplotlib.lines import Line2D
     from matplotlib.colors import TwoSlopeNorm
 
@@ -388,6 +411,8 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
 
 
 def main() -> None:
+    configure_style()
+
     args = parse_args()
     if args.field_size < 4:
         raise ValueError("--field-size must be at least 4")
@@ -563,10 +588,11 @@ def main() -> None:
             h=h_grid,
             stride=int(args.indicatrix_stride),
             glyph_scale=float(args.indicatrix_glyph_scale),
+            K_field=K,
         )
         import matplotlib.pyplot as plt
 
-        plt.savefig(args.output_dir / "indicatrix_field.png", dpi=180)
+        plt.savefig(args.output_dir / "indicatrix_field.png", dpi=300, bbox_inches="tight")
         plt.close()
 
     print(json.dumps(summary, indent=2))

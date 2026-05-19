@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import math
 import os
 import re
 import sys
@@ -115,6 +116,8 @@ class PathSolveResult:
     fp_fm_asr: np.ndarray | None
     fp_fm_asr_arrival_time: float | None
     t_min_fm_asr: np.ndarray | None
+    fm_asr_M: np.ndarray | None
+    fm_asr_beta: np.ndarray | None
     linearized_fp_paths: list[np.ndarray] | None
     linearized_fp_indices: list[int] | None
     linearized_fp_final: np.ndarray | None
@@ -150,6 +153,10 @@ class PathBalanceDiagnostics:
     dloggradh_dn: np.ndarray
     dlogv_dn: np.ndarray
     residual: np.ndarray
+    hamilton_curvature: np.ndarray | None = None
+    hamilton_curvature_magnitude: np.ndarray | None = None
+    hamilton_curvature_smoothed: np.ndarray | None = None
+    hamilton_eikonal_residual: np.ndarray | None = None
 
 
 @dataclass(slots=True)
@@ -413,21 +420,40 @@ def generate_synthetic_logk(
     theta3 = np.pi/6
     theta4 = np.pi/6
 
-    ecllipse1 = (dx1 * np.cos(theta1) + dy1 * np.sin(theta1)) ** 2 / a1**2 + (dx1 * np.sin(theta1) - dy1 * np.cos(theta1)) ** 2 / b1**2
-    ecllipse2 = (dx2 * np.cos(theta2) + dy2 * np.sin(theta2)) ** 2 / a2**2 + (dx2 * np.sin(theta2) - dy2 * np.cos(theta2)) ** 2 / b2**2
-    ecllipse3 = (dx3 * np.cos(theta3) + dy3 * np.sin(theta3)) ** 2 / a3**2 + (dx3 * np.sin(theta3) - dy3 * np.cos(theta3)) ** 2 / b3**2
-    ecllipse4 = (dx4 * np.cos(theta4) + dy4 * np.sin(theta4)) ** 2 / a4**2 + (dx4 * np.sin(theta4) - dy4 * np.cos(theta4)) ** 2 / b4**2
+    ellipse1 = (dx1 * np.cos(theta1) + dy1 * np.sin(theta1)) ** 2 / a1**2 + (dx1 * np.sin(theta1) - dy1 * np.cos(theta1)) ** 2 / b1**2
+    ellipse2 = (dx2 * np.cos(theta2) + dy2 * np.sin(theta2)) ** 2 / a2**2 + (dx2 * np.sin(theta2) - dy2 * np.cos(theta2)) ** 2 / b2**2
+    ellipse3 = (dx3 * np.cos(theta3) + dy3 * np.sin(theta3)) ** 2 / a3**2 + (dx3 * np.sin(theta3) - dy3 * np.cos(theta3)) ** 2 / b3**2
+    ellipse4 = (dx4 * np.cos(theta4) + dy4 * np.sin(theta4)) ** 2 / a4**2 + (dx4 * np.sin(theta4) - dy4 * np.cos(theta4)) ** 2 / b4**2
+
+    # return np.asarray(
+    #     offset
+    #     + amplitude * (
+    #         np.exp(- ellipse1)
+    #         + 0.75*np.exp(- ellipse2)
+    #         # + 0.1*np.exp(- ellipse3)
+    #         # + 0.1*np.exp(- ellipse4)
+    #     ),
+    #     dtype=float,
+    # )
 
     return np.asarray(
         offset
         + amplitude * (
-            np.exp(- ecllipse1)
-            + 0.75*np.exp(- ecllipse2)
-            # + 0.1*np.exp(- ecllipse3)
-            # + 0.1*np.exp(- ecllipse4)
+            np.sin(2.0 * np.pi * frequency_x * xx)
+            * np.cos(2.0 * np.pi * frequency_y * yy)
+            + np.exp(- ((xx - 3/8) ** 2 + (yy - 3/4) ** 2) / (1/8) ** 2)
+            + np.exp(- ((xx - 5/8) ** 2 + (yy - 1/4) ** 2) / (1/8) ** 2)
         ),
         dtype=float,
     )
+
+    # # Sine curve
+    # y_sin = np.sin(xx)/2
+    # thickness = 0.05  # adjust for thickness
+    # matrix = np.abs(yy - y_sin) < thickness
+    # matrix = matrix.astype(float)
+    # return offset + amplitude * matrix
+
 
     # return np.asarray(
     #     offset
@@ -437,24 +463,6 @@ def generate_synthetic_logk(
     #     ),
     #     dtype=float,
     # )
-
-    # return np.asarray(
-    #     offset
-    #     + amplitude * (
-    #         np.sin(2.0 * np.pi * frequency_x * xx)
-    #         * np.cos(2.0 * np.pi * frequency_y * yy)
-    #         + np.exp(- ((xx - 3/8) ** 2 + (yy - 3/4) ** 2) / (1/8) ** 2)
-    #         + np.exp(- ((xx - 5/8) ** 2 + (yy - 1/4) ** 2) / (1/8) ** 2)
-    #     ),
-    #     dtype=float,
-    # )
-
-    # # Sine curve
-    # y_sin = np.sin(xx)/2
-    # thickness = 0.05  # adjust for thickness
-    # matrix = np.abs(yy - y_sin) < thickness
-    # matrix = matrix.astype(float)
-    # return offset + amplitude * matrix
 
 
 def _add_search_path(path: Path) -> None:
@@ -482,7 +490,7 @@ def _import_solver_modules() -> dict[str, Any]:
 
     try:
         from fmm_core.fmm import extract_path_continuous, extract_path_source_to_target, fast_marching_2d_regions
-        from fmm_core.fm_asr import FMASR2D, extract_fm_asr_path
+        from fmm_core.fm_asr import FMASR2D, build_randers_from_W, extract_fm_asr_path
         from fmm_core.fsm import compute_fsm_path as shared_compute_fsm_path
         from simulation import hydraulic as sim_hyd
         from simulation import particle_tracking as sim_pt
@@ -498,6 +506,7 @@ def _import_solver_modules() -> dict[str, Any]:
         "extract_path_source_to_target": extract_path_source_to_target,
         "fast_marching_2d_regions": fast_marching_2d_regions,
         "FMASR2D": FMASR2D,
+        "build_randers_from_W": build_randers_from_W,
         "extract_fm_asr_path": extract_fm_asr_path,
         "compute_fsm_path": shared_compute_fsm_path,
         "sim_hyd": sim_hyd,
@@ -864,12 +873,13 @@ def _compute_fm_asr_path(
     *,
     geometry: Step5Geometry,
     FMASR2D: Any,
+    build_randers_from_W: Any,
     extract_fm_asr_path: Any,
     perp_ratio: float,
     back_factor: float,
     min_speed: float,
     max_steps: int,
-) -> tuple[np.ndarray, np.ndarray, float]:
+) -> tuple[np.ndarray, np.ndarray, float, np.ndarray, np.ndarray]:
     traversable_mask = (
         np.isfinite(vx_cell)
         & np.isfinite(vy_cell)
@@ -889,6 +899,14 @@ def _compute_fm_asr_path(
     vx_safe = np.where(np.isfinite(vx_cell), vx_cell, 0.0)
     vy_safe = np.where(np.isfinite(vy_cell), vy_cell, 0.0)
     W_cell = np.stack((vx_safe, vy_safe), axis=2)
+    _c_iso, M_field, beta_field, _e = build_randers_from_W(
+        W_cell,
+        perp_ratio=perp_ratio,
+        back_factor=back_factor,
+        min_speed=min_speed,
+        isotropic_only=False,
+    )
+    solver_beta = -np.asarray(beta_field, dtype=float)
     solver = FMASR2D.from_velocity_field(
         W_cell,
         h=1.0,
@@ -906,7 +924,7 @@ def _compute_fm_asr_path(
         target_mask,
         max_steps=max_steps,
     )
-    return path_xy, t_field, float(travel_value)
+    return path_xy, t_field, float(travel_value), np.asarray(M_field, dtype=float), solver_beta
 
 
 def _run_particle_tracking(
@@ -1259,6 +1277,7 @@ def solve_single_field(
     extract_path_source_to_target = modules["extract_path_source_to_target"]
     compute_fsm_path = modules["compute_fsm_path"]
     FMASR2D = modules["FMASR2D"]
+    build_randers_from_W = modules["build_randers_from_W"]
     extract_fm_asr_path = modules["extract_fm_asr_path"]
 
     if logk_field.shape != (field_size, field_size):
@@ -1389,13 +1408,22 @@ def solve_single_field(
     fp_fm_asr: np.ndarray | None = None
     fp_fm_asr_arrival_time: float | None = None
     t_min_fm_asr: np.ndarray | None = None
+    fm_asr_M: np.ndarray | None = None
+    fm_asr_beta: np.ndarray | None = None
     if fm_asr_fp:
         try:
-            fp_fm_asr, t_min_fm_asr, fp_fm_asr_arrival_time = _compute_fm_asr_path(
+            (
+                fp_fm_asr,
+                t_min_fm_asr,
+                fp_fm_asr_arrival_time,
+                fm_asr_M,
+                fm_asr_beta,
+            ) = _compute_fm_asr_path(
                 vx_cell,
                 vy_cell,
                 geometry=geometry,
                 FMASR2D=FMASR2D,
+                build_randers_from_W=build_randers_from_W,
                 extract_fm_asr_path=extract_fm_asr_path,
                 perp_ratio=fm_asr_perp_ratio,
                 back_factor=fm_asr_back_factor,
@@ -1416,6 +1444,8 @@ def solve_single_field(
             fp_fm_asr = None
             fp_fm_asr_arrival_time = None
             t_min_fm_asr = None
+            fm_asr_M = None
+            fm_asr_beta = None
 
     linearized_series: LinearizedFpSeries | None = None
     if linearized_fp:
@@ -1499,6 +1529,8 @@ def solve_single_field(
         fp_fm_asr=fp_fm_asr,
         fp_fm_asr_arrival_time=fp_fm_asr_arrival_time,
         t_min_fm_asr=t_min_fm_asr,
+        fm_asr_M=fm_asr_M,
+        fm_asr_beta=fm_asr_beta,
         linearized_fp_paths=None if linearized_series is None else linearized_series.paths,
         linearized_fp_indices=None if linearized_series is None else linearized_series.path_indices,
         linearized_fp_final=None if linearized_series is None or not linearized_series.paths else linearized_series.paths[-1],
@@ -1546,11 +1578,11 @@ def _plot_common_overlays(
     )
     ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^*$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^*_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
-        ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    # if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
+    #     ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{FSM}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
         ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^*_{\mathcal{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if fp_diag is not None:
@@ -1672,6 +1704,18 @@ def _bilinear_sample(field: np.ndarray, x: np.ndarray, y: np.ndarray, points: np
         + (1.0 - tx) * ty * f01
         + tx * ty * f11
     )
+
+
+def _bilinear_sample_components(field: np.ndarray, x: np.ndarray, y: np.ndarray, points: np.ndarray) -> np.ndarray:
+    arr = np.asarray(field, dtype=float)
+    if arr.ndim < 3:
+        raise ValueError("field must have at least one component dimension")
+    flat = arr.reshape(arr.shape[0], arr.shape[1], -1)
+    samples = [
+        _bilinear_sample(flat[:, :, k], x, y, points)
+        for k in range(flat.shape[2])
+    ]
+    return np.stack(samples, axis=1).reshape((len(points),) + arr.shape[2:])
 
 
 def _normal_derivative_direct(
@@ -1948,6 +1992,714 @@ def _hessian_T_speed_normal_derivative(
     return _bilinear_sample(kappa_field, x, y, spline_points)
 
 
+def _travel_time_derivative_fields(
+    T: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    pre_smooth_sigma: float = 0.0,
+    stencil_window: int = 3,
+    stencil_poly: int = 2,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    from scipy.ndimage import gaussian_filter
+    from scipy.signal import savgol_filter as _sg
+
+    T = np.asarray(T, dtype=float)
+    valid = np.isfinite(T)
+    h_x = float(x[1] - x[0]) if len(x) > 1 else 1.0
+    h_y = float(y[1] - y[0]) if len(y) > 1 else 1.0
+
+    T_work = np.where(valid, T, 0.0)
+    if pre_smooth_sigma > 0.0:
+        T_num = gaussian_filter(T_work, pre_smooth_sigma)
+        T_den = gaussian_filter(np.where(valid, 1.0, 0.0), pre_smooth_sigma)
+        T_work = np.where(valid, T_num / np.maximum(T_den, 1e-12), 0.0)
+
+    poly = max(stencil_poly, 2)
+    win = stencil_window if stencil_window % 2 == 1 else stencil_window + 1
+    min_dim = min(T_work.shape)
+    win = min(win, min_dim if min_dim % 2 == 1 else min_dim - 1)
+    min_win = poly + 2 if (poly + 2) % 2 == 1 else poly + 3
+    win = max(win, min_win)
+
+    def sg(arr: np.ndarray, deriv: int, delta: float, axis: int) -> np.ndarray:
+        return np.asarray(
+            _sg(arr, win, poly, deriv=deriv, delta=float(delta), axis=axis, mode="nearest"),
+            dtype=float,
+        )
+
+    Tx = sg(sg(T_work, 1, h_x, 1), 0, 1.0, 0)
+    Ty = sg(sg(T_work, 1, h_y, 0), 0, 1.0, 1)
+    Txx = sg(sg(T_work, 2, h_x, 1), 0, 1.0, 0)
+    Tyy = sg(sg(T_work, 2, h_y, 0), 0, 1.0, 1)
+    Txy = sg(sg(T_work, 1, h_x, 1), 1, h_y, 0)
+    t_boundary = float(np.nanpercentile(T[valid], 2.0)) if np.any(valid) else 0.0
+    near_source = valid & (T <= max(t_boundary, 0.0))
+    mask = (
+        valid
+        & ~near_source
+        & np.isfinite(Tx)
+        & np.isfinite(Ty)
+        & np.isfinite(Txx)
+        & np.isfinite(Tyy)
+        & np.isfinite(Txy)
+        & ((Tx * Tx + Ty * Ty) > 0.0)
+    )
+    return (
+        np.where(mask, Tx, np.nan),
+        np.where(mask, Ty, np.nan),
+        np.where(mask, Txx, np.nan),
+        np.where(mask, Txy, np.nan),
+        np.where(mask, Tyy, np.nan),
+    )
+
+
+def _travel_time_gradient_fields(
+    T: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    pre_smooth_sigma: float = 0.0,
+    stencil_window: int = 3,
+    stencil_poly: int = 2,
+) -> tuple[np.ndarray, np.ndarray]:
+    from scipy.signal import savgol_filter as _sg
+
+    T = np.asarray(T, dtype=float)
+    valid = np.isfinite(T)
+    h_x = float(x[1] - x[0]) if len(x) > 1 else 1.0
+    h_y = float(y[1] - y[0]) if len(y) > 1 else 1.0
+
+    T_work = np.where(valid, T, 0.0)
+    if pre_smooth_sigma > 0.0:
+        T_num = gaussian_filter(T_work, pre_smooth_sigma)
+        T_den = gaussian_filter(np.where(valid, 1.0, 0.0), pre_smooth_sigma)
+        T_work = np.where(valid, T_num / np.maximum(T_den, 1e-12), 0.0)
+
+    poly = max(stencil_poly, 1)
+    win = stencil_window if stencil_window % 2 == 1 else stencil_window + 1
+    min_dim = min(T_work.shape)
+    win = min(win, min_dim if min_dim % 2 == 1 else min_dim - 1)
+    min_win = poly + 2 if (poly + 2) % 2 == 1 else poly + 3
+    win = max(win, min_win)
+
+    def sg(arr: np.ndarray, deriv: int, delta: float, axis: int) -> np.ndarray:
+        return np.asarray(
+            _sg(arr, win, poly, deriv=deriv, delta=float(delta), axis=axis, mode="nearest"),
+            dtype=float,
+        )
+
+    Tx = sg(sg(T_work, 1, h_x, 1), 0, 1.0, 0)
+    Ty = sg(sg(T_work, 1, h_y, 0), 0, 1.0, 1)
+    t_boundary = float(np.nanpercentile(T[valid], 2.0)) if np.any(valid) else 0.0
+    near_source = valid & (T <= max(t_boundary, 0.0))
+    mask = (
+        valid
+        & ~near_source
+        & np.isfinite(Tx)
+        & np.isfinite(Ty)
+        & ((Tx * Tx + Ty * Ty) > 0.0)
+    )
+    return np.where(mask, Tx, np.nan), np.where(mask, Ty, np.nan)
+
+
+def _randers_dual_norm(M: np.ndarray, beta: np.ndarray, p: np.ndarray) -> float:
+    M = np.asarray(M, dtype=float)
+    beta = np.asarray(beta, dtype=float)
+    p = np.asarray(p, dtype=float)
+    if M.shape != (2, 2) or beta.shape != (2,) or p.shape != (2,):
+        return float("nan")
+    if not (np.all(np.isfinite(M)) and np.all(np.isfinite(beta)) and np.all(np.isfinite(p))):
+        return float("nan")
+    try:
+        Minv = np.linalg.inv(M)
+    except np.linalg.LinAlgError:
+        return float("nan")
+    lam = 1.0 - float(beta @ (Minv @ beta))
+    if lam <= 1e-12:
+        return float("nan")
+    q = float(p @ (Minv @ p))
+    r = float(beta @ (Minv @ p))
+    disc = lam * q + r * r
+    if disc < 0.0:
+        return float("nan")
+    return (math.sqrt(max(disc, 0.0)) + r) / lam
+
+
+def _randers_dual_hamiltonian(M: np.ndarray, beta: np.ndarray, p: np.ndarray) -> float:
+    F_star = _randers_dual_norm(M, beta, p)
+    if not np.isfinite(F_star):
+        return float("nan")
+    return 0.5 * F_star * F_star
+
+
+def _sample_fm_asr_metric(
+    point: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    M_field: np.ndarray,
+    beta_field: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    pts = np.asarray(point, dtype=float).reshape(1, 2)
+    M = _bilinear_sample_components(M_field, x, y, pts)[0]
+    beta = _bilinear_sample_components(beta_field, x, y, pts)[0]
+    return M, beta
+
+
+def _bilinear_sample_components_with_gradient(
+    field: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    point: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    arr = np.asarray(field, dtype=float)
+    if arr.ndim < 3:
+        raise ValueError("field must have at least one component dimension")
+    xg = np.asarray(x, dtype=float)
+    yg = np.asarray(y, dtype=float)
+    px = float(point[0])
+    py = float(point[1])
+    nx = xg.size
+    ny = yg.size
+    if nx < 2 or ny < 2:
+        nan = np.full(arr.shape[2:], np.nan, dtype=float)
+        return nan, nan.copy(), nan.copy()
+
+    i = int(np.searchsorted(xg, px, side="right") - 1)
+    j = int(np.searchsorted(yg, py, side="right") - 1)
+    i = max(0, min(i, nx - 2))
+    j = max(0, min(j, ny - 2))
+    dx = float(xg[i + 1] - xg[i])
+    dy = float(yg[j + 1] - yg[j])
+    if dx == 0.0 or dy == 0.0:
+        nan = np.full(arr.shape[2:], np.nan, dtype=float)
+        return nan, nan.copy(), nan.copy()
+
+    tx = (px - float(xg[i])) / dx
+    ty = (py - float(yg[j])) / dy
+    tx = min(1.0, max(0.0, tx))
+    ty = min(1.0, max(0.0, ty))
+
+    f00 = arr[j, i]
+    f10 = arr[j, i + 1]
+    f01 = arr[j + 1, i]
+    f11 = arr[j + 1, i + 1]
+    value = (
+        (1.0 - tx) * (1.0 - ty) * f00
+        + tx * (1.0 - ty) * f10
+        + (1.0 - tx) * ty * f01
+        + tx * ty * f11
+    )
+    grad_x = ((1.0 - ty) * (f10 - f00) + ty * (f11 - f01)) / dx
+    grad_y = ((1.0 - tx) * (f01 - f00) + tx * (f11 - f10)) / dy
+    return value, grad_x, grad_y
+
+
+def _sample_fm_asr_metric_with_gradient(
+    point: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    M_field: np.ndarray,
+    beta_field: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    M, M_x, M_y = _bilinear_sample_components_with_gradient(M_field, x, y, point)
+    beta, beta_x, beta_y = _bilinear_sample_components_with_gradient(beta_field, x, y, point)
+    return M, beta, M_x, M_y, beta_x, beta_y
+
+
+def _fm_asr_hamiltonian_at(
+    point: np.ndarray,
+    p: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    M_field: np.ndarray,
+    beta_field: np.ndarray,
+) -> float:
+    M, beta = _sample_fm_asr_metric(point, x, y, M_field, beta_field)
+    return _randers_dual_hamiltonian(M, beta, p)
+
+
+def _fm_asr_H_p(
+    point: np.ndarray,
+    p: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    M_field: np.ndarray,
+    beta_field: np.ndarray,
+) -> np.ndarray:
+    M, beta = _sample_fm_asr_metric(point, x, y, M_field, beta_field)
+    return _randers_squared_H_p(M, beta, p)
+
+
+def _randers_dual_H_p(M: np.ndarray, beta: np.ndarray, p: np.ndarray) -> np.ndarray:
+    M = np.asarray(M, dtype=float)
+    beta = np.asarray(beta, dtype=float)
+    p = np.asarray(p, dtype=float)
+    if M.shape != (2, 2) or beta.shape != (2,) or p.shape != (2,):
+        return np.full(2, np.nan, dtype=float)
+    if not (np.all(np.isfinite(M)) and np.all(np.isfinite(beta)) and np.all(np.isfinite(p))):
+        return np.full(2, np.nan, dtype=float)
+    try:
+        A = np.linalg.inv(M)
+    except np.linalg.LinAlgError:
+        return np.full(2, np.nan, dtype=float)
+    A_beta = A @ beta
+    A_p = A @ p
+    lam = 1.0 - float(beta @ A_beta)
+    if lam <= 1e-12:
+        return np.full(2, np.nan, dtype=float)
+    q = float(p @ A_p)
+    r = float(beta @ A_p)
+    s2 = lam * q + r * r
+    if s2 <= 1e-24:
+        return np.full(2, np.nan, dtype=float)
+    s = math.sqrt(s2)
+    return ((lam * A_p + r * A_beta) / s + A_beta) / lam
+
+
+def _randers_dual_H_pp(M: np.ndarray, beta: np.ndarray, p: np.ndarray) -> np.ndarray:
+    M = np.asarray(M, dtype=float)
+    beta = np.asarray(beta, dtype=float)
+    p = np.asarray(p, dtype=float)
+    if M.shape != (2, 2) or beta.shape != (2,) or p.shape != (2,):
+        return np.full((2, 2), np.nan, dtype=float)
+    if not (np.all(np.isfinite(M)) and np.all(np.isfinite(beta)) and np.all(np.isfinite(p))):
+        return np.full((2, 2), np.nan, dtype=float)
+    try:
+        A = np.linalg.inv(M)
+    except np.linalg.LinAlgError:
+        return np.full((2, 2), np.nan, dtype=float)
+    A_beta = A @ beta
+    A_p = A @ p
+    lam = 1.0 - float(beta @ A_beta)
+    if lam <= 1e-12:
+        return np.full((2, 2), np.nan, dtype=float)
+    q = float(p @ A_p)
+    r = float(beta @ A_p)
+    s2 = lam * q + r * r
+    if s2 <= 1e-24:
+        return np.full((2, 2), np.nan, dtype=float)
+    s = math.sqrt(s2)
+    n_vec = lam * A_p + r * A_beta
+    B = lam * A + np.outer(A_beta, A_beta)
+    return (B / s - np.outer(n_vec, n_vec) / (s * s * s)) / lam
+
+
+def _randers_squared_H_p(M: np.ndarray, beta: np.ndarray, p: np.ndarray) -> np.ndarray:
+    F_star = _randers_dual_norm(M, beta, p)
+    F_p = _randers_dual_H_p(M, beta, p)
+    if not np.isfinite(F_star) or not np.all(np.isfinite(F_p)):
+        return np.full(2, np.nan, dtype=float)
+    return F_star * F_p
+
+
+def _randers_squared_H_pp(M: np.ndarray, beta: np.ndarray, p: np.ndarray) -> np.ndarray:
+    F_star = _randers_dual_norm(M, beta, p)
+    F_p = _randers_dual_H_p(M, beta, p)
+    F_pp = _randers_dual_H_pp(M, beta, p)
+    if not (np.isfinite(F_star) and np.all(np.isfinite(F_p)) and np.all(np.isfinite(F_pp))):
+        return np.full((2, 2), np.nan, dtype=float)
+    return F_star * F_pp + np.outer(F_p, F_p)
+
+
+def _randers_squared_H_p_spatial_derivative(
+    M: np.ndarray,
+    beta: np.ndarray,
+    p: np.ndarray,
+    dM: np.ndarray,
+    dbeta: np.ndarray,
+) -> np.ndarray:
+    M = np.asarray(M, dtype=float)
+    beta = np.asarray(beta, dtype=float)
+    p = np.asarray(p, dtype=float)
+    dM = np.asarray(dM, dtype=float)
+    dbeta = np.asarray(dbeta, dtype=float)
+    if (
+        M.shape != (2, 2)
+        or beta.shape != (2,)
+        or p.shape != (2,)
+        or dM.shape != (2, 2)
+        or dbeta.shape != (2,)
+    ):
+        return np.full(2, np.nan, dtype=float)
+    if not (
+        np.all(np.isfinite(M))
+        and np.all(np.isfinite(beta))
+        and np.all(np.isfinite(p))
+        and np.all(np.isfinite(dM))
+        and np.all(np.isfinite(dbeta))
+    ):
+        return np.full(2, np.nan, dtype=float)
+
+    try:
+        A = np.linalg.inv(M)
+    except np.linalg.LinAlgError:
+        return np.full(2, np.nan, dtype=float)
+
+    dA = -A @ dM @ A
+    c = A @ beta
+    dc = dA @ beta + A @ dbeta
+    u = A @ p
+    du = dA @ p
+    lam = 1.0 - float(beta @ c)
+    dlam = -float(dbeta @ c + beta @ dc)
+    if lam <= 1e-12:
+        return np.full(2, np.nan, dtype=float)
+
+    q = float(p @ u)
+    dq = float(p @ du)
+    r = float(beta @ u)
+    dr = float(dbeta @ u + beta @ du)
+    s2 = lam * q + r * r
+    if s2 <= 1e-24:
+        return np.full(2, np.nan, dtype=float)
+    s = math.sqrt(s2)
+    ds = (dlam * q + lam * dq + 2.0 * r * dr) / (2.0 * s)
+
+    n_vec = lam * u + r * c
+    dn = dlam * u + lam * du + dr * c + r * dc
+    F_star = (s + r) / lam
+    dF = ((ds + dr) * lam - (s + r) * dlam) / (lam * lam)
+    F_p = (n_vec / s + c) / lam
+    dF_p = ((dn * s - n_vec * ds) / (s * s) + dc) / lam - (n_vec / s + c) * dlam / (lam * lam)
+    dH_p = dF * F_p + F_star * dF_p
+    if not np.all(np.isfinite(dH_p)):
+        return np.full(2, np.nan, dtype=float)
+    return dH_p
+
+
+def _randers_squared_H_spatial_derivative(
+    M: np.ndarray,
+    beta: np.ndarray,
+    p: np.ndarray,
+    dM: np.ndarray,
+    dbeta: np.ndarray,
+) -> float:
+    M = np.asarray(M, dtype=float)
+    beta = np.asarray(beta, dtype=float)
+    p = np.asarray(p, dtype=float)
+    dM = np.asarray(dM, dtype=float)
+    dbeta = np.asarray(dbeta, dtype=float)
+    if (
+        M.shape != (2, 2)
+        or beta.shape != (2,)
+        or p.shape != (2,)
+        or dM.shape != (2, 2)
+        or dbeta.shape != (2,)
+    ):
+        return float("nan")
+    if not (
+        np.all(np.isfinite(M))
+        and np.all(np.isfinite(beta))
+        and np.all(np.isfinite(p))
+        and np.all(np.isfinite(dM))
+        and np.all(np.isfinite(dbeta))
+    ):
+        return float("nan")
+    try:
+        A = np.linalg.inv(M)
+    except np.linalg.LinAlgError:
+        return float("nan")
+
+    dA = -A @ dM @ A
+    c = A @ beta
+    dc = dA @ beta + A @ dbeta
+    u = A @ p
+    du = dA @ p
+    lam = 1.0 - float(beta @ c)
+    dlam = -float(dbeta @ c + beta @ dc)
+    if lam <= 1e-12:
+        return float("nan")
+    q = float(p @ u)
+    dq = float(p @ du)
+    r = float(beta @ u)
+    dr = float(dbeta @ u + beta @ du)
+    s2 = lam * q + r * r
+    if s2 <= 1e-24:
+        return float("nan")
+    s = math.sqrt(s2)
+    ds = (dlam * q + lam * dq + 2.0 * r * dr) / (2.0 * s)
+    F_star = (s + r) / lam
+    dF = ((ds + dr) * lam - (s + r) * dlam) / (lam * lam)
+    dH = F_star * dF
+    return float(dH) if np.isfinite(dH) else float("nan")
+
+
+def _point_inside_centered_difference(point: np.ndarray, x: np.ndarray, y: np.ndarray, delta: float) -> bool:
+    return (
+        float(x[0]) + delta <= float(point[0]) <= float(x[-1]) - delta
+        and float(y[0]) + delta <= float(point[1]) <= float(y[-1]) - delta
+    )
+
+
+def _local_frenet_quadratic_T_derivatives(
+    T: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    spline_points: np.ndarray,
+    tangent: np.ndarray,
+    normal: np.ndarray,
+    *,
+    pre_smooth_sigma: float,
+    ns: int = 3,
+    nn: int = 3,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Estimate grad(T) and Hessian(T) from local quadratic fits near a path.
+
+    The fit is performed in each sample's Frenet frame, so the derivative
+    stencil follows the path instead of differentiating the full gridded
+    viscosity solution globally.
+    """
+    T = np.asarray(T, dtype=float)
+    valid = np.isfinite(T)
+    xg = np.asarray(x, dtype=float)
+    yg = np.asarray(y, dtype=float)
+    pts = np.asarray(spline_points, dtype=float)
+    tang = np.asarray(tangent, dtype=float)
+    norm = np.asarray(normal, dtype=float)
+
+    dx = float(xg[1] - xg[0]) if xg.size > 1 else 1.0
+    dy = float(yg[1] - yg[0]) if yg.size > 1 else 1.0
+    delta = max(abs(dx), abs(dy))
+
+    T_work = np.where(valid, T, 0.0)
+    if pre_smooth_sigma > 0.0:
+        T_num = gaussian_filter(T_work, pre_smooth_sigma)
+        T_den = gaussian_filter(np.where(valid, 1.0, 0.0), pre_smooth_sigma)
+        T_work = np.where(valid, T_num / np.maximum(T_den, 1e-12), np.nan)
+    else:
+        T_work = np.where(valid, T, np.nan)
+
+    try:
+        interp = RegularGridInterpolator((yg, xg), T_work, method="cubic", bounds_error=False, fill_value=np.nan)
+    except ValueError:
+        interp = RegularGridInterpolator((yg, xg), T_work, method="linear", bounds_error=False, fill_value=np.nan)
+
+    s_offsets = np.arange(-ns, ns + 1, dtype=float) * delta
+    n_offsets = np.arange(-nn, nn + 1, dtype=float) * delta
+    SS, NN = np.meshgrid(s_offsets, n_offsets)
+    ss = SS.ravel()
+    nnv = NN.ravel()
+    design = np.column_stack([np.ones_like(ss), ss, nnv, 0.5 * ss * ss, ss * nnv, 0.5 * nnv * nnv])
+    weights = np.exp(-0.5 * ((ss / max(ns * delta, delta)) ** 2 + (nnv / max(nn * delta, delta)) ** 2))
+    sqrt_w = np.sqrt(weights)
+
+    grad = np.full((len(pts), 2), np.nan, dtype=float)
+    hess = np.full((len(pts), 2, 2), np.nan, dtype=float)
+    cond = np.full(len(pts), np.nan, dtype=float)
+    min_samples = 8
+
+    for idx, point in enumerate(pts):
+        if not (np.all(np.isfinite(point)) and np.all(np.isfinite(tang[idx])) and np.all(np.isfinite(norm[idx]))):
+            continue
+        patch_x = point[0] + ss * tang[idx, 0] + nnv * norm[idx, 0]
+        patch_y = point[1] + ss * tang[idx, 1] + nnv * norm[idx, 1]
+        vals = interp(np.column_stack([patch_y, patch_x]))
+        inside = (
+            (patch_x >= xg[0]) & (patch_x <= xg[-1])
+            & (patch_y >= yg[0]) & (patch_y <= yg[-1])
+            & np.isfinite(vals)
+        )
+        if int(np.count_nonzero(inside)) < min_samples:
+            continue
+
+        A = design[inside] * sqrt_w[inside, None]
+        b = vals[inside] * sqrt_w[inside]
+        try:
+            c, _, _, singular = np.linalg.lstsq(A, b, rcond=None)
+        except np.linalg.LinAlgError:
+            continue
+        if singular.size and singular[-1] > 0.0:
+            cond[idx] = float(singular[0] / singular[-1])
+        if not np.all(np.isfinite(c)) or (np.isfinite(cond[idx]) and cond[idx] > 1e10):
+            continue
+
+        local_grad = np.array([c[1], c[2]], dtype=float)
+        local_hess = np.array([[c[3], c[4]], [c[4], c[5]]], dtype=float)
+        frame = np.column_stack([tang[idx], norm[idx]])
+        grad[idx] = frame @ local_grad
+        hess[idx] = frame @ local_hess @ frame.T
+
+    return grad, hess, cond
+
+
+def _smooth_finite_series(values: np.ndarray, window: int, poly: int) -> np.ndarray:
+    vals = np.asarray(values, dtype=float)
+    out = vals.copy()
+    finite = np.isfinite(vals)
+    if int(np.count_nonzero(finite)) < max(poly + 2, 3):
+        return out
+    indices = np.arange(vals.size, dtype=float)
+    filled = vals.copy()
+    filled[~finite] = np.interp(indices[~finite], indices[finite], vals[finite])
+    win = window if window % 2 == 1 else window + 1
+    max_win = vals.size if vals.size % 2 == 1 else vals.size - 1
+    win = min(win, max_win)
+    min_win = poly + 2 if (poly + 2) % 2 == 1 else poly + 3
+    win = min(max(win, min_win), max_win)
+    if win < min_win:
+        return out
+    out[finite] = _savgol_filter(filled, win, poly, mode="interp")[finite]
+    return out
+
+
+def _compute_fm_asr_hamiltonian_curvature(
+    *,
+    t_field: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    M_field: np.ndarray,
+    beta_field: np.ndarray,
+    spline_points: np.ndarray,
+    tangent: np.ndarray,
+    normal: np.ndarray,
+    pre_smooth_sigma: float,
+    stencil_window: int,
+    stencil_poly: int,
+    smooth_window: int,
+    smooth_poly: int,
+    t_hessian_method: str = "grid_savgol",
+    p_dot_method: str = "canonical",
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    pts = np.asarray(spline_points, dtype=float)
+    if p_dot_method == "canonical" and t_hessian_method == "grid_savgol":
+        Tx, Ty = _travel_time_gradient_fields(
+            t_field,
+            x,
+            y,
+            pre_smooth_sigma=pre_smooth_sigma,
+            stencil_window=stencil_window,
+            stencil_poly=stencil_poly,
+        )
+        grad_T = np.column_stack([
+            _bilinear_sample(Tx, x, y, pts),
+            _bilinear_sample(Ty, x, y, pts),
+        ])
+        H_T = np.full((len(pts), 2, 2), np.nan, dtype=float)
+        fit_cond = np.where(np.all(np.isfinite(grad_T), axis=1), 1.0, np.nan)
+    elif t_hessian_method == "grid_savgol":
+        Tx, Ty, Txx, Txy, Tyy = _travel_time_derivative_fields(
+            t_field,
+            x,
+            y,
+            pre_smooth_sigma=pre_smooth_sigma,
+            stencil_window=stencil_window,
+            stencil_poly=stencil_poly,
+        )
+        grad_T = np.column_stack([
+            _bilinear_sample(Tx, x, y, pts),
+            _bilinear_sample(Ty, x, y, pts),
+        ])
+        H_T = np.stack(
+            [
+                np.stack([
+                    _bilinear_sample(Txx, x, y, pts),
+                    _bilinear_sample(Txy, x, y, pts),
+                ], axis=1),
+                np.stack([
+                    _bilinear_sample(Txy, x, y, pts),
+                    _bilinear_sample(Tyy, x, y, pts),
+                ], axis=1),
+            ],
+            axis=1,
+        )
+        fit_cond = np.where(
+            np.all(np.isfinite(grad_T), axis=1),
+            1.0,
+            np.nan,
+        )
+    elif t_hessian_method == "frenet_quadratic":
+        win = stencil_window if stencil_window % 2 == 1 else stencil_window + 1
+        half_window = max(2, (win - 1) // 2)
+        grad_T, H_T, fit_cond = _local_frenet_quadratic_T_derivatives(
+            t_field,
+            x,
+            y,
+            pts,
+            tangent,
+            normal,
+            pre_smooth_sigma=pre_smooth_sigma,
+            ns=half_window,
+            nn=half_window,
+        )
+    else:
+        raise ValueError(f"Unsupported FM-ASR Hamiltonian T-Hessian method: {t_hessian_method!r}")
+
+    h_grid = min(float(abs(x[1] - x[0])) if len(x) > 1 else 1.0, float(abs(y[1] - y[0])) if len(y) > 1 else 1.0)
+    dx_eps = 1.0 * h_grid
+    signed = np.full(len(pts), np.nan, dtype=float)
+    magnitude = np.full(len(pts), np.nan, dtype=float)
+    eikonal_residual = np.full(len(pts), np.nan, dtype=float)
+    min_alignment = math.cos(math.radians(60.0))
+    endpoint_pad = max(2, min(5, len(pts) // 20))
+
+    for idx, point in enumerate(pts):
+        if idx < endpoint_pad or idx >= len(pts) - endpoint_pad:
+            continue
+        p = grad_T[idx]
+        if not (np.all(np.isfinite(point)) and np.all(np.isfinite(p)) and np.isfinite(fit_cond[idx])):
+            continue
+        if p_dot_method == "hessian_T" and not np.all(np.isfinite(H_T[idx])):
+            continue
+        if not _point_inside_centered_difference(point, x, y, dx_eps):
+            continue
+
+        M, beta, M_x, M_y, beta_x, beta_y = _sample_fm_asr_metric_with_gradient(
+            point,
+            x,
+            y,
+            M_field,
+            beta_field,
+        )
+        F_star = _randers_dual_norm(M, beta, p)
+        if not np.isfinite(F_star):
+            continue
+        eikonal_residual[idx] = F_star - 1.0
+
+        v = _randers_squared_H_p(M, beta, p)
+        speed = float(np.linalg.norm(v))
+        if not np.all(np.isfinite(v)) or speed <= 1e-12:
+            continue
+        t_hat = v / speed
+        alignment = float(tangent[idx] @ t_hat)
+        if not np.isfinite(alignment) or alignment <= min_alignment:
+            continue
+
+        Hpp = _randers_squared_H_pp(M, beta, p)
+        Hxp = np.column_stack(
+            [
+                _randers_squared_H_p_spatial_derivative(M, beta, p, M_x, beta_x),
+                _randers_squared_H_p_spatial_derivative(M, beta, p, M_y, beta_y),
+            ]
+        )
+        Hx = np.array(
+            [
+                _randers_squared_H_spatial_derivative(M, beta, p, M_x, beta_x),
+                _randers_squared_H_spatial_derivative(M, beta, p, M_y, beta_y),
+            ],
+            dtype=float,
+        )
+
+        if not (np.all(np.isfinite(Hpp)) and np.all(np.isfinite(Hxp)) and np.all(np.isfinite(Hx))):
+            continue
+        if p_dot_method == "canonical":
+            p_dot = -Hx
+        elif p_dot_method == "hessian_T":
+            p_dot = H_T[idx] @ v
+        else:
+            raise ValueError(f"Unsupported FM-ASR Hamiltonian p-dot method: {p_dot_method!r}")
+        accel = Hxp @ v + Hpp @ p_dot
+        projector = np.eye(2) - np.outer(t_hat, t_hat)
+        k_vec = projector @ accel / (speed * speed)
+        if not np.all(np.isfinite(k_vec)):
+            continue
+        magnitude[idx] = float(np.linalg.norm(k_vec))
+        signed[idx] = float(k_vec @ normal[idx])
+
+    smoothed = _smooth_finite_series(signed, smooth_window, max(smooth_poly, 2))
+    return signed, magnitude, smoothed, eikonal_residual
+
+
 def _build_path_balance_diagnostics(
     path: np.ndarray,
     *,
@@ -2107,8 +2859,10 @@ def compute_balance_diagnostics(
     normal_deriv_hessian_smooth: float = 0.0,
     normal_deriv_hessian_window: int = 3,
     normal_deriv_hessian_poly: int = 2,
+    fm_asr_hamiltonian_t_hessian: str = "grid_savgol",
+    fm_asr_hamiltonian_p_dot: str = "canonical",
     ds: float = 1.0,
-) -> tuple[PathBalanceDiagnostics, PathBalanceDiagnostics]:
+) -> tuple[PathBalanceDiagnostics, PathBalanceDiagnostics, PathBalanceDiagnostics | None, PathBalanceDiagnostics | None]:
     h = np.asarray(result.h, dtype=float)
     x = np.asarray(result.x, dtype=float)
     y = np.asarray(result.y, dtype=float)
@@ -2188,7 +2942,82 @@ def compute_balance_diagnostics(
         t_field=result.t_min_lrp,
         ds=ds,
     )
-    return fp_diag, lrp_diag
+    fm_asr_diag: PathBalanceDiagnostics | None = None
+    if (
+        result.fp_fm_asr is not None
+        and result.t_min_fm_asr is not None
+        and result.fm_asr_M is not None
+        and result.fm_asr_beta is not None
+        and len(result.fp_fm_asr) >= 3
+    ):
+        try:
+            fm_asr_diag = _build_path_balance_diagnostics(
+                result.fp_fm_asr,
+                label="FP (FM-ASR)",
+                x=x,
+                y=y,
+                logk_field=logk_smoothed,
+                log_grad_h_field=log_grad_h,
+                log_v_field=log_v,
+                curvature_method=curvature_method,
+                spline_mode=curvature_spline_mode,
+                spline_smooth=curvature_spline_smooth,
+                spline_degree=curvature_spline_degree,
+                circle_window=curvature_circle_window,
+                savgol_window=curvature_savgol_window,
+                savgol_poly=curvature_savgol_poly,
+                normal_deriv_method="direct",
+                ds=ds,
+            )
+            signed, magnitude, smoothed, eikonal_residual = _compute_fm_asr_hamiltonian_curvature(
+                t_field=result.t_min_fm_asr,
+                x=x,
+                y=y,
+                M_field=result.fm_asr_M,
+                beta_field=result.fm_asr_beta,
+                spline_points=fm_asr_diag.spline_points,
+                tangent=fm_asr_diag.tangent,
+                normal=fm_asr_diag.normal,
+                pre_smooth_sigma=normal_deriv_hessian_smooth,
+                stencil_window=normal_deriv_hessian_window,
+                stencil_poly=normal_deriv_hessian_poly,
+                smooth_window=curvature_savgol_window,
+                smooth_poly=curvature_savgol_poly,
+                t_hessian_method=fm_asr_hamiltonian_t_hessian,
+                p_dot_method=fm_asr_hamiltonian_p_dot,
+            )
+            fm_asr_diag.hamilton_curvature = signed
+            fm_asr_diag.hamilton_curvature_magnitude = magnitude
+            fm_asr_diag.hamilton_curvature_smoothed = smoothed
+            fm_asr_diag.hamilton_eikonal_residual = eikonal_residual
+        except Exception as exc:
+            print(f"Warning: FM-ASR Hamiltonian curvature failed; omitting FM-ASR curvature panel: {exc}")
+            fm_asr_diag = None
+    streamline_diag: PathBalanceDiagnostics | None = None
+    if result.fp is not None and len(result.fp) >= 3:
+        try:
+            streamline_diag = _build_path_balance_diagnostics(
+                result.fp,
+                label="FP (Streamline)",
+                x=x,
+                y=y,
+                logk_field=logk_smoothed,
+                log_grad_h_field=log_grad_h,
+                log_v_field=log_v,
+                curvature_method=curvature_method,
+                spline_mode=curvature_spline_mode,
+                spline_smooth=curvature_spline_smooth,
+                spline_degree=curvature_spline_degree,
+                circle_window=curvature_circle_window,
+                savgol_window=curvature_savgol_window,
+                savgol_poly=curvature_savgol_poly,
+                normal_deriv_method="direct",
+                ds=ds,
+            )
+        except Exception as exc:
+            print(f"Warning: Streamline FP curvature failed; omitting streamline curvature overlay: {exc}")
+            streamline_diag = None
+    return fp_diag, lrp_diag, fm_asr_diag, streamline_diag
 
 
 def plot_paths_over_field(
@@ -2303,21 +3132,71 @@ def plot_curvature_balance(
     fp_diag: PathBalanceDiagnostics,
     lrp_diag: PathBalanceDiagnostics,
     *,
+    fm_asr_diag: PathBalanceDiagnostics | None = None,
+    streamline_diag: PathBalanceDiagnostics | None = None,
     i_y: float = 1.0,
 ) -> Any:
-    fig, axes = plt.subplots(3, 1, figsize=(6, 6), sharex=True)
+    has_fm_asr_path = (
+        fm_asr_diag is not None
+        and np.any(np.isfinite(fm_asr_diag.curvature))
+    )
+    has_fm_asr_hamiltonian = (
+        fm_asr_diag is not None
+        and fm_asr_diag.hamilton_curvature is not None
+        and np.any(np.isfinite(fm_asr_diag.hamilton_curvature))
+    )
+    nrows = 4 if has_fm_asr_path else 3
+    fig, axes = plt.subplots(nrows, 1, figsize=(6, 2.0 * nrows), sharex=True)
     lw = 1#LINEWIDTHS
     alpha = 0.5
 
     def _pearson_r(a, b):
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
         mask = np.isfinite(a) & np.isfinite(b)
         if mask.sum() < 2:
             return float("nan")
         return float(np.corrcoef(a[mask], b[mask])[0, 1])
 
+    def _pearson_r_on_s(sa, a, sb, b):
+        sa = np.asarray(sa, dtype=float)
+        sb = np.asarray(sb, dtype=float)
+        a = np.asarray(a, dtype=float)
+        b = np.asarray(b, dtype=float)
+        mask_a = np.isfinite(sa) & np.isfinite(a)
+        mask_b = np.isfinite(sb) & np.isfinite(b)
+        if mask_a.sum() < 2 or mask_b.sum() < 2:
+            return float("nan")
+        lo = max(float(np.nanmin(sa[mask_a])), float(np.nanmin(sb[mask_b])))
+        hi = min(float(np.nanmax(sa[mask_a])), float(np.nanmax(sb[mask_b])))
+        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
+            return float("nan")
+        n = int(min(mask_a.sum(), mask_b.sum()))
+        if n < 2:
+            return float("nan")
+        grid = np.linspace(lo, hi, n)
+        a_i = np.interp(grid, sa[mask_a], a[mask_a])
+        b_i = np.interp(grid, sb[mask_b], b[mask_b])
+        return _pearson_r(a_i, b_i)
+
     r_fp    = _pearson_r(fp_diag.curvature,  -fp_diag.dlogv_dn)
     r_lrp_k = _pearson_r(lrp_diag.curvature, -lrp_diag.dlogk_dn)
     r_lrp_v = _pearson_r(lrp_diag.curvature, -lrp_diag.dlogv_dn)
+    r_fm_asr = (
+        _pearson_r(fm_asr_diag.curvature, fm_asr_diag.hamilton_curvature_smoothed)
+        if has_fm_asr_hamiltonian and fm_asr_diag is not None and fm_asr_diag.hamilton_curvature_smoothed is not None
+        else float("nan")
+    )
+    r_fm_stream = (
+        _pearson_r_on_s(
+            fm_asr_diag.s_norm,
+            fm_asr_diag.curvature,
+            streamline_diag.s_norm,
+            streamline_diag.curvature,
+        )
+        if has_fm_asr_path and fm_asr_diag is not None and streamline_diag is not None
+        else float("nan")
+    )
 
     axes[0].plot(
         fp_diag.s_norm,
@@ -2453,6 +3332,57 @@ def plot_curvature_balance(
     axes[2].set_xlabel(r"Normalized arclength $\ell/L$")
     axes[2].set_ylabel(r"Residual $[\times I_Y]$")
     axes[2].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
+
+    if has_fm_asr_path and fm_asr_diag is not None:
+        axes[3].plot(
+            fm_asr_diag.s_norm,
+            fm_asr_diag.curvature * i_y,
+            color=COLORS["fpFmAsr"],
+            linewidth=lw,
+            label=r"$\kappa^*_{\mathcal{F}}$",
+        )
+        if streamline_diag is not None:
+            axes[3].plot(
+                streamline_diag.s_norm,
+                streamline_diag.curvature * i_y,
+                color=COLORS["fp"],
+                alpha=0.85,
+                linestyle=LINESTYLES["fp"],
+                linewidth=lw,
+                label=r"$\kappa^*_{\mathcal{S}}$",
+            )
+        if has_fm_asr_hamiltonian and fm_asr_diag.hamilton_curvature is not None:
+            axes[3].plot(
+                fm_asr_diag.s_norm,
+                fm_asr_diag.hamilton_curvature * i_y,
+                color=COLORS["fpFmAsr"],
+                alpha=0.25,
+                linestyle=LINESTYLES["fpFmAsr"],
+                linewidth=lw,
+                label=r"$\kappa_{\mathcal{F},H}$ raw",
+            )
+        if has_fm_asr_hamiltonian and fm_asr_diag.hamilton_curvature_smoothed is not None:
+            axes[3].plot(
+                fm_asr_diag.s_norm,
+                fm_asr_diag.hamilton_curvature_smoothed * i_y,
+                color=COLORS["fpFmAsr"],
+                alpha=alpha,
+                linestyle=LINESTYLES["fpFmAsr"],
+                linewidth=lw,
+                label=r"$\kappa_{\mathcal{F},H}$ smoothed",
+            )
+        axes[3].axhline(0.0, color="0.7", linewidth=1.0)
+        axes[3].set_xlabel(r"Normalized arclength $\ell/L$")
+        axes[3].set_ylabel(r"FM-ASR $[\times I_Y]$")
+        axes[3].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
+        axes[3].text(
+            0.97, 0.97,
+            rf"$r(\kappa_\mathcal{{F}}^*,\kappa_{{\mathcal{{F}},H}}) = {r_fm_asr:.2f}$" + "\n" +
+            rf"$r(\kappa_\mathcal{{F}}^*,\kappa_\mathcal{{S}}^*) = {r_fm_stream:.2f}$",
+            transform=axes[3].transAxes,
+            ha="right", va="top", fontsize=8,
+            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=1.0),
+        )
 
     for ax in axes:
         ax.set_xlim(0.0, 1.0)
@@ -2689,7 +3619,7 @@ def plot_isochrones_with_plume(
         # Legend on first panel only
         if j == 0:
             h_fp = Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, ls=LINESTYLES["fp"],
-                          label=r"$\gamma^*_\mathcal{A}$")
+                          label=r"$\gamma^*_\mathcal{S}$")
             h_fp.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
             h_fp.set_solid_capstyle("round")
             h_fp.set_dash_capstyle("round")
@@ -2714,7 +3644,7 @@ def plot_isochrones_with_plume(
 
             handles = [
                 h_fp, h_fp_fmm, h_lrp_fmm,
-                Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{A}$ isochrone"),
+                Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
                 Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{E}$ isochrone"),
                 Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{R}$ isochrone"),
             ]
@@ -2839,6 +3769,8 @@ def run_step5(
     normal_deriv_hessian_smooth: float = 0.0,
     normal_deriv_hessian_window: int = 3,
     normal_deriv_hessian_poly: int = 2,
+    fm_asr_hamiltonian_t_hessian: str = "grid_savgol",
+    fm_asr_hamiltonian_p_dot: str = "canonical",
     curvature_resample_ds: float = 0.5,
     density_particle: int = 20,
     num_particles: int | None = None,
@@ -2994,7 +3926,7 @@ def run_step5(
     balance_path = out_dir / f"{stem}_curvature_balance.png"
     progression_path = out_dir / f"{stem}_linearized_fp_progression.png"
 
-    fp_diag, lrp_diag = compute_balance_diagnostics(
+    fp_diag, lrp_diag, fm_asr_diag, streamline_diag = compute_balance_diagnostics(
         logk_field=logk_field,
         result=result,
         curvature_method=curvature_method,
@@ -3013,6 +3945,8 @@ def run_step5(
         normal_deriv_hessian_smooth=normal_deriv_hessian_smooth,
         normal_deriv_hessian_window=normal_deriv_hessian_window,
         normal_deriv_hessian_poly=normal_deriv_hessian_poly,
+        fm_asr_hamiltonian_t_hessian=fm_asr_hamiltonian_t_hessian,
+        fm_asr_hamiltonian_p_dot=fm_asr_hamiltonian_p_dot,
         ds=curvature_resample_ds,
     )
 
@@ -3058,7 +3992,13 @@ def run_step5(
     fig_stream.savefig(stream_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_stream)
 
-    fig_balance = plot_curvature_balance(fp_diag, lrp_diag, i_y=i_y)
+    fig_balance = plot_curvature_balance(
+        fp_diag,
+        lrp_diag,
+        fm_asr_diag=fm_asr_diag,
+        streamline_diag=streamline_diag,
+        i_y=i_y,
+    )
     fig_balance.savefig(balance_path, dpi=cfg.figure_dpi, bbox_inches="tight")
     plt.close(fig_balance)
     progression_path_out: Path | None = None
@@ -3249,6 +4189,10 @@ def parse_args() -> argparse.Namespace:
                         help="SG stencil window for hessian_T (odd, >= 3); window=3 reproduces original Sobel.")
     parser.add_argument("--normal-deriv-hessian-poly", type=int, default=2,
                         help="SG polynomial degree for hessian_T (>= 2 enforced internally).")
+    parser.add_argument("--fm-asr-hamiltonian-t-hessian", choices=["grid_savgol", "frenet_quadratic"], default="grid_savgol",
+                        help="T Hessian estimator for FM-ASR Hamiltonian curvature. Default 'grid_savgol' matches the Euclidean/FMM Hessian estimator; 'frenet_quadratic' uses a local path-aligned quadratic fit.")
+    parser.add_argument("--fm-asr-hamiltonian-p-dot", choices=["canonical", "hessian_T"], default="canonical",
+                        help="Momentum evolution for FM-ASR Hamiltonian curvature. Default 'canonical' uses p_dot=-H_x from the Randers metric only; 'hessian_T' uses p_dot=(nabla^2 T) H_p.")
     parser.add_argument("--curvature-resample-ds", type=float, default=0.5,
                         help="Arc-length resampling interval (grid cells) applied to FP/LRP paths before curvature computation.")
 
@@ -3390,6 +4334,8 @@ def main() -> int:
         normal_deriv_hessian_smooth=args.normal_deriv_hessian_smooth,
         normal_deriv_hessian_window=args.normal_deriv_hessian_window,
         normal_deriv_hessian_poly=args.normal_deriv_hessian_poly,
+        fm_asr_hamiltonian_t_hessian=args.fm_asr_hamiltonian_t_hessian,
+        fm_asr_hamiltonian_p_dot=args.fm_asr_hamiltonian_p_dot,
         curvature_resample_ds=args.curvature_resample_ds,
         density_particle=args.density_particle,
         num_particles=args.num_particles,
