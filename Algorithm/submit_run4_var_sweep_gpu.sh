@@ -43,7 +43,22 @@ pypar2_alpha_l="${pypar2_alpha_l:-0.1}"
 pypar2_alpha_t="${pypar2_alpha_t:-0.01}"
 pypar2_velocity_floor="${pypar2_velocity_floor:-}"
 pypar2_taichi_arch="${pypar2_taichi_arch:-gpu}"
-pypar2_max_points="${pypar2_max_points:-100000}"
+pypar2_max_points="${pypar2_max_points:-2000}"
+# PyPar2 pilot pass is trajectory-free, so it scales to the same particle
+# count as Pollock. Trajectory storage only happens in the small pass-2
+# replay around top-K release points, sized by the replay_* parameters below.
+pypar2_num_particles="${pypar2_num_particles:-1000000}"
+pypar2_trajectory_memory_limit="${pypar2_trajectory_memory_limit:-5000000}"
+# Pilot-then-replay parameters. Pass 1 picks the top-K fastest pilot particles;
+# pass 2 spawns particles_per_center particles inside a disk of radius
+# (radius_cells * dx) around each release point and confirms the trajectory.
+# Retried up to max_redos additional times until the replay's fastest time is
+# within tolerance * pilot's fastest time.
+pypar2_replay_top_k="${pypar2_replay_top_k:-5}"
+pypar2_replay_particles_per_center="${pypar2_replay_particles_per_center:-40}"
+pypar2_replay_radius_cells="${pypar2_replay_radius_cells:-0.5}"
+pypar2_replay_tolerance="${pypar2_replay_tolerance:-1.05}"
+pypar2_replay_max_redos="${pypar2_replay_max_redos:-3}"
 
 time="08:00:00"
 mem_per_cpu="2GB"
@@ -96,6 +111,13 @@ else
     pypar2_args+=" --pypar2_alpha_t ${pypar2_alpha_t}"
     pypar2_args+=" --pypar2_taichi_arch ${pypar2_taichi_arch}"
     pypar2_args+=" --pypar2_max_points ${pypar2_max_points}"
+    pypar2_args+=" --pypar2_num_particles ${pypar2_num_particles}"
+    pypar2_args+=" --pypar2_trajectory_memory_limit ${pypar2_trajectory_memory_limit}"
+    pypar2_args+=" --pypar2_replay_top_k ${pypar2_replay_top_k}"
+    pypar2_args+=" --pypar2_replay_particles_per_center ${pypar2_replay_particles_per_center}"
+    pypar2_args+=" --pypar2_replay_radius_cells ${pypar2_replay_radius_cells}"
+    pypar2_args+=" --pypar2_replay_tolerance ${pypar2_replay_tolerance}"
+    pypar2_args+=" --pypar2_replay_max_redos ${pypar2_replay_max_redos}"
     if [[ -n "${pypar2_velocity_floor}" ]]; then
         pypar2_args+=" --pypar2_velocity_floor ${pypar2_velocity_floor}"
     fi

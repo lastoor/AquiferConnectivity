@@ -544,16 +544,26 @@ def run_pypar2_tracking_gpu_worker(
     vy_face: np.ndarray,
     seed_trial: int | None,
     logger: Any,
-) -> tuple[np.ndarray | None, float | None, str | None]:
+) -> tuple[np.ndarray | None, float | None, str | None, dict]:
     """GPU-offloaded variant of `base.run_pypar2_tracking`.
 
     Builds the same `particle_tracking_summary` payload (method='pypar2') and
     dispatches it through the persistent GPU worker subprocess via `gpu_call`,
     which routes pypar2 through the generic single-payload path in
     `_run_single_gpu_payload` (FlowSimulation api.py handles method='pypar2').
+
+    Returns ``(fp_xy, travel_time, error_message, replay_meta)``; the pilot
+    pass scales with the Pollock-style particle count because it is
+    trajectory-free, while pass-2 trajectory storage uses only the small
+    top-K * particles-per-center ensemble.
     """
     cfg = config_mc.get("pypar2_arg", {})
-    n_particles = base.resolve_particle_count(config_mc, source_rows)
+    n_particles_override = cfg.get("num_particles", None)
+    if n_particles_override is None:
+        n_particles = base.resolve_particle_count(config_mc, source_rows)
+    else:
+        n_particles = int(n_particles_override)
+    n_particles = max(2, n_particles)
     x_faces = base.build_face_coordinates_from_centers(config_mc["x"]).astype(np.float32)
     y_faces = base.build_face_coordinates_from_centers(config_mc["y"]).astype(np.float32)
     seeds_x = np.full(n_particles, x0, dtype=np.float32)
@@ -580,7 +590,13 @@ def run_pypar2_tracking_gpu_worker(
         "molecular_diffusion": float(cfg.get("molecular_diffusion", 0.0)),
         "alpha_l": float(cfg.get("alpha_l", 0.0)),
         "alpha_t": float(cfg.get("alpha_t", 0.0)),
-        "max_points": int(cfg.get("max_points", 100_000)),
+        "max_points": int(cfg.get("max_points", 2_000)),
+        "trajectory_memory_limit": int(cfg.get("trajectory_memory_limit", 5_000_000)),
+        "replay_top_k": int(cfg.get("replay_top_k", 5)),
+        "replay_particles_per_center": int(cfg.get("replay_particles_per_center", 40)),
+        "replay_radius_cells": float(cfg.get("replay_radius_cells", 0.5)),
+        "replay_tolerance": float(cfg.get("replay_tolerance", 1.05)),
+        "replay_max_redos": int(cfg.get("replay_max_redos", 3)),
         "seed": int(seed_trial) if seed_trial is not None else 0,
     }
     if cfg.get("velocity_floor") is not None:
@@ -590,19 +606,24 @@ def run_pypar2_tracking_gpu_worker(
         summary = gpu_call("particle_tracking_summary", params)
     except Exception as exc:
         logger.warning(f"[PT-PyPar2 GPU] gpu_call failed: {exc}")
-        return None, None, f"PyPar2 GPU dispatch failed: {exc}"
+        return None, None, f"PyPar2 GPU dispatch failed: {exc}", {}
 
     res = summary.get("fastest")
+    replay_meta = summary.get("replay", {}) or {}
     if res is None:
-        return None, None, "PyPar2: no particle reached right_x"
+        return None, None, "PyPar2: no particle reached right_x", replay_meta
     fp = np.vstack((np.asarray(res["x"]), np.asarray(res["y"]))).T
     travel_time = float(res["travel_time"])
     logger.info(
         f"[PT-PyPar2 GPU] taichi_arch={summary.get('taichi_arch', params['backend'])}, "
         f"n_particles={n_particles}, n_arrived={summary.get('n_arrived', 'NA')}, "
-        f"travel_time={travel_time:.6g}"
+        f"travel_time={travel_time:.6g}, "
+        f"replay_status={replay_meta.get('status', 'NA')}, "
+        f"t_pilot={replay_meta.get('t_pilot', 'NA')}, "
+        f"t_replay_best={replay_meta.get('t_replay_best', 'NA')}, "
+        f"attempts={len(replay_meta.get('attempts', []))}"
     )
-    return fp, travel_time, None
+    return fp, travel_time, None, replay_meta
 
 
 def run_unit_simulation_gpu(config: dict[str, Any], mc_index: int, num_trial: int = 200) -> dict[str, Any]:
@@ -766,8 +787,53 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pypar2_max_points",
         type=int,
-        default=100_000,
-        help="PyPar2 trajectory max stored points per particle.",
+        default=2_000,
+        help="PyPar2 trajectory max stored points per particle (kept small so trajectory storage stays enabled).",
+    )
+    parser.add_argument(
+        "--pypar2_num_particles",
+        type=int,
+        default=None,
+        help=(
+            "PyPar2 pilot-pass particle count. If unset, reuses --num_particles "
+            "(pilot pass is trajectory-free)."
+        ),
+    )
+    parser.add_argument(
+        "--pypar2_trajectory_memory_limit",
+        type=int,
+        default=5_000_000,
+        help="PyPar2 trajectory_memory_limit forwarded to the dispatcher (pass-2 only).",
+    )
+    parser.add_argument(
+        "--pypar2_replay_top_k",
+        type=int,
+        default=5,
+        help="PyPar2 replay: top-K fastest pilot particles whose release points seed pass-2.",
+    )
+    parser.add_argument(
+        "--pypar2_replay_particles_per_center",
+        type=int,
+        default=40,
+        help="PyPar2 replay: particles per top-K release point in pass-2.",
+    )
+    parser.add_argument(
+        "--pypar2_replay_radius_cells",
+        type=float,
+        default=0.5,
+        help="PyPar2 replay: pass-2 disk radius in units of dx (0.0 = exact resample).",
+    )
+    parser.add_argument(
+        "--pypar2_replay_tolerance",
+        type=float,
+        default=1.05,
+        help="PyPar2 replay: accept when t_best <= t_pilot * tolerance.",
+    )
+    parser.add_argument(
+        "--pypar2_replay_max_redos",
+        type=int,
+        default=3,
+        help="PyPar2 replay: max additional retries (total attempts = this + 1).",
     )
     parser.add_argument("--cpu_workers", type=int, default=None, help="CPU worker count for preprocessing/finalization.")
     parser.add_argument("--gpu_device", type=str, default=None, help="GPU token to pin the single GPU worker to.")
@@ -849,6 +915,15 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
             ),
             "taichi_arch": str(args.pypar2_taichi_arch),
             "max_points": int(args.pypar2_max_points),
+            "num_particles": (
+                None if args.pypar2_num_particles is None else int(args.pypar2_num_particles)
+            ),
+            "trajectory_memory_limit": int(args.pypar2_trajectory_memory_limit),
+            "replay_top_k": int(args.pypar2_replay_top_k),
+            "replay_particles_per_center": int(args.pypar2_replay_particles_per_center),
+            "replay_radius_cells": float(args.pypar2_replay_radius_cells),
+            "replay_tolerance": float(args.pypar2_replay_tolerance),
+            "replay_max_redos": int(args.pypar2_replay_max_redos),
         },
         "particleTracking_arg": {
             "solver": args.solver,

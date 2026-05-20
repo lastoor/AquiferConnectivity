@@ -35,7 +35,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 13
+MC_SCHEMA_VERSION = 14
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -119,6 +119,10 @@ MC_FIELDS = [
     "pypar2_taichi_arch",
     "pypar2_max_points",
     "pypar2_seed_trial",
+    "pypar2_replay_status",
+    "pypar2_replay_t_pilot",
+    "pypar2_replay_t_best",
+    "pypar2_replay_attempts",
     "seed_base",
     "seed_effective_run",
     "seed_mode",
@@ -153,6 +157,7 @@ OBJECT_FIELDS = {
     "seed_mode",
     "variance_seed_policy",
     "pypar2_taichi_arch",
+    "pypar2_replay_status",
 }
 
 INT_FIELDS = {
@@ -161,6 +166,7 @@ INT_FIELDS = {
     "trial_used",
     "status_code",
     "pt_num_particles",
+    "pypar2_replay_attempts",
 }
 
 BOOL_FIELDS = {
@@ -555,16 +561,26 @@ def run_pypar2_tracking(
     vy_face: np.ndarray,
     seed_trial: int | None,
     logger: Any,
-) -> tuple[np.ndarray | None, float | None, str | None]:
+) -> tuple[np.ndarray | None, float | None, str | None, dict]:
     """Run the Taichi PAR2 random-walk solver via the FlowSimulation dispatcher.
 
-    Returns (fp_xy, travel_time, error_message). On any non-fatal failure the
-    caller receives (None, None, msg) so the surrounding MC trial can continue.
-    The GPU worker entrypoint monkey-patches this function to route execution
-    through the persistent GPU subprocess.
+    Returns ``(fp_xy, travel_time, error_message, replay_meta)``. On any
+    non-fatal failure the caller receives ``(None, None, msg, replay_meta)``
+    (with ``replay_meta`` possibly empty) so the surrounding MC trial can
+    continue. The GPU worker entrypoint monkey-patches this function to route
+    execution through the persistent GPU subprocess.
     """
     cfg = config_mc.get("pypar2_arg", {})
-    n_particles = resolve_particle_count(config_mc, source_rows)
+    # Pilot pass is trajectory-free, so it can scale to the same particle
+    # count as the Pollock reference. Trajectory storage happens only in the
+    # pass-2 replay around the top-K release points, where the total particle
+    # count is replay_top_k * replay_particles_per_center (~hundreds).
+    n_particles_override = cfg.get("num_particles", None)
+    if n_particles_override is None:
+        n_particles = resolve_particle_count(config_mc, source_rows)
+    else:
+        n_particles = int(n_particles_override)
+    n_particles = max(2, n_particles)
     x_faces = build_face_coordinates_from_centers(config_mc["x"]).astype(np.float32)
     y_faces = build_face_coordinates_from_centers(config_mc["y"]).astype(np.float32)
     seeds_x = np.full(n_particles, x0, dtype=np.float32)
@@ -591,7 +607,13 @@ def run_pypar2_tracking(
         "molecular_diffusion": float(cfg.get("molecular_diffusion", 0.0)),
         "alpha_l": float(cfg.get("alpha_l", 0.0)),
         "alpha_t": float(cfg.get("alpha_t", 0.0)),
-        "max_points": int(cfg.get("max_points", 100_000)),
+        "max_points": int(cfg.get("max_points", 2_000)),
+        "trajectory_memory_limit": int(cfg.get("trajectory_memory_limit", 5_000_000)),
+        "replay_top_k": int(cfg.get("replay_top_k", 5)),
+        "replay_particles_per_center": int(cfg.get("replay_particles_per_center", 40)),
+        "replay_radius_cells": float(cfg.get("replay_radius_cells", 0.5)),
+        "replay_tolerance": float(cfg.get("replay_tolerance", 1.05)),
+        "replay_max_redos": int(cfg.get("replay_max_redos", 3)),
         "seed": int(seed_trial) if seed_trial is not None else 0,
     }
     if cfg.get("velocity_floor") is not None:
@@ -601,19 +623,24 @@ def run_pypar2_tracking(
         summary = sim_pt.particle_tracking_summary(params)
     except Exception as exc:
         logger.warning(f"[PT-PyPar2] particle_tracking_summary failed: {exc}")
-        return None, None, f"PyPar2 dispatcher failed: {exc}"
+        return None, None, f"PyPar2 dispatcher failed: {exc}", {}
 
     res = summary.get("fastest")
+    replay_meta = summary.get("replay", {}) or {}
     if res is None:
-        return None, None, "PyPar2: no particle reached right_x"
+        return None, None, "PyPar2: no particle reached right_x", replay_meta
     fp = np.vstack((np.asarray(res["x"]), np.asarray(res["y"]))).T
     travel_time = float(res["travel_time"])
     logger.info(
         f"[PT-PyPar2] taichi_arch={summary.get('taichi_arch', params['backend'])}, "
         f"n_particles={n_particles}, n_arrived={summary.get('n_arrived', 'NA')}, "
-        f"travel_time={travel_time:.6g}"
+        f"travel_time={travel_time:.6g}, "
+        f"replay_status={replay_meta.get('status', 'NA')}, "
+        f"t_pilot={replay_meta.get('t_pilot', 'NA')}, "
+        f"t_replay_best={replay_meta.get('t_replay_best', 'NA')}, "
+        f"attempts={len(replay_meta.get('attempts', []))}"
     )
-    return fp, travel_time, None
+    return fp, travel_time, None, replay_meta
 
 
 def compute_fmm_path_regions(
@@ -1088,10 +1115,11 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             arrival_pypar2: float | None = None
             fp_pypar2_error: str | None = None
             _t_fp_pypar2: float = np.nan
+            pypar2_replay_meta: dict = {}
             if pypar2_enabled:
                 try:
                     _t0 = time.perf_counter()
-                    fp_pypar2, arrival_pypar2, fp_pypar2_error = run_pypar2_tracking(
+                    fp_pypar2, arrival_pypar2, fp_pypar2_error, pypar2_replay_meta = run_pypar2_tracking(
                         config_mc=config_mc,
                         x0=x0,
                         x1=x1,
@@ -1110,6 +1138,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         arrival_pypar2 = None
                 except Exception as exc:
                     fp_pypar2_error = str(exc)
+                    pypar2_replay_meta = {}
                     logger.warning(f"[MC {mc_index}] PyPar2 path failed (non-fatal): {exc}")
 
             # 5) Metrics and persist
@@ -1200,6 +1229,19 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     ),
                     "taichi_arch": str(pypar2_cfg.get("taichi_arch", "")) if pypar2_enabled else "",
                     "max_points": int(pypar2_cfg.get("max_points", 0)) if pypar2_enabled else -1,
+                    "replay_top_k": int(pypar2_cfg.get("replay_top_k", -1)) if pypar2_enabled else -1,
+                    "replay_particles_per_center": (
+                        int(pypar2_cfg.get("replay_particles_per_center", -1)) if pypar2_enabled else -1
+                    ),
+                    "replay_radius_cells": (
+                        float(pypar2_cfg.get("replay_radius_cells", np.nan)) if pypar2_enabled else np.nan
+                    ),
+                    "replay_tolerance": (
+                        float(pypar2_cfg.get("replay_tolerance", np.nan)) if pypar2_enabled else np.nan
+                    ),
+                    "replay_max_redos": (
+                        int(pypar2_cfg.get("replay_max_redos", -1)) if pypar2_enabled else -1
+                    ),
                 },
             }
 
@@ -1283,6 +1325,33 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         ),
                         "travel_time": float(arrival_pypar2) if arrival_pypar2 is not None else np.nan,
                         "error": fp_pypar2_error,
+                        "replay": {
+                            "status": str(pypar2_replay_meta.get("status", "")) if pypar2_replay_meta else "",
+                            "t_pilot": (
+                                float(pypar2_replay_meta["t_pilot"])
+                                if pypar2_replay_meta and pypar2_replay_meta.get("t_pilot") is not None
+                                else np.nan
+                            ),
+                            "t_replay_best": (
+                                float(pypar2_replay_meta["t_replay_best"])
+                                if pypar2_replay_meta and pypar2_replay_meta.get("t_replay_best") is not None
+                                else np.nan
+                            ),
+                            "attempts": (
+                                int(len(pypar2_replay_meta.get("attempts", [])))
+                                if pypar2_replay_meta else 0
+                            ),
+                            "tolerance": (
+                                float(pypar2_replay_meta["tolerance"])
+                                if pypar2_replay_meta and pypar2_replay_meta.get("tolerance") is not None
+                                else np.nan
+                            ),
+                            "max_redos": (
+                                int(pypar2_replay_meta["max_redos"])
+                                if pypar2_replay_meta and pypar2_replay_meta.get("max_redos") is not None
+                                else -1
+                            ),
+                        },
                     },
                 },
                 "endpoint": {
@@ -1440,6 +1509,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "pypar2_seed_trial": (
                         int(seed_trial) if (pypar2_enabled and seed_trial is not None) else np.nan
                     ),
+                    "pypar2_replay_status": consolidated["paths"]["fp_pypar2"]["replay"]["status"],
+                    "pypar2_replay_t_pilot": consolidated["paths"]["fp_pypar2"]["replay"]["t_pilot"],
+                    "pypar2_replay_t_best": consolidated["paths"]["fp_pypar2"]["replay"]["t_replay_best"],
+                    "pypar2_replay_attempts": consolidated["paths"]["fp_pypar2"]["replay"]["attempts"],
                     "comp_time_lrp_dijkstra": _comp_time_lrp_dijkstra,
                     "comp_time_lrp_fmm": _comp_time_lrp_fmm,
                     "comp_time_fp_dijkstra": _comp_time_fp_dijkstra,
@@ -1492,6 +1565,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "pypar2_taichi_arch": str(config_mc.get("pypar2_arg", {}).get("taichi_arch", "")),
             "pypar2_max_points": int(config_mc.get("pypar2_arg", {}).get("max_points", -1)),
             "pypar2_seed_trial": np.nan,
+            "pypar2_replay_status": "",
+            "pypar2_replay_t_pilot": np.nan,
+            "pypar2_replay_t_best": np.nan,
+            "pypar2_replay_attempts": 0,
             "pt_solver": config_mc["particleTracking_arg"]["solver"],
             "pt_backend": config_mc["particleTracking_arg"].get("backend", "auto"),
             "pt_num_particles": int(resolve_particle_count(config_mc, source_rows)),
@@ -1568,6 +1645,19 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 ),
                 "taichi_arch": str(config_mc.get("pypar2_arg", {}).get("taichi_arch", "")),
                 "max_points": int(config_mc.get("pypar2_arg", {}).get("max_points", -1)),
+                "replay_top_k": int(config_mc.get("pypar2_arg", {}).get("replay_top_k", -1)),
+                "replay_particles_per_center": int(
+                    config_mc.get("pypar2_arg", {}).get("replay_particles_per_center", -1)
+                ),
+                "replay_radius_cells": float(
+                    config_mc.get("pypar2_arg", {}).get("replay_radius_cells", np.nan)
+                ),
+                "replay_tolerance": float(
+                    config_mc.get("pypar2_arg", {}).get("replay_tolerance", np.nan)
+                ),
+                "replay_max_redos": int(
+                    config_mc.get("pypar2_arg", {}).get("replay_max_redos", -1)
+                ),
             },
         },
     }
@@ -1780,8 +1870,54 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--pypar2_max_points",
         type=int,
-        default=100_000,
-        help="PyPar2 trajectory max stored points per particle.",
+        default=2_000,
+        help="PyPar2 trajectory max stored points per particle (kept small so trajectory storage stays enabled for the comparison path).",
+    )
+    parser.add_argument(
+        "--pypar2_num_particles",
+        type=int,
+        default=None,
+        help=(
+            "PyPar2 pilot-pass particle count. If unset, reuses --num_particles "
+            "(Pollock-scale). The pilot pass is trajectory-free, so large counts "
+            "are safe; trajectory storage happens only in the pass-2 replay."
+        ),
+    )
+    parser.add_argument(
+        "--pypar2_trajectory_memory_limit",
+        type=int,
+        default=5_000_000,
+        help="PyPar2 trajectory_memory_limit forwarded to the dispatcher (used in pass-2 replay only).",
+    )
+    parser.add_argument(
+        "--pypar2_replay_top_k",
+        type=int,
+        default=5,
+        help="PyPar2 replay: number of fastest pilot particles whose release points seed pass-2 clouds.",
+    )
+    parser.add_argument(
+        "--pypar2_replay_particles_per_center",
+        type=int,
+        default=40,
+        help="PyPar2 replay: particles per top-K release point in pass-2 (total pass-2 particles = top_k * this).",
+    )
+    parser.add_argument(
+        "--pypar2_replay_radius_cells",
+        type=float,
+        default=0.5,
+        help="PyPar2 replay: pass-2 seeding disk radius in units of dx around each release point (0.0 = exact resample).",
+    )
+    parser.add_argument(
+        "--pypar2_replay_tolerance",
+        type=float,
+        default=1.05,
+        help="PyPar2 replay: accept pass-2 when t_best <= t_pilot * this tolerance.",
+    )
+    parser.add_argument(
+        "--pypar2_replay_max_redos",
+        type=int,
+        default=3,
+        help="PyPar2 replay: maximum number of additional pass-2 retries (total attempts = this + 1).",
     )
     group.add_argument("--std", type=float, default=None, help="Standard deviation for GRF generation.")
     group.add_argument("--var", type=float, default=None, help="Variance for GRF generation.")
@@ -1869,6 +2005,15 @@ def main() -> None:
             ),
             "taichi_arch": str(args.pypar2_taichi_arch),
             "max_points": int(args.pypar2_max_points),
+            "num_particles": (
+                None if args.pypar2_num_particles is None else int(args.pypar2_num_particles)
+            ),
+            "trajectory_memory_limit": int(args.pypar2_trajectory_memory_limit),
+            "replay_top_k": int(args.pypar2_replay_top_k),
+            "replay_particles_per_center": int(args.pypar2_replay_particles_per_center),
+            "replay_radius_cells": float(args.pypar2_replay_radius_cells),
+            "replay_tolerance": float(args.pypar2_replay_tolerance),
+            "replay_max_redos": int(args.pypar2_replay_max_redos),
         },
         "particleTracking_arg": {
             "solver": args.solver,
