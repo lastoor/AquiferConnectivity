@@ -40,6 +40,7 @@ PAIR_TO_FIELDS = {
     "fp_fpFSM": ("fp", "fp_fsm"),
     "fp_fm_asr": ("fp", "fp_fm_asr"),
     "fp_fm_asr_iso": ("fp", "fp_fm_asr_iso"),
+    "fp_pypar2": ("fp", "fp_pypar2"),
 }
 DISTANCE_TYPES = ("end_point", "hausdorff", "frechet")
 VARIANCE_METRIC_KEY_CANDIDATES: dict[str, tuple[str, ...]] = {
@@ -67,6 +68,9 @@ VARIANCE_METRIC_KEY_CANDIDATES: dict[str, tuple[str, ...]] = {
     "travel_time_fm_asr_iso": ("travel_time_fm_asr_iso",),
     "comp_time_fp_fm_asr": ("comp_time_fp_fm_asr",),
     "comp_time_fp_fm_asr_iso": ("comp_time_fp_fm_asr_iso",),
+    "len_fp_pypar2": ("len_fp_pypar2",),
+    "travel_time_pypar2": ("travel_time_pypar2",),
+    "comp_time_fp_pypar2": ("comp_time_fp_pypar2",),
 }
 
 
@@ -80,6 +84,7 @@ class PathSet:
     fp_fsm: np.ndarray | None = None
     fp_fm_asr: np.ndarray | None = None
     fp_fm_asr_iso: np.ndarray | None = None
+    fp_pypar2: np.ndarray | None = None
 
 
 @dataclass(slots=True)
@@ -195,6 +200,7 @@ def _consolidated_to_output_data(mc: dict[str, Any]) -> dict[str, Any]:
     out["endpoint_dy_fp_vs_fsm"] = dy.get("fp_vs_fsm", np.nan)
     out["endpoint_dy_fp_vs_fm_asr"] = dy.get("fp_vs_fm_asr", np.nan)
     out["endpoint_dy_fp_vs_fm_asr_iso"] = dy.get("fp_vs_fm_asr_iso", np.nan)
+    out["endpoint_dy_fp_vs_pypar2"] = dy.get("fp_vs_pypar2", np.nan)
     haus_fp_lrp = _extract_consolidated_hausdorff_max(mc, "fp_vs_lrp")
     haus_fp_lrp_fmm = _extract_consolidated_hausdorff_max(mc, "fp_vs_lrp_fmm")
     haus_fp_dijkstra = _extract_consolidated_hausdorff_max(mc, "fp_vs_dijkstra")
@@ -216,6 +222,11 @@ def _consolidated_to_output_data(mc: dict[str, Any]) -> dict[str, Any]:
     out["hausdorffDist_fp_fm_asr_m"] = haus_fp_fm_asr
     out["hausdorff_fp_vs_fm_asr_iso"] = haus_fp_fm_asr_iso
     out["hausdorffDist_fp_fm_asr_iso_m"] = haus_fp_fm_asr_iso
+    haus_fp_pypar2 = _extract_consolidated_hausdorff_max(mc, "fp_vs_pypar2")
+    out["hausdorff_fp_vs_pypar2"] = haus_fp_pypar2
+    out["hausdorffDist_fp_pypar2_m"] = haus_fp_pypar2
+    out["len_fp_pypar2"] = paths.get("fp_pypar2", {}).get("length", np.nan)
+    out["travel_time_pypar2"] = paths.get("fp_pypar2", {}).get("travel_time", np.nan)
     renyi = mc.get("renyi_entropy", {})
     out["renyi_entropy_S1"] = np.asarray(renyi.get("S1", [np.nan]), dtype=float)
     out["renyi_entropy_S2"] = np.asarray(renyi.get("S2", [np.nan]), dtype=float)
@@ -228,6 +239,7 @@ def _consolidated_to_output_data(mc: dict[str, Any]) -> dict[str, Any]:
     out["comp_time_fp"] = float(ct.get("fp", np.nan))
     out["comp_time_fp_fm_asr"] = float(ct.get("fp_fm_asr", np.nan))
     out["comp_time_fp_fm_asr_iso"] = float(ct.get("fp_fm_asr_iso", np.nan))
+    out["comp_time_fp_pypar2"] = float(ct.get("fp_pypar2", np.nan))
     return out
 
 
@@ -242,6 +254,7 @@ def _consolidated_to_pathset(mc: dict[str, Any]) -> PathSet:
         fp_fsm=paths.get("fp_fsm", {}).get("coords"),
         fp_fm_asr=paths.get("fp_fm_asr", {}).get("coords"),
         fp_fm_asr_iso=paths.get("fp_fm_asr_iso", {}).get("coords"),
+        fp_pypar2=paths.get("fp_pypar2", {}).get("coords"),
     )
 
 
@@ -360,6 +373,7 @@ def shapely_pair_distances(
     fp_fsm: np.ndarray | None = None,
     fp_fm_asr: np.ndarray | None = None,
     fp_fm_asr_iso: np.ndarray | None = None,
+    fp_pypar2: np.ndarray | None = None,
 ) -> dict[str, dict[str, float]]:
     na = {pair: np.nan for pair in PAIR_TO_FIELDS}
     out = {"hausdorff": dict(na), "frechet": dict(na)}
@@ -376,6 +390,7 @@ def shapely_pair_distances(
         ("fp_fpFSM", fp_fsm),
         ("fp_fm_asr", fp_fm_asr),
         ("fp_fm_asr_iso", fp_fm_asr_iso),
+        ("fp_pypar2", fp_pypar2),
     ]
     for name, other in pairs:
         ls_other = path_to_linestring(other)
@@ -503,6 +518,7 @@ def resolve_distances(
                 ps.fp_fsm,
                 ps.fp_fm_asr,
                 ps.fp_fm_asr_iso,
+                ps.fp_pypar2,
             )
         return shapely_cache
 
@@ -603,11 +619,11 @@ def mean_std_matrix(arr_list: list[np.ndarray], *, filter_positive: bool = False
 
 
 def _init_lengths() -> dict[str, list[np.ndarray]]:
-    return {"fp": [], "fp_dijkstra": [], "fp_fmm": [], "fp_fsm": [], "fp_fm_asr": [], "fp_fm_asr_iso": [], "lrp": [], "lrp_fmm": []}
+    return {"fp": [], "fp_dijkstra": [], "fp_fmm": [], "fp_fsm": [], "fp_fm_asr": [], "fp_fm_asr_iso": [], "fp_pypar2": [], "lrp": [], "lrp_fmm": []}
 
 
 def _init_times() -> dict[str, list[np.ndarray]]:
-    return {"fpt": [], "fpt_dijkstra": [], "fpt_fmm": [], "fpt_fsm": [], "fpt_fm_asr": [], "fpt_fm_asr_iso": [], "mhr": [], "mhr_fmm": []}
+    return {"fpt": [], "fpt_dijkstra": [], "fpt_fmm": [], "fpt_fsm": [], "fpt_fm_asr": [], "fpt_fm_asr_iso": [], "fpt_pypar2": [], "mhr": [], "mhr_fmm": []}
 
 
 def _init_comp_times() -> dict[str, list[np.ndarray]]:
@@ -620,6 +636,7 @@ def _init_comp_times() -> dict[str, list[np.ndarray]]:
         "ct_fp": [],
         "ct_fp_fm_asr": [],
         "ct_fp_fm_asr_iso": [],
+        "ct_fp_pypar2": [],
     }
 
 
@@ -633,6 +650,7 @@ def _init_distances() -> dict[str, dict[str, list[np.ndarray]]]:
             "fp_fpFSM": [],
             "fp_fm_asr": [],
             "fp_fm_asr_iso": [],
+            "fp_pypar2": [],
         },
         "frechet": {
             "fp_lrp": [],
@@ -642,6 +660,7 @@ def _init_distances() -> dict[str, dict[str, list[np.ndarray]]]:
             "fp_fpFSM": [],
             "fp_fm_asr": [],
             "fp_fm_asr_iso": [],
+            "fp_pypar2": [],
         },
         "end_point": {
             "fp_lrp": [],
@@ -651,6 +670,7 @@ def _init_distances() -> dict[str, dict[str, list[np.ndarray]]]:
             "fp_fpFSM": [],
             "fp_fm_asr": [],
             "fp_fm_asr_iso": [],
+            "fp_pypar2": [],
         },
     }
 
@@ -668,6 +688,7 @@ def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[n
             "fp_fsm": mean_std_matrix(lengths["fp_fsm"]),
             "fp_fm_asr": mean_std_matrix(lengths["fp_fm_asr"]),
             "fp_fm_asr_iso": mean_std_matrix(lengths["fp_fm_asr_iso"]),
+            "fp_pypar2": mean_std_matrix(lengths["fp_pypar2"]),
             "lrp": mean_std_matrix(lengths["lrp"]),
             "lrp_fmm": mean_std_matrix(lengths["lrp_fmm"]),
         },
@@ -678,6 +699,7 @@ def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[n
             "fpt_fsm": mean_std_matrix(times["fpt_fsm"], filter_positive=True),
             "fpt_fm_asr": mean_std_matrix(times["fpt_fm_asr"], filter_positive=True),
             "fpt_fm_asr_iso": mean_std_matrix(times["fpt_fm_asr_iso"], filter_positive=True),
+            "fpt_pypar2": mean_std_matrix(times["fpt_pypar2"], filter_positive=True),
             "mhr": mean_std_matrix(times["mhr"], filter_positive=True),
             "mhr_fmm": mean_std_matrix(times["mhr_fmm"], filter_positive=True),
         },
@@ -690,6 +712,7 @@ def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[n
                 "fp_fpFSM": mean_std_matrix(distances["hausdorff"]["fp_fpFSM"], filter_positive=True),
                 "fp_fm_asr": mean_std_matrix(distances["hausdorff"]["fp_fm_asr"], filter_positive=True),
                 "fp_fm_asr_iso": mean_std_matrix(distances["hausdorff"]["fp_fm_asr_iso"], filter_positive=True),
+                "fp_pypar2": mean_std_matrix(distances["hausdorff"]["fp_pypar2"], filter_positive=True),
             },
             "frechet": {
                 "fp_lrp": mean_std_matrix(distances["frechet"]["fp_lrp"]),
@@ -699,6 +722,7 @@ def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[n
                 "fp_fpFSM": mean_std_matrix(distances["frechet"]["fp_fpFSM"], filter_positive=True),
                 "fp_fm_asr": mean_std_matrix(distances["frechet"]["fp_fm_asr"], filter_positive=True),
                 "fp_fm_asr_iso": mean_std_matrix(distances["frechet"]["fp_fm_asr_iso"], filter_positive=True),
+                "fp_pypar2": mean_std_matrix(distances["frechet"]["fp_pypar2"], filter_positive=True),
             },
             "end_point": {
                 "fp_lrp": mean_std_matrix(distances["end_point"]["fp_lrp"]),
@@ -708,6 +732,7 @@ def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[n
                 "fp_fpFSM": mean_std_matrix(distances["end_point"]["fp_fpFSM"]),
                 "fp_fm_asr": mean_std_matrix(distances["end_point"]["fp_fm_asr"]),
                 "fp_fm_asr_iso": mean_std_matrix(distances["end_point"]["fp_fm_asr_iso"]),
+                "fp_pypar2": mean_std_matrix(distances["end_point"]["fp_pypar2"]),
             },
         },
     }
@@ -721,6 +746,7 @@ def _summary_stats(lengths: dict[str, list[np.ndarray]], times: dict[str, list[n
             "ct_fp": mean_std_matrix(comp_times["ct_fp"], filter_positive=True),
             "ct_fp_fm_asr": mean_std_matrix(comp_times["ct_fp_fm_asr"], filter_positive=True),
             "ct_fp_fm_asr_iso": mean_std_matrix(comp_times["ct_fp_fm_asr_iso"], filter_positive=True),
+            "ct_fp_pypar2": mean_std_matrix(comp_times["ct_fp_pypar2"], filter_positive=True),
         }
     return out
 
@@ -855,12 +881,14 @@ def run_variance_analysis_from_discovered(
             len_fp_fsm_m: list[float] = []
             len_fp_fm_asr_m: list[float] = []
             len_fp_fm_asr_iso_m: list[float] = []
+            len_fp_pypar2_m: list[float] = []
             fpt_m: list[float] = []
             fpt_dijkstra_m: list[float] = []
             fpt_fmm_m: list[float] = []
             fpt_fsm_m: list[float] = []
             fpt_fm_asr_m: list[float] = []
             fpt_fm_asr_iso_m: list[float] = []
+            fpt_pypar2_m: list[float] = []
             mhr_m: list[float] = []
             mhr_fmm_m: list[float] = []
             ct_lrp_dijkstra_m: list[float] = []
@@ -871,6 +899,7 @@ def run_variance_analysis_from_discovered(
             ct_fp_m: list[float] = []
             ct_fp_fm_asr_m: list[float] = []
             ct_fp_fm_asr_iso_m: list[float] = []
+            ct_fp_pypar2_m: list[float] = []
             haus_fp_lrp: list[float] = []
             haus_fp_lrp_fmm: list[float] = []
             haus_fp_d: list[float] = []
@@ -878,6 +907,7 @@ def run_variance_analysis_from_discovered(
             haus_fp_fsm: list[float] = []
             haus_fp_fm_asr: list[float] = []
             haus_fp_fm_asr_iso: list[float] = []
+            haus_fp_pypar2: list[float] = []
             fre_fp_lrp: list[float] = []
             fre_fp_lrp_fmm: list[float] = []
             fre_fp_d: list[float] = []
@@ -885,6 +915,7 @@ def run_variance_analysis_from_discovered(
             fre_fp_fsm: list[float] = []
             fre_fp_fm_asr: list[float] = []
             fre_fp_fm_asr_iso: list[float] = []
+            fre_fp_pypar2: list[float] = []
             end_fp_lrp: list[float] = []
             end_fp_lrp_fmm: list[float] = []
             end_fp_d: list[float] = []
@@ -892,6 +923,7 @@ def run_variance_analysis_from_discovered(
             end_fp_fsm: list[float] = []
             end_fp_fm_asr: list[float] = []
             end_fp_fm_asr_iso: list[float] = []
+            end_fp_pypar2: list[float] = []
 
             if use_consolidated:
                 n_mc = len(rp.mc_files)
@@ -936,6 +968,9 @@ def run_variance_analysis_from_discovered(
                 len_fp_fm_asr_iso_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp_fm_asr_iso"])
                 fpt_fm_asr_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fm_asr"])
                 fpt_fm_asr_iso_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["travel_time_fm_asr_iso"])
+                len_fp_pypar2_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["len_fp_pypar2"])
+                fpt_pypar2_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["travel_time_pypar2"])
+                ct_fp_pypar2_val, _ = _load_main_output_value(output_data, VARIANCE_METRIC_KEY_CANDIDATES["comp_time_fp_pypar2"])
                 metric_values = {
                     "len_fp": len_fp_val,
                     "len_fp_dijkstra": len_fp_dijkstra_val,
@@ -965,6 +1000,7 @@ def run_variance_analysis_from_discovered(
                 len_fp_fsm_m.append(len_fp_fsm_val)
                 len_fp_fm_asr_m.append(len_fp_fm_asr_val)
                 len_fp_fm_asr_iso_m.append(len_fp_fm_asr_iso_val)
+                len_fp_pypar2_m.append(len_fp_pypar2_val)
                 len_lrp_m.append(len_lrp_val)
                 len_lrp_fmm_m.append(len_lrp_fmm_val)
                 fpt_m.append(fpt_val)
@@ -973,6 +1009,7 @@ def run_variance_analysis_from_discovered(
                 fpt_fsm_m.append(fpt_fsm_val)
                 fpt_fm_asr_m.append(fpt_fm_asr_val)
                 fpt_fm_asr_iso_m.append(fpt_fm_asr_iso_val)
+                fpt_pypar2_m.append(fpt_pypar2_val)
                 mhr_m.append(mhr_val)
                 mhr_fmm_m.append(mhr_fmm_val)
                 ct_lrp_dijkstra_m.append(ct_lrp_dijkstra_val)
@@ -983,6 +1020,7 @@ def run_variance_analysis_from_discovered(
                 ct_fp_m.append(ct_fp_val)
                 ct_fp_fm_asr_m.append(ct_fp_fm_asr_val)
                 ct_fp_fm_asr_iso_m.append(ct_fp_fm_asr_iso_val)
+                ct_fp_pypar2_m.append(ct_fp_pypar2_val)
 
                 if use_consolidated and mc_consolidated is not None:
                     pathset_loader_fn = lambda mc=mc_consolidated: _consolidated_to_pathset(mc)
@@ -1008,6 +1046,7 @@ def run_variance_analysis_from_discovered(
                 haus_fp_fsm.append(dist_values["hausdorff"]["fp_fpFSM"])
                 haus_fp_fm_asr.append(dist_values["hausdorff"]["fp_fm_asr"])
                 haus_fp_fm_asr_iso.append(dist_values["hausdorff"]["fp_fm_asr_iso"])
+                haus_fp_pypar2.append(dist_values["hausdorff"]["fp_pypar2"])
                 fre_fp_lrp.append(dist_values["frechet"]["fp_lrp"])
                 fre_fp_lrp_fmm.append(dist_values["frechet"]["fp_lrpFMM"])
                 fre_fp_d.append(dist_values["frechet"]["fp_fpDijkstra"])
@@ -1015,6 +1054,7 @@ def run_variance_analysis_from_discovered(
                 fre_fp_fsm.append(dist_values["frechet"]["fp_fpFSM"])
                 fre_fp_fm_asr.append(dist_values["frechet"]["fp_fm_asr"])
                 fre_fp_fm_asr_iso.append(dist_values["frechet"]["fp_fm_asr_iso"])
+                fre_fp_pypar2.append(dist_values["frechet"]["fp_pypar2"])
                 end_fp_lrp.append(dist_values["end_point"]["fp_lrp"])
                 end_fp_lrp_fmm.append(dist_values["end_point"]["fp_lrpFMM"])
                 end_fp_d.append(dist_values["end_point"]["fp_fpDijkstra"])
@@ -1022,6 +1062,7 @@ def run_variance_analysis_from_discovered(
                 end_fp_fsm.append(dist_values["end_point"]["fp_fpFSM"])
                 end_fp_fm_asr.append(dist_values["end_point"]["fp_fm_asr"])
                 end_fp_fm_asr_iso.append(dist_values["end_point"]["fp_fm_asr_iso"])
+                end_fp_pypar2.append(dist_values["end_point"]["fp_pypar2"])
 
             _append_stat_row(lengths, "fp", len_fp_m)
             _append_stat_row(lengths, "fp_dijkstra", len_fp_dijkstra_m)
@@ -1029,6 +1070,7 @@ def run_variance_analysis_from_discovered(
             _append_stat_row(lengths, "fp_fsm", len_fp_fsm_m)
             _append_stat_row(lengths, "fp_fm_asr", len_fp_fm_asr_m)
             _append_stat_row(lengths, "fp_fm_asr_iso", len_fp_fm_asr_iso_m)
+            _append_stat_row(lengths, "fp_pypar2", len_fp_pypar2_m)
             _append_stat_row(lengths, "lrp", len_lrp_m)
             _append_stat_row(lengths, "lrp_fmm", len_lrp_fmm_m)
             _append_stat_row(times, "fpt", fpt_m)
@@ -1037,6 +1079,7 @@ def run_variance_analysis_from_discovered(
             _append_stat_row(times, "fpt_fsm", fpt_fsm_m)
             _append_stat_row(times, "fpt_fm_asr", fpt_fm_asr_m)
             _append_stat_row(times, "fpt_fm_asr_iso", fpt_fm_asr_iso_m)
+            _append_stat_row(times, "fpt_pypar2", fpt_pypar2_m)
             _append_stat_row(times, "mhr", mhr_m)
             _append_stat_row(times, "mhr_fmm", mhr_fmm_m)
             _append_stat_row(comp_times, "ct_lrp_dijkstra", ct_lrp_dijkstra_m)
@@ -1047,6 +1090,7 @@ def run_variance_analysis_from_discovered(
             _append_stat_row(comp_times, "ct_fp", ct_fp_m)
             _append_stat_row(comp_times, "ct_fp_fm_asr", ct_fp_fm_asr_m)
             _append_stat_row(comp_times, "ct_fp_fm_asr_iso", ct_fp_fm_asr_iso_m)
+            _append_stat_row(comp_times, "ct_fp_pypar2", ct_fp_pypar2_m)
             distances["hausdorff"]["fp_lrp"].append(np.asarray(haus_fp_lrp, dtype=float))
             distances["hausdorff"]["fp_lrpFMM"].append(np.asarray(haus_fp_lrp_fmm, dtype=float))
             distances["hausdorff"]["fp_fpDijkstra"].append(np.asarray(haus_fp_d, dtype=float))
@@ -1054,6 +1098,7 @@ def run_variance_analysis_from_discovered(
             distances["hausdorff"]["fp_fpFSM"].append(np.asarray(haus_fp_fsm, dtype=float))
             distances["hausdorff"]["fp_fm_asr"].append(np.asarray(haus_fp_fm_asr, dtype=float))
             distances["hausdorff"]["fp_fm_asr_iso"].append(np.asarray(haus_fp_fm_asr_iso, dtype=float))
+            distances["hausdorff"]["fp_pypar2"].append(np.asarray(haus_fp_pypar2, dtype=float))
             distances["frechet"]["fp_lrp"].append(np.asarray(fre_fp_lrp, dtype=float))
             distances["frechet"]["fp_lrpFMM"].append(np.asarray(fre_fp_lrp_fmm, dtype=float))
             distances["frechet"]["fp_fpDijkstra"].append(np.asarray(fre_fp_d, dtype=float))
@@ -1061,6 +1106,7 @@ def run_variance_analysis_from_discovered(
             distances["frechet"]["fp_fpFSM"].append(np.asarray(fre_fp_fsm, dtype=float))
             distances["frechet"]["fp_fm_asr"].append(np.asarray(fre_fp_fm_asr, dtype=float))
             distances["frechet"]["fp_fm_asr_iso"].append(np.asarray(fre_fp_fm_asr_iso, dtype=float))
+            distances["frechet"]["fp_pypar2"].append(np.asarray(fre_fp_pypar2, dtype=float))
             distances["end_point"]["fp_lrp"].append(np.asarray(end_fp_lrp, dtype=float))
             distances["end_point"]["fp_lrpFMM"].append(np.asarray(end_fp_lrp_fmm, dtype=float))
             distances["end_point"]["fp_fpDijkstra"].append(np.asarray(end_fp_d, dtype=float))
@@ -1068,6 +1114,7 @@ def run_variance_analysis_from_discovered(
             distances["end_point"]["fp_fpFSM"].append(np.asarray(end_fp_fsm, dtype=float))
             distances["end_point"]["fp_fm_asr"].append(np.asarray(end_fp_fm_asr, dtype=float))
             distances["end_point"]["fp_fm_asr_iso"].append(np.asarray(end_fp_fm_asr_iso, dtype=float))
+            distances["end_point"]["fp_pypar2"].append(np.asarray(end_fp_pypar2, dtype=float))
 
         key = f"var_{var_}"
         data[key] = {
@@ -1128,6 +1175,9 @@ def run_std_analysis_from_discovered(
         hausdorffDist_fp_fm_asr_iso_sm = []
         frechetDist_fp_fm_asr_iso_sm = []
         endPointDist_fp_fm_asr_iso_sm = []
+        hausdorffDist_fp_pypar2_sm = []
+        frechetDist_fp_pypar2_sm = []
+        endPointDist_fp_pypar2_sm = []
 
         run_iter = tqdm(runs, desc=f"std={std_} sizes", unit="size", leave=False) if show_progress else runs
         for rp in run_iter:
@@ -1157,6 +1207,9 @@ def run_std_analysis_from_discovered(
             hausdorffDist_fp_fm_asr_iso_m: list[float] = []
             frechetDist_fp_fm_asr_iso_m: list[float] = []
             endPointDist_fp_fm_asr_iso_m: list[float] = []
+            hausdorffDist_fp_pypar2_m: list[float] = []
+            frechetDist_fp_pypar2_m: list[float] = []
+            endPointDist_fp_pypar2_m: list[float] = []
 
             if use_consolidated:
                 n_mc = len(rp.mc_files)
@@ -1234,6 +1287,9 @@ def run_std_analysis_from_discovered(
                 hausdorffDist_fp_fm_asr_iso_m.append(dist_values["hausdorff"]["fp_fm_asr_iso"])
                 frechetDist_fp_fm_asr_iso_m.append(dist_values["frechet"]["fp_fm_asr_iso"])
                 endPointDist_fp_fm_asr_iso_m.append(dist_values["end_point"]["fp_fm_asr_iso"])
+                hausdorffDist_fp_pypar2_m.append(dist_values["hausdorff"]["fp_pypar2"])
+                frechetDist_fp_pypar2_m.append(dist_values["frechet"]["fp_pypar2"])
+                endPointDist_fp_pypar2_m.append(dist_values["end_point"]["fp_pypar2"])
 
             hausdorffDist_fp_lrp_sm.append(hausdorffDist_fp_lrp_m)
             frechetDist_fp_lrp_sm.append(frechetDist_fp_lrp_m)
@@ -1253,6 +1309,9 @@ def run_std_analysis_from_discovered(
             hausdorffDist_fp_fm_asr_iso_sm.append(hausdorffDist_fp_fm_asr_iso_m)
             frechetDist_fp_fm_asr_iso_sm.append(frechetDist_fp_fm_asr_iso_m)
             endPointDist_fp_fm_asr_iso_sm.append(endPointDist_fp_fm_asr_iso_m)
+            hausdorffDist_fp_pypar2_sm.append(hausdorffDist_fp_pypar2_m)
+            frechetDist_fp_pypar2_sm.append(frechetDist_fp_pypar2_m)
+            endPointDist_fp_pypar2_sm.append(endPointDist_fp_pypar2_m)
 
         key = f"std_{std_}"
         data_path[key] = {
@@ -1275,6 +1334,9 @@ def run_std_analysis_from_discovered(
             "hausdorffDist_fp_fm_asr_iso_sm": hausdorffDist_fp_fm_asr_iso_sm,
             "frechetDist_fp_fm_asr_iso_sm": frechetDist_fp_fm_asr_iso_sm,
             "endPointDist_fp_fm_asr_iso_sm": endPointDist_fp_fm_asr_iso_sm,
+            "hausdorffDist_fp_pypar2_sm": hausdorffDist_fp_pypar2_sm,
+            "frechetDist_fp_pypar2_sm": frechetDist_fp_pypar2_sm,
+            "endPointDist_fp_pypar2_sm": endPointDist_fp_pypar2_sm,
         }
 
     for key_c, value in data_path.items():
@@ -1294,6 +1356,7 @@ def run_std_analysis_from_discovered(
             "fp_fpFMM": [],
             "fp_fm_asr": [],
             "fp_fm_asr_iso": [],
+            "fp_pypar2": [],
         },
         "frechetDist": {
             "fp_lrp": [],
@@ -1302,6 +1365,7 @@ def run_std_analysis_from_discovered(
             "fp_fpFMM": [],
             "fp_fm_asr": [],
             "fp_fm_asr_iso": [],
+            "fp_pypar2": [],
         },
         "endPointDist": {
             "fp_lrp": [],
@@ -1310,6 +1374,7 @@ def run_std_analysis_from_discovered(
             "fp_fpFMM": [],
             "fp_fm_asr": [],
             "fp_fm_asr_iso": [],
+            "fp_pypar2": [],
         },
     }
 
@@ -1320,18 +1385,21 @@ def run_std_analysis_from_discovered(
         stats_std["hausdorffDist"]["fp_fpFMM"].append(stats_path[std_key]["hausdorffDist_fp_fpFMM_sm"])
         stats_std["hausdorffDist"]["fp_fm_asr"].append(stats_path[std_key]["hausdorffDist_fp_fm_asr_sm"])
         stats_std["hausdorffDist"]["fp_fm_asr_iso"].append(stats_path[std_key]["hausdorffDist_fp_fm_asr_iso_sm"])
+        stats_std["hausdorffDist"]["fp_pypar2"].append(stats_path[std_key]["hausdorffDist_fp_pypar2_sm"])
         stats_std["frechetDist"]["fp_lrp"].append(stats_path[std_key]["frechetDist_fp_lrp_sm"])
         stats_std["frechetDist"]["fp_lrpFMM"].append(stats_path[std_key]["frechetDist_fp_lrpFMM_sm"])
         stats_std["frechetDist"]["fp_fpDijkstra"].append(stats_path[std_key]["frechetDist_fp_fpDijkstra_sm"])
         stats_std["frechetDist"]["fp_fpFMM"].append(stats_path[std_key]["frechetDist_fp_fpFMM_sm"])
         stats_std["frechetDist"]["fp_fm_asr"].append(stats_path[std_key]["frechetDist_fp_fm_asr_sm"])
         stats_std["frechetDist"]["fp_fm_asr_iso"].append(stats_path[std_key]["frechetDist_fp_fm_asr_iso_sm"])
+        stats_std["frechetDist"]["fp_pypar2"].append(stats_path[std_key]["frechetDist_fp_pypar2_sm"])
         stats_std["endPointDist"]["fp_lrp"].append(stats_path[std_key]["endPointDist_fp_lrp_sm"])
         stats_std["endPointDist"]["fp_lrpFMM"].append(stats_path[std_key]["endPointDist_fp_lrpFMM_sm"])
         stats_std["endPointDist"]["fp_fpDijkstra"].append(stats_path[std_key]["endPointDist_fp_fpDijkstra_sm"])
         stats_std["endPointDist"]["fp_fpFMM"].append(stats_path[std_key]["endPointDist_fp_fpFMM_sm"])
         stats_std["endPointDist"]["fp_fm_asr"].append(stats_path[std_key]["endPointDist_fp_fm_asr_sm"])
         stats_std["endPointDist"]["fp_fm_asr_iso"].append(stats_path[std_key]["endPointDist_fp_fm_asr_iso_sm"])
+        stats_std["endPointDist"]["fp_pypar2"].append(stats_path[std_key]["endPointDist_fp_pypar2_sm"])
 
     for key1 in stats_std:
         for key2 in stats_std[key1]:

@@ -36,6 +36,7 @@ COLORS = {
     "fpFSM": "#2CA02C",
     "fpFmAsr": "#E377C2",
     "fpFmAsrIso": "#17BECF",
+    "fpPypar2": "#FF7F0E",
 }
 
 LINESTYLES = {
@@ -47,6 +48,7 @@ LINESTYLES = {
     "fpFSM": (0, (3, 1, 1, 1)),
     "fpFmAsr": (0, (5, 2)),
     "fpFmAsrIso": (0, (1, 1)),
+    "fpPypar2": (0, (3, 1, 1, 1, 1, 1)),
 }
 
 LINEWIDTH = 2
@@ -230,6 +232,7 @@ def plot_characteristic_time(
     stats_fpt_fsm: np.ndarray | None = None,
     stats_fpt_fm_asr: np.ndarray | None = None,
     stats_fpt_fm_asr_iso: np.ndarray | None = None,
+    stats_fpt_pypar2: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[6, 3])
     # fig, ax = plt.subplots(figsize=[5, 4])
@@ -263,6 +266,17 @@ def plot_characteristic_time(
             markersize=4,
             markerfacecolor="None",
             label=r"FP (FM-ASR\, iso)",
+        )
+    if stats_fpt_pypar2 is not None and np.any(np.isfinite(stats_fpt_pypar2[:, 0])):
+        ax.errorbar(
+            var,
+            stats_fpt_pypar2[:, 0] / t_ref,
+            color=COLORS["fpPypar2"],
+            linestyle="--",
+            marker="x",
+            markersize=4,
+            markerfacecolor="None",
+            label="FP (PyPar2)",
         )
     ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="LRP (FMM)")
     ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="LRP (Dijkstra)")
@@ -549,6 +563,7 @@ def plot_hausdorff_vs_variance(
     stats_hausdorff_fsm: np.ndarray | None = None,
     stats_hausdorff_fm_asr: np.ndarray | None = None,
     stats_hausdorff_fm_asr_iso: np.ndarray | None = None,
+    stats_hausdorff_pypar2: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[6, 3])
     # fig, ax = plt.subplots(figsize=[5, 4])
@@ -579,6 +594,17 @@ def plot_hausdorff_vs_variance(
             markersize=4,
             markerfacecolor="None",
         )
+    if stats_hausdorff_pypar2 is not None and np.any(np.isfinite(stats_hausdorff_pypar2[:, 0])):
+        ax.errorbar(
+            var,
+            stats_hausdorff_pypar2[:, 0] / i_y,
+            label="FP (PyPar2)",
+            linestyle="--",
+            color=COLORS["fpPypar2"],
+            marker="x",
+            markersize=4,
+            markerfacecolor="None",
+        )
     # ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, yerr=stats_hausdorff_lrp[:, 1] / i_y, label="$d_H$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
     # ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, yerr=stats_hausdorff_lrp_fmm[:, 1] / i_y, label="$d_H$[FP, LRP(FMM)]", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
     # ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, yerr=stats_hausdorff_fmm[:, 1] / i_y, label="$d_H$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")
@@ -605,6 +631,7 @@ def plot_frechet_vs_variance(
     stats_frechet_fsm: np.ndarray | None = None,
     stats_frechet_fm_asr: np.ndarray | None = None,
     stats_frechet_fm_asr_iso: np.ndarray | None = None,
+    stats_frechet_pypar2: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.errorbar(var, stats_frechet_lrp[:, 0] / i_y, yerr=stats_frechet_lrp[:, 1] / i_y, label="$d_F$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
@@ -635,6 +662,17 @@ def plot_frechet_vs_variance(
             marker="o",
             markerfacecolor="None",
         )
+    if stats_frechet_pypar2 is not None and np.any(np.isfinite(stats_frechet_pypar2[:, 0])):
+        ax.errorbar(
+            var,
+            stats_frechet_pypar2[:, 0] / i_y,
+            yerr=stats_frechet_pypar2[:, 1] / i_y,
+            label=r"$d_F$[FP,\,PyPar2]",
+            linestyle="-",
+            color=COLORS["fpPypar2"],
+            marker="o",
+            markerfacecolor="None",
+        )
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ d_F / I_Y \right]$")
@@ -658,6 +696,7 @@ def plot_endpoint_box_by_variance(
         ("fp_fpFSM", "$d_{EP}$[FP, FP(FSM)]", COLORS["fpFSM"]),
         ("fp_fm_asr", r"$d_{EP}$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"$d_{EP}$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
+        ("fp_pypar2", r"$d_{EP}$[FP,\,PyPar2]", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
     width = 0.11
@@ -726,6 +765,7 @@ def plot_hausdorff_box_by_variance(
         ("fp_fpFSM", "$d_H$[FP, FP(FSM)]", COLORS["fpFSM"]),
         ("fp_fm_asr", r"$d_H$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"$d_H$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
+        ("fp_pypar2", r"$d_H$[FP,\,PyPar2]", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
     width = 0.1
@@ -781,6 +821,7 @@ _HAUSDORFF_CDF_PAIRS = (
     ("fp_fpFSM", "$d_H$[FP, FP(FSM)]", COLORS["fpFSM"]),
     ("fp_fm_asr", r"$d_H$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
     ("fp_fm_asr_iso", r"$d_H$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
+    ("fp_pypar2", r"$d_H$[FP,\,PyPar2]", COLORS["fpPypar2"]),
 )
 
 
@@ -820,6 +861,7 @@ _ENTROPY_HAUSDORFF_PANELS = (
     ("fp_fpFSM", "FP (FSM)"),
     ("fp_fm_asr", "FP (FM-ASR)"),
     ("fp_fm_asr_iso", r"FP (FM-ASR\, iso)"),
+    ("fp_pypar2", "FP (PyPar2)"),
     ("fp_lrpFMM", "LRP (FMM)"),
     ("fp_lrp", "LRP (Dijkstra)"),
 )
@@ -914,6 +956,7 @@ def plot_times_box_by_variance(
         ("fpt_fsm", "FP (FSM)", COLORS["fpFSM"], t_ref),
         ("fpt_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"], t_ref),
         ("fpt_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"], t_ref),
+        ("fpt_pypar2", "FP (PyPar2)", COLORS["fpPypar2"], t_ref),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
     n_series = len(series_defs)
@@ -975,6 +1018,7 @@ def plot_comp_time_mean_vs_variance(
         ("stats_ct_fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
         ("stats_ct_fp_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("stats_ct_fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
+        ("stats_ct_fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
     ]
     for key, label, color in series_defs:
         arr = s.get(key)
@@ -1014,6 +1058,7 @@ def plot_comp_time_box_by_variance(
         ("ct_fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
         ("ct_fp_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("ct_fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
+        ("ct_fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
     n_series = len(series_defs)
@@ -1118,6 +1163,7 @@ def plot_wasserstein_len_vs_variance(
     w_fp_fsm: np.ndarray | None = None,
     w_fp_fm_asr: np.ndarray | None = None,
     w_fp_fm_asr_iso: np.ndarray | None = None,
+    w_fp_pypar2: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
     ax.plot(var, w_fp_lrp / i_y, linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None", label="$W_1$[FP, LRP]")
@@ -1130,6 +1176,8 @@ def plot_wasserstein_len_vs_variance(
         ax.plot(var, w_fp_fm_asr / i_y, linestyle="-", color=COLORS["fpFmAsr"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,FM-ASR]")
     if w_fp_fm_asr_iso is not None and np.any(np.isfinite(w_fp_fm_asr_iso)):
         ax.plot(var, w_fp_fm_asr_iso / i_y, linestyle="-", color=COLORS["fpFmAsrIso"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,FM-ASR\,iso]")
+    if w_fp_pypar2 is not None and np.any(np.isfinite(w_fp_pypar2)):
+        ax.plot(var, w_fp_pypar2 / i_y, linestyle="-", color=COLORS["fpPypar2"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,PyPar2]")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$W_1(\mathrm{len})/I_Y$")
@@ -1151,6 +1199,7 @@ def plot_length_cdf_for_variance(*, samples: dict[str, np.ndarray], variance_val
         ("fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
         ("fp_fm_asr", r"FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
+        ("fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
     ]:
         arr = np.asarray(samples.get(key, []), dtype=float).ravel()
         finite = arr[np.isfinite(arr)]
@@ -1278,6 +1327,7 @@ def run_stage4(
             stats_fpt_fsm=s.get("stats_fpt_fsm"),
             stats_fpt_fm_asr=s.get("stats_fpt_fm_asr"),
             stats_fpt_fm_asr_iso=s.get("stats_fpt_fm_asr_iso"),
+            stats_fpt_pypar2=s.get("stats_fpt_pypar2"),
         )
         artifacts.extend(save_figure(fig, section="times", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
@@ -1366,6 +1416,7 @@ def run_stage4(
             stats_hausdorff_fsm=s.get("stats_hausdorff_fsm"),
             stats_hausdorff_fm_asr=s.get("stats_hausdorff_fm_asr"),
             stats_hausdorff_fm_asr_iso=s.get("stats_hausdorff_fm_asr_iso"),
+            stats_hausdorff_pypar2=s.get("stats_hausdorff_pypar2"),
         )
         artifacts.extend(save_figure(fig, section="hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
@@ -1390,6 +1441,7 @@ def run_stage4(
             stats_frechet_fsm=s.get("stats_frechet_fsm"),
             stats_frechet_fm_asr=s.get("stats_frechet_fm_asr"),
             stats_frechet_fm_asr_iso=s.get("stats_frechet_fm_asr_iso"),
+            stats_frechet_pypar2=s.get("stats_frechet_pypar2"),
         )
         artifacts.extend(save_figure(fig, section="frechet", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
@@ -1459,6 +1511,7 @@ def run_stage4(
             w_fp_fsm = _coerce_series(wl["fp_fpFSM"], len(var), label="wasserstein_len.fp_fpFSM", warnings=all_warnings) if "fp_fpFSM" in wl else None
             w_fp_fm_asr = _coerce_series(wl.get("fp_fm_asr", []), len(var), label="wasserstein_len.fp_fm_asr", warnings=all_warnings)
             w_fp_fm_asr_iso = _coerce_series(wl.get("fp_fm_asr_iso", []), len(var), label="wasserstein_len.fp_fm_asr_iso", warnings=all_warnings)
+            w_fp_pypar2 = _coerce_series(wl.get("fp_pypar2", []), len(var), label="wasserstein_len.fp_pypar2", warnings=all_warnings)
             fig, meta = plot_wasserstein_len_vs_variance(
                 var,
                 w_fp_lrp,
@@ -1469,6 +1522,7 @@ def run_stage4(
                 w_fp_fsm=w_fp_fsm,
                 w_fp_fm_asr=w_fp_fm_asr,
                 w_fp_fm_asr_iso=w_fp_fm_asr_iso,
+                w_fp_pypar2=w_fp_pypar2,
             )
             artifacts.extend(save_figure(fig, section="wasserstein_len", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
             plt.close(fig)
