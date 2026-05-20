@@ -534,13 +534,87 @@ def run_particle_tracking_gpu_worker(
     return fp, res, {"vx": np.asarray(vx_pt), "vy": np.asarray(vy_pt)}
 
 
+def run_pypar2_tracking_gpu_worker(
+    *,
+    config_mc: dict[str, Any],
+    x0: int,
+    x1: int,
+    source_rows: np.ndarray,
+    vx_face: np.ndarray,
+    vy_face: np.ndarray,
+    seed_trial: int | None,
+    logger: Any,
+) -> tuple[np.ndarray | None, float | None, str | None]:
+    """GPU-offloaded variant of `base.run_pypar2_tracking`.
+
+    Builds the same `particle_tracking_summary` payload (method='pypar2') and
+    dispatches it through the persistent GPU worker subprocess via `gpu_call`,
+    which routes pypar2 through the generic single-payload path in
+    `_run_single_gpu_payload` (FlowSimulation api.py handles method='pypar2').
+    """
+    cfg = config_mc.get("pypar2_arg", {})
+    n_particles = base.resolve_particle_count(config_mc, source_rows)
+    x_faces = base.build_face_coordinates_from_centers(config_mc["x"]).astype(np.float32)
+    y_faces = base.build_face_coordinates_from_centers(config_mc["y"]).astype(np.float32)
+    seeds_x = np.full(n_particles, x0, dtype=np.float32)
+    seeds_y = np.linspace(
+        float(source_rows[0]), float(source_rows[-1]), n_particles, endpoint=True
+    ).astype(np.float32)
+
+    params: dict[str, Any] = {
+        "method": "pypar2",
+        "backend": str(cfg.get("taichi_arch", "gpu")),
+        "tracking_mode": "arrival",
+        "stop_mode": "first",
+        "save_trajectories": True,
+        "return_fastest": True,
+        "x_faces": x_faces,
+        "y_faces": y_faces,
+        "vx": np.asarray(vx_face, dtype=np.float32),
+        "vy": np.asarray(vy_face, dtype=np.float32),
+        "seeds_x": seeds_x,
+        "seeds_y": seeds_y,
+        "right_x": float(x1),
+        "dt": float(cfg.get("dt", 0.01)),
+        "steps": int(cfg.get("steps", 200_000)),
+        "molecular_diffusion": float(cfg.get("molecular_diffusion", 0.0)),
+        "alpha_l": float(cfg.get("alpha_l", 0.0)),
+        "alpha_t": float(cfg.get("alpha_t", 0.0)),
+        "max_points": int(cfg.get("max_points", 100_000)),
+        "seed": int(seed_trial) if seed_trial is not None else 0,
+    }
+    if cfg.get("velocity_floor") is not None:
+        params["velocity_floor"] = float(cfg["velocity_floor"])
+
+    try:
+        summary = gpu_call("particle_tracking_summary", params)
+    except Exception as exc:
+        logger.warning(f"[PT-PyPar2 GPU] gpu_call failed: {exc}")
+        return None, None, f"PyPar2 GPU dispatch failed: {exc}"
+
+    res = summary.get("fastest")
+    if res is None:
+        return None, None, "PyPar2: no particle reached right_x"
+    fp = np.vstack((np.asarray(res["x"]), np.asarray(res["y"]))).T
+    travel_time = float(res["travel_time"])
+    logger.info(
+        f"[PT-PyPar2 GPU] taichi_arch={summary.get('taichi_arch', params['backend'])}, "
+        f"n_particles={n_particles}, n_arrived={summary.get('n_arrived', 'NA')}, "
+        f"travel_time={travel_time:.6g}"
+    )
+    return fp, travel_time, None
+
+
 def run_unit_simulation_gpu(config: dict[str, Any], mc_index: int, num_trial: int = 200) -> dict[str, Any]:
-    original = base.run_particle_tracking
+    original_pt = base.run_particle_tracking
+    original_pypar2 = base.run_pypar2_tracking
     base.run_particle_tracking = run_particle_tracking_gpu_worker
+    base.run_pypar2_tracking = run_pypar2_tracking_gpu_worker
     try:
         return base.run_unit_simulation(config, mc_index, num_trial=num_trial)
     finally:
-        base.run_particle_tracking = original
+        base.run_particle_tracking = original_pt
+        base.run_pypar2_tracking = original_pypar2
 
 
 def run_field_size_simulation_gpu(
@@ -661,6 +735,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fm_asr_back_factor", type=float, default=2.0)
     parser.add_argument("--fm_asr_min_speed", type=float, default=None)
     parser.add_argument("--fm_asr_max_steps", type=int, default=200_000)
+    parser.add_argument(
+        "--pypar2",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable the Taichi PAR2 random-walk particle-tracking comparison path (fp_pypar2).",
+    )
+    parser.add_argument("--pypar2_dt", type=float, default=0.01, help="PyPar2 time step.")
+    parser.add_argument("--pypar2_steps", type=int, default=200_000, help="PyPar2 max number of time steps.")
+    parser.add_argument(
+        "--pypar2_dm", "--pypar2_molecular_diffusion",
+        dest="pypar2_dm", type=float, default=1e-9,
+        help="PyPar2 molecular diffusion coefficient (Dm).",
+    )
+    parser.add_argument("--pypar2_alpha_l", type=float, default=0.1, help="PyPar2 longitudinal dispersivity (alphaL).")
+    parser.add_argument("--pypar2_alpha_t", type=float, default=0.01, help="PyPar2 transverse dispersivity (alphaT).")
+    parser.add_argument(
+        "--pypar2_velocity_floor",
+        type=float,
+        default=None,
+        help="PyPar2 velocity-floor regularization (default: auto from Dm/alpha_l).",
+    )
+    parser.add_argument(
+        "--pypar2_taichi_arch",
+        type=str,
+        default="gpu",
+        choices=["gpu", "cpu"],
+        help="Taichi backend for PyPar2 (forwarded as taichi_arch through the dispatcher).",
+    )
+    parser.add_argument(
+        "--pypar2_max_points",
+        type=int,
+        default=100_000,
+        help="PyPar2 trajectory max stored points per particle.",
+    )
     parser.add_argument("--cpu_workers", type=int, default=None, help="CPU worker count for preprocessing/finalization.")
     parser.add_argument("--gpu_device", type=str, default=None, help="GPU token to pin the single GPU worker to.")
     group.add_argument("--std", type=float, default=None)
@@ -728,6 +836,19 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
             "back_factor": float(args.fm_asr_back_factor),
             "min_speed": float(args.fmm_min_speed if args.fm_asr_min_speed is None else args.fm_asr_min_speed),
             "max_steps": int(args.fm_asr_max_steps),
+        },
+        "pypar2_arg": {
+            "enabled": bool(args.pypar2),
+            "dt": float(args.pypar2_dt),
+            "steps": int(args.pypar2_steps),
+            "molecular_diffusion": float(args.pypar2_dm),
+            "alpha_l": float(args.pypar2_alpha_l),
+            "alpha_t": float(args.pypar2_alpha_t),
+            "velocity_floor": (
+                None if args.pypar2_velocity_floor is None else float(args.pypar2_velocity_floor)
+            ),
+            "taichi_arch": str(args.pypar2_taichi_arch),
+            "max_points": int(args.pypar2_max_points),
         },
         "particleTracking_arg": {
             "solver": args.solver,

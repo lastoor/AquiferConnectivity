@@ -32,6 +32,19 @@ fm_asr_back_factor="${fm_asr_back_factor:-50.0}"
 fm_asr_max_steps="${fm_asr_max_steps:-1000000}"
 fm_asr_min_speed="${fm_asr_min_speed:-}"
 
+# PyPar2 Taichi random-walk particle tracking. Set pypar2_enabled=0 to disable.
+# Dispersion defaults: weak physical dispersion (Dm=1e-9, alpha_l=0.1, alpha_t=0.01).
+# Leave pypar2_velocity_floor empty to let pypar2 auto-derive from Dm/alpha_l.
+pypar2_enabled="${pypar2_enabled:-1}"
+pypar2_dt="${pypar2_dt:-0.01}"
+pypar2_steps="${pypar2_steps:-200000}"
+pypar2_dm="${pypar2_dm:-1e-9}"
+pypar2_alpha_l="${pypar2_alpha_l:-0.1}"
+pypar2_alpha_t="${pypar2_alpha_t:-0.01}"
+pypar2_velocity_floor="${pypar2_velocity_floor:-}"
+pypar2_taichi_arch="${pypar2_taichi_arch:-gpu}"
+pypar2_max_points="${pypar2_max_points:-100000}"
+
 time="08:00:00"
 mem_per_cpu="2GB"
 cpus_per_task="8"
@@ -68,6 +81,23 @@ else
     fm_asr_args+=" --fm_asr_max_steps ${fm_asr_max_steps}"
     if [[ -n "${fm_asr_min_speed}" ]]; then
         fm_asr_args+=" --fm_asr_min_speed ${fm_asr_min_speed}"
+    fi
+fi
+
+pypar2_args=""
+if [[ "${pypar2_enabled}" == "0" ]]; then
+    pypar2_args+=" --no-pypar2"
+else
+    pypar2_args+=" --pypar2"
+    pypar2_args+=" --pypar2_dt ${pypar2_dt}"
+    pypar2_args+=" --pypar2_steps ${pypar2_steps}"
+    pypar2_args+=" --pypar2_dm ${pypar2_dm}"
+    pypar2_args+=" --pypar2_alpha_l ${pypar2_alpha_l}"
+    pypar2_args+=" --pypar2_alpha_t ${pypar2_alpha_t}"
+    pypar2_args+=" --pypar2_taichi_arch ${pypar2_taichi_arch}"
+    pypar2_args+=" --pypar2_max_points ${pypar2_max_points}"
+    if [[ -n "${pypar2_velocity_floor}" ]]; then
+        pypar2_args+=" --pypar2_velocity_floor ${pypar2_velocity_floor}"
     fi
 fi
 
@@ -136,6 +166,7 @@ TAICHI_PY=/home1/binhaoli/.conda/envs/taichi_env/bin/python
   --fsm_dt ${fsm_dt} \\
   --fsm_max_steps ${fsm_max_steps} \\
   ${fm_asr_args} \\
+  ${pypar2_args} \\
   ${fsm_extra_args}
 
 echo "End Time: \$(date)"

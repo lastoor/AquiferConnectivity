@@ -35,7 +35,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 12
+MC_SCHEMA_VERSION = 13
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -52,12 +52,14 @@ MC_FIELDS = [
     "len_fp_fsm",
     "len_fp_fm_asr",
     "len_fp_fm_asr_iso",
+    "len_fp_pypar2",
     "travel_time_fp",
     "travel_time_dijkstra",
     "travel_time_fmm",
     "travel_time_fsm",
     "travel_time_fm_asr",
     "travel_time_fm_asr_iso",
+    "travel_time_pypar2",
     "resistance_lrp",
     "resistance_lrp_fmm",
     "endpoint_dy_fp_vs_lrp",
@@ -67,6 +69,7 @@ MC_FIELDS = [
     "endpoint_dy_fp_vs_fsm",
     "endpoint_dy_fp_vs_fm_asr",
     "endpoint_dy_fp_vs_fm_asr_iso",
+    "endpoint_dy_fp_vs_pypar2",
     "endpoint_method",
     "endpoint_x_ref",
     "x_end_fp",
@@ -77,6 +80,7 @@ MC_FIELDS = [
     "x_end_fp_fsm",
     "x_end_fp_fm_asr",
     "x_end_fp_fm_asr_iso",
+    "x_end_fp_pypar2",
     "y_end_fp",
     "y_end_lrp",
     "y_end_lrp_fmm",
@@ -85,6 +89,7 @@ MC_FIELDS = [
     "y_end_fp_fsm",
     "y_end_fp_fm_asr",
     "y_end_fp_fm_asr_iso",
+    "y_end_fp_pypar2",
     "pt_solver",
     "pt_backend",
     "pt_num_particles",
@@ -104,6 +109,16 @@ MC_FIELDS = [
     "fm_asr_back_factor",
     "fm_asr_min_speed",
     "fm_asr_max_steps",
+    "pypar2_enabled",
+    "pypar2_dt",
+    "pypar2_steps",
+    "pypar2_dm",
+    "pypar2_alpha_l",
+    "pypar2_alpha_t",
+    "pypar2_velocity_floor",
+    "pypar2_taichi_arch",
+    "pypar2_max_points",
+    "pypar2_seed_trial",
     "seed_base",
     "seed_effective_run",
     "seed_mode",
@@ -119,6 +134,7 @@ MC_FIELDS = [
     "comp_time_fp_fsm",
     "comp_time_fp_fm_asr",
     "comp_time_fp_fm_asr_iso",
+    "comp_time_fp_pypar2",
     "comp_time_fp",
 ]
 
@@ -136,6 +152,7 @@ OBJECT_FIELDS = {
     "fmm_zero_policy",
     "seed_mode",
     "variance_seed_policy",
+    "pypar2_taichi_arch",
 }
 
 INT_FIELDS = {
@@ -149,6 +166,7 @@ INT_FIELDS = {
 BOOL_FIELDS = {
     "pt_align_with_modflow_velocity",
     "fm_asr_enabled",
+    "pypar2_enabled",
 }
 
 
@@ -525,6 +543,77 @@ def run_particle_tracking(
     res = dict(res)
     res["backend"] = summary.get("backend", summary_params["backend"])
     return fp, res, {"vx": np.asarray(vx_pt), "vy": np.asarray(vy_pt)}
+
+
+def run_pypar2_tracking(
+    *,
+    config_mc: dict[str, Any],
+    x0: int,
+    x1: int,
+    source_rows: np.ndarray,
+    vx_face: np.ndarray,
+    vy_face: np.ndarray,
+    seed_trial: int | None,
+    logger: Any,
+) -> tuple[np.ndarray | None, float | None, str | None]:
+    """Run the Taichi PAR2 random-walk solver via the FlowSimulation dispatcher.
+
+    Returns (fp_xy, travel_time, error_message). On any non-fatal failure the
+    caller receives (None, None, msg) so the surrounding MC trial can continue.
+    The GPU worker entrypoint monkey-patches this function to route execution
+    through the persistent GPU subprocess.
+    """
+    cfg = config_mc.get("pypar2_arg", {})
+    n_particles = resolve_particle_count(config_mc, source_rows)
+    x_faces = build_face_coordinates_from_centers(config_mc["x"]).astype(np.float32)
+    y_faces = build_face_coordinates_from_centers(config_mc["y"]).astype(np.float32)
+    seeds_x = np.full(n_particles, x0, dtype=np.float32)
+    seeds_y = np.linspace(
+        float(source_rows[0]), float(source_rows[-1]), n_particles, endpoint=True
+    ).astype(np.float32)
+
+    params: dict[str, Any] = {
+        "method": "pypar2",
+        "backend": str(cfg.get("taichi_arch", "gpu")),
+        "tracking_mode": "arrival",
+        "stop_mode": "first",
+        "save_trajectories": True,
+        "return_fastest": True,
+        "x_faces": x_faces,
+        "y_faces": y_faces,
+        "vx": np.asarray(vx_face, dtype=np.float32),
+        "vy": np.asarray(vy_face, dtype=np.float32),
+        "seeds_x": seeds_x,
+        "seeds_y": seeds_y,
+        "right_x": float(x1),
+        "dt": float(cfg.get("dt", 0.01)),
+        "steps": int(cfg.get("steps", 200_000)),
+        "molecular_diffusion": float(cfg.get("molecular_diffusion", 0.0)),
+        "alpha_l": float(cfg.get("alpha_l", 0.0)),
+        "alpha_t": float(cfg.get("alpha_t", 0.0)),
+        "max_points": int(cfg.get("max_points", 100_000)),
+        "seed": int(seed_trial) if seed_trial is not None else 0,
+    }
+    if cfg.get("velocity_floor") is not None:
+        params["velocity_floor"] = float(cfg["velocity_floor"])
+
+    try:
+        summary = sim_pt.particle_tracking_summary(params)
+    except Exception as exc:
+        logger.warning(f"[PT-PyPar2] particle_tracking_summary failed: {exc}")
+        return None, None, f"PyPar2 dispatcher failed: {exc}"
+
+    res = summary.get("fastest")
+    if res is None:
+        return None, None, "PyPar2: no particle reached right_x"
+    fp = np.vstack((np.asarray(res["x"]), np.asarray(res["y"]))).T
+    travel_time = float(res["travel_time"])
+    logger.info(
+        f"[PT-PyPar2] taichi_arch={summary.get('taichi_arch', params['backend'])}, "
+        f"n_particles={n_particles}, n_arrived={summary.get('n_arrived', 'NA')}, "
+        f"travel_time={travel_time:.6g}"
+    )
+    return fp, travel_time, None
 
 
 def compute_fmm_path_regions(
@@ -992,6 +1081,37 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 )
                 continue
 
+            # 4.1) PyPar2 Taichi random-walk particle tracking (full-face Darcy velocity, non-fatal)
+            pypar2_cfg = config_mc.get("pypar2_arg", {})
+            pypar2_enabled = bool(pypar2_cfg.get("enabled", False))
+            fp_pypar2: np.ndarray | None = None
+            arrival_pypar2: float | None = None
+            fp_pypar2_error: str | None = None
+            _t_fp_pypar2: float = np.nan
+            if pypar2_enabled:
+                try:
+                    _t0 = time.perf_counter()
+                    fp_pypar2, arrival_pypar2, fp_pypar2_error = run_pypar2_tracking(
+                        config_mc=config_mc,
+                        x0=x0,
+                        x1=x1,
+                        source_rows=source_rows,
+                        vx_face=vx_face,
+                        vy_face=vy_face,
+                        seed_trial=seed_trial,
+                        logger=logger,
+                    )
+                    _t_fp_pypar2 = time.perf_counter() - _t0
+                    if fp_pypar2 is not None and not sim_path.is_path_valid(
+                        fp_pypar2, domain_box, len_min=np.abs(x1 - x0)
+                    ):
+                        fp_pypar2_error = "Invalid FP(PyPar2) geometry"
+                        fp_pypar2 = None
+                        arrival_pypar2 = None
+                except Exception as exc:
+                    fp_pypar2_error = str(exc)
+                    logger.warning(f"[MC {mc_index}] PyPar2 path failed (non-fatal): {exc}")
+
             # 5) Metrics and persist
             D_fp_lrp, _, _ = distance_distribution(fp, lrp, ds=1.0)
             D_fp_lrp_fmm, _, _ = distance_distribution(fp, lrp_fmm, ds=1.0)
@@ -1006,6 +1126,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             D_fp_fm_asr_iso: np.ndarray | None = None
             if fp_fm_asr_iso is not None:
                 D_fp_fm_asr_iso, _, _ = distance_distribution(fp, fp_fm_asr_iso, ds=1.0)
+            D_fp_pypar2: np.ndarray | None = None
+            if fp_pypar2 is not None:
+                D_fp_pypar2, _, _ = distance_distribution(fp, fp_pypar2, ds=1.0)
 
             vx_pt = np.asarray(_pt_velocity["vx"])
             renyi_s1, renyi_s2 = _renyi_entropy_vx_profile(vx_pt)
@@ -1020,6 +1143,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             y_end_fp_fm_asr_iso = (
                 endpoint_y_at_x(fp_fm_asr_iso, x_ref=x_ref) if fp_fm_asr_iso is not None else np.nan
             )
+            y_end_fp_pypar2 = endpoint_y_at_x(fp_pypar2, x_ref=x_ref) if fp_pypar2 is not None else np.nan
 
             seeds_dict = {
                 "base": none_to_nan(config_mc.get("seed_base", np.nan)),
@@ -1061,6 +1185,22 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "min_speed": float(fp_fm_asr_cfg.get("min_speed", config_mc["fmm_arg"]["min_speed"])),
                     "max_steps": int(fp_fm_asr_cfg.get("max_steps", 200_000)),
                 },
+                "pypar2": {
+                    "enabled": pypar2_enabled,
+                    "dt": float(pypar2_cfg.get("dt", np.nan)) if pypar2_enabled else np.nan,
+                    "steps": int(pypar2_cfg.get("steps", 0)) if pypar2_enabled else -1,
+                    "molecular_diffusion": float(pypar2_cfg.get("molecular_diffusion", np.nan))
+                        if pypar2_enabled else np.nan,
+                    "alpha_l": float(pypar2_cfg.get("alpha_l", np.nan)) if pypar2_enabled else np.nan,
+                    "alpha_t": float(pypar2_cfg.get("alpha_t", np.nan)) if pypar2_enabled else np.nan,
+                    "velocity_floor": (
+                        float(pypar2_cfg["velocity_floor"])
+                        if pypar2_enabled and pypar2_cfg.get("velocity_floor") is not None
+                        else np.nan
+                    ),
+                    "taichi_arch": str(pypar2_cfg.get("taichi_arch", "")) if pypar2_enabled else "",
+                    "max_points": int(pypar2_cfg.get("max_points", 0)) if pypar2_enabled else -1,
+                },
             }
 
             _comp_time_lrp_dijkstra = _t_lrp_dijkstra
@@ -1070,6 +1210,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             _comp_time_fp_fsm = _t_head + _t_vel_face + _t_fp_fsm_solver
             _comp_time_fp_fm_asr = _t_head + _t_vel_face + _t_fp_fm_asr_solver
             _comp_time_fp_fm_asr_iso = _t_head + _t_vel_face + _t_fp_fm_asr_iso_solver
+            _comp_time_fp_pypar2 = _t_head + _t_vel_face + _t_fp_pypar2
             _comp_time_fp = _t_head + _t_fp_pt
 
             consolidated = {
@@ -1133,6 +1274,16 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "travel_time": float(arrival_fm_asr_iso) if arrival_fm_asr_iso is not None else np.nan,
                         "error": fp_fm_asr_iso_error,
                     },
+                    "fp_pypar2": {
+                        "coords": fp_pypar2,
+                        "length": (
+                            float(sim_utils.euclidean_length(fp_pypar2))
+                            if fp_pypar2 is not None
+                            else np.nan
+                        ),
+                        "travel_time": float(arrival_pypar2) if arrival_pypar2 is not None else np.nan,
+                        "error": fp_pypar2_error,
+                    },
                 },
                 "endpoint": {
                     "method": "interp_at_xref",
@@ -1152,6 +1303,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "x": float(fp_fm_asr_iso[-1, 0]) if fp_fm_asr_iso is not None else np.nan,
                         "y": float(y_end_fp_fm_asr_iso),
                     },
+                    "fp_pypar2": {
+                        "x": float(fp_pypar2[-1, 0]) if fp_pypar2 is not None else np.nan,
+                        "y": float(y_end_fp_pypar2),
+                    },
                     "lrp": {"x": float(lrp[-1, 0]), "y": float(y_end_lrp)},
                     "lrp_fmm": {"x": float(lrp_fmm[-1, 0]), "y": float(y_end_lrp_fmm)},
                     "dy": {
@@ -1166,6 +1321,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "fp_vs_fm_asr_iso": (
                             float(y_end_fp - y_end_fp_fm_asr_iso) if fp_fm_asr_iso is not None else np.nan
                         ),
+                        "fp_vs_pypar2": (
+                            float(y_end_fp - y_end_fp_pypar2) if fp_pypar2 is not None else np.nan
+                        ),
                     },
                 },
                 "hausdorff": {
@@ -1177,6 +1335,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp_vs_fm_asr": _hausdorff_detail(D_fp_fm_asr) if D_fp_fm_asr is not None else None,
                     "fp_vs_fm_asr_iso": (
                         _hausdorff_detail(D_fp_fm_asr_iso) if D_fp_fm_asr_iso is not None else None
+                    ),
+                    "fp_vs_pypar2": (
+                        _hausdorff_detail(D_fp_pypar2) if D_fp_pypar2 is not None else None
                     ),
                 },
                 "renyi_entropy": {
@@ -1191,6 +1352,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp_fsm": _comp_time_fp_fsm,
                     "fp_fm_asr": _comp_time_fp_fm_asr,
                     "fp_fm_asr_iso": _comp_time_fp_fm_asr_iso,
+                    "fp_pypar2": _comp_time_fp_pypar2,
                     "fp": _comp_time_fp,
                 },
             }
@@ -1209,12 +1371,14 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "len_fp_fsm": consolidated["paths"]["fp_fsm"]["length"],
                     "len_fp_fm_asr": consolidated["paths"]["fp_fm_asr"]["length"],
                     "len_fp_fm_asr_iso": consolidated["paths"]["fp_fm_asr_iso"]["length"],
+                    "len_fp_pypar2": consolidated["paths"]["fp_pypar2"]["length"],
                     "travel_time_fp": consolidated["paths"]["fp"]["travel_time"],
                     "travel_time_dijkstra": consolidated["paths"]["fp_dijkstra"]["travel_time"],
                     "travel_time_fmm": consolidated["paths"]["fp_fmm"]["travel_time"],
                     "travel_time_fsm": consolidated["paths"]["fp_fsm"]["travel_time"],
                     "travel_time_fm_asr": consolidated["paths"]["fp_fm_asr"]["travel_time"],
                     "travel_time_fm_asr_iso": consolidated["paths"]["fp_fm_asr_iso"]["travel_time"],
+                    "travel_time_pypar2": consolidated["paths"]["fp_pypar2"]["travel_time"],
                     "resistance_lrp": consolidated["paths"]["lrp"]["resistance"],
                     "resistance_lrp_fmm": consolidated["paths"]["lrp_fmm"]["resistance"],
                     "endpoint_method": "interp_at_xref",
@@ -1227,6 +1391,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "x_end_fp_fsm": consolidated["endpoint"]["fp_fsm"]["x"],
                     "x_end_fp_fm_asr": consolidated["endpoint"]["fp_fm_asr"]["x"],
                     "x_end_fp_fm_asr_iso": consolidated["endpoint"]["fp_fm_asr_iso"]["x"],
+                    "x_end_fp_pypar2": consolidated["endpoint"]["fp_pypar2"]["x"],
                     "y_end_fp": consolidated["endpoint"]["fp"]["y"],
                     "y_end_lrp": consolidated["endpoint"]["lrp"]["y"],
                     "y_end_lrp_fmm": consolidated["endpoint"]["lrp_fmm"]["y"],
@@ -1235,6 +1400,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "y_end_fp_fsm": consolidated["endpoint"]["fp_fsm"]["y"],
                     "y_end_fp_fm_asr": consolidated["endpoint"]["fp_fm_asr"]["y"],
                     "y_end_fp_fm_asr_iso": consolidated["endpoint"]["fp_fm_asr_iso"]["y"],
+                    "y_end_fp_pypar2": consolidated["endpoint"]["fp_pypar2"]["y"],
                     "endpoint_dy_fp_vs_lrp": consolidated["endpoint"]["dy"]["fp_vs_lrp"],
                     "endpoint_dy_fp_vs_lrp_fmm": consolidated["endpoint"]["dy"]["fp_vs_lrp_fmm"],
                     "endpoint_dy_fp_vs_dijkstra": consolidated["endpoint"]["dy"]["fp_vs_dijkstra"],
@@ -1242,6 +1408,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "endpoint_dy_fp_vs_fsm": consolidated["endpoint"]["dy"]["fp_vs_fsm"],
                     "endpoint_dy_fp_vs_fm_asr": consolidated["endpoint"]["dy"]["fp_vs_fm_asr"],
                     "endpoint_dy_fp_vs_fm_asr_iso": consolidated["endpoint"]["dy"]["fp_vs_fm_asr_iso"],
+                    "endpoint_dy_fp_vs_pypar2": consolidated["endpoint"]["dy"]["fp_vs_pypar2"],
                     "pt_solver": config_dict["particle_tracking"]["solver"],
                     "pt_backend": config_dict["particle_tracking"]["backend"],
                     "pt_num_particles": config_dict["particle_tracking"]["num_particles"],
@@ -1261,6 +1428,18 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fm_asr_back_factor": config_dict["fm_asr"]["back_factor"],
                     "fm_asr_min_speed": config_dict["fm_asr"]["min_speed"],
                     "fm_asr_max_steps": config_dict["fm_asr"]["max_steps"],
+                    "pypar2_enabled": config_dict["pypar2"]["enabled"],
+                    "pypar2_dt": config_dict["pypar2"]["dt"],
+                    "pypar2_steps": config_dict["pypar2"]["steps"],
+                    "pypar2_dm": config_dict["pypar2"]["molecular_diffusion"],
+                    "pypar2_alpha_l": config_dict["pypar2"]["alpha_l"],
+                    "pypar2_alpha_t": config_dict["pypar2"]["alpha_t"],
+                    "pypar2_velocity_floor": config_dict["pypar2"]["velocity_floor"],
+                    "pypar2_taichi_arch": config_dict["pypar2"]["taichi_arch"],
+                    "pypar2_max_points": config_dict["pypar2"]["max_points"],
+                    "pypar2_seed_trial": (
+                        int(seed_trial) if (pypar2_enabled and seed_trial is not None) else np.nan
+                    ),
                     "comp_time_lrp_dijkstra": _comp_time_lrp_dijkstra,
                     "comp_time_lrp_fmm": _comp_time_lrp_fmm,
                     "comp_time_fp_dijkstra": _comp_time_fp_dijkstra,
@@ -1268,6 +1447,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "comp_time_fp_fsm": _comp_time_fp_fsm,
                     "comp_time_fp_fm_asr": _comp_time_fp_fm_asr,
                     "comp_time_fp_fm_asr_iso": _comp_time_fp_fm_asr_iso,
+                    "comp_time_fp_pypar2": _comp_time_fp_pypar2,
                     "comp_time_fp": _comp_time_fp,
                 }
             )
@@ -1298,6 +1478,20 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "fm_asr_back_factor": float(config_mc.get("fm_asr_arg", {}).get("back_factor", np.nan)),
             "fm_asr_min_speed": float(config_mc.get("fm_asr_arg", {}).get("min_speed", np.nan)),
             "fm_asr_max_steps": int(config_mc.get("fm_asr_arg", {}).get("max_steps", -1)),
+            "pypar2_enabled": bool(config_mc.get("pypar2_arg", {}).get("enabled", False)),
+            "pypar2_dt": float(config_mc.get("pypar2_arg", {}).get("dt", np.nan)),
+            "pypar2_steps": int(config_mc.get("pypar2_arg", {}).get("steps", -1)),
+            "pypar2_dm": float(config_mc.get("pypar2_arg", {}).get("molecular_diffusion", np.nan)),
+            "pypar2_alpha_l": float(config_mc.get("pypar2_arg", {}).get("alpha_l", np.nan)),
+            "pypar2_alpha_t": float(config_mc.get("pypar2_arg", {}).get("alpha_t", np.nan)),
+            "pypar2_velocity_floor": (
+                float(config_mc.get("pypar2_arg", {}).get("velocity_floor", np.nan))
+                if config_mc.get("pypar2_arg", {}).get("velocity_floor") is not None
+                else np.nan
+            ),
+            "pypar2_taichi_arch": str(config_mc.get("pypar2_arg", {}).get("taichi_arch", "")),
+            "pypar2_max_points": int(config_mc.get("pypar2_arg", {}).get("max_points", -1)),
+            "pypar2_seed_trial": np.nan,
             "pt_solver": config_mc["particleTracking_arg"]["solver"],
             "pt_backend": config_mc["particleTracking_arg"].get("backend", "auto"),
             "pt_num_particles": int(resolve_particle_count(config_mc, source_rows)),
@@ -1357,6 +1551,23 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 "back_factor": float(config_mc.get("fm_asr_arg", {}).get("back_factor", np.nan)),
                 "min_speed": float(config_mc.get("fm_asr_arg", {}).get("min_speed", np.nan)),
                 "max_steps": int(config_mc.get("fm_asr_arg", {}).get("max_steps", -1)),
+            },
+            "pypar2": {
+                "enabled": bool(config_mc.get("pypar2_arg", {}).get("enabled", False)),
+                "dt": float(config_mc.get("pypar2_arg", {}).get("dt", np.nan)),
+                "steps": int(config_mc.get("pypar2_arg", {}).get("steps", -1)),
+                "molecular_diffusion": float(
+                    config_mc.get("pypar2_arg", {}).get("molecular_diffusion", np.nan)
+                ),
+                "alpha_l": float(config_mc.get("pypar2_arg", {}).get("alpha_l", np.nan)),
+                "alpha_t": float(config_mc.get("pypar2_arg", {}).get("alpha_t", np.nan)),
+                "velocity_floor": (
+                    float(config_mc.get("pypar2_arg", {}).get("velocity_floor", np.nan))
+                    if config_mc.get("pypar2_arg", {}).get("velocity_floor") is not None
+                    else np.nan
+                ),
+                "taichi_arch": str(config_mc.get("pypar2_arg", {}).get("taichi_arch", "")),
+                "max_points": int(config_mc.get("pypar2_arg", {}).get("max_points", -1)),
             },
         },
     }
@@ -1538,6 +1749,40 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fm_asr_back_factor", type=float, default=2.0)
     parser.add_argument("--fm_asr_min_speed", type=float, default=None)
     parser.add_argument("--fm_asr_max_steps", type=int, default=200_000)
+    parser.add_argument(
+        "--pypar2",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable the Taichi PAR2 random-walk particle-tracking comparison path (fp_pypar2).",
+    )
+    parser.add_argument("--pypar2_dt", type=float, default=0.01, help="PyPar2 time step.")
+    parser.add_argument("--pypar2_steps", type=int, default=200_000, help="PyPar2 max number of time steps.")
+    parser.add_argument(
+        "--pypar2_dm", "--pypar2_molecular_diffusion",
+        dest="pypar2_dm", type=float, default=1e-9,
+        help="PyPar2 molecular diffusion coefficient (Dm).",
+    )
+    parser.add_argument("--pypar2_alpha_l", type=float, default=0.1, help="PyPar2 longitudinal dispersivity (alphaL).")
+    parser.add_argument("--pypar2_alpha_t", type=float, default=0.01, help="PyPar2 transverse dispersivity (alphaT).")
+    parser.add_argument(
+        "--pypar2_velocity_floor",
+        type=float,
+        default=None,
+        help="PyPar2 velocity-floor regularization (default: auto from Dm/alpha_l).",
+    )
+    parser.add_argument(
+        "--pypar2_taichi_arch",
+        type=str,
+        default="gpu",
+        choices=["gpu", "cpu"],
+        help="Taichi backend for PyPar2 (forwarded as taichi_arch through the dispatcher).",
+    )
+    parser.add_argument(
+        "--pypar2_max_points",
+        type=int,
+        default=100_000,
+        help="PyPar2 trajectory max stored points per particle.",
+    )
     group.add_argument("--std", type=float, default=None, help="Standard deviation for GRF generation.")
     group.add_argument("--var", type=float, default=None, help="Variance for GRF generation.")
     args = parser.parse_args()
@@ -1611,6 +1856,19 @@ def main() -> None:
             "back_factor": float(args.fm_asr_back_factor),
             "min_speed": float(args.fmm_min_speed if args.fm_asr_min_speed is None else args.fm_asr_min_speed),
             "max_steps": int(args.fm_asr_max_steps),
+        },
+        "pypar2_arg": {
+            "enabled": bool(args.pypar2),
+            "dt": float(args.pypar2_dt),
+            "steps": int(args.pypar2_steps),
+            "molecular_diffusion": float(args.pypar2_dm),
+            "alpha_l": float(args.pypar2_alpha_l),
+            "alpha_t": float(args.pypar2_alpha_t),
+            "velocity_floor": (
+                None if args.pypar2_velocity_floor is None else float(args.pypar2_velocity_floor)
+            ),
+            "taichi_arch": str(args.pypar2_taichi_arch),
+            "max_points": int(args.pypar2_max_points),
         },
         "particleTracking_arg": {
             "solver": args.solver,
