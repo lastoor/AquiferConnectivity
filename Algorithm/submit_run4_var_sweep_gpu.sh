@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
+VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
 # VAR=("0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
-VAR=("1" "5")
+# VAR=("1" "5")
 length_scale="0.05"
-run="13_pypar2_ratio0p15_factor10_al0p1_at0p01"
+run="13p2_pypar2-al0p2-at0p2_asr-ratio0p04-factor12-multiplier1p2"
 dh="0.1"
 
 num_mc="1000"
@@ -27,8 +27,9 @@ fsm_max_steps="1000000"
 # Leave fm_asr_min_speed empty to use --fmm_min_speed for FM-ASR (same as worker default).
 # Override via export before running this script if needed.
 fm_asr_enabled="${fm_asr_enabled:-1}"
-fm_asr_perp_ratio="${fm_asr_perp_ratio:-0.05}"
-fm_asr_back_factor="${fm_asr_back_factor:-10.0}"
+fm_asr_perp_ratio="${fm_asr_perp_ratio:-0.04}"
+fm_asr_back_factor="${fm_asr_back_factor:-12.0}"
+fm_asr_velocity_multiplier="${fm_asr_velocity_multiplier:-1.2}"
 fm_asr_max_steps="${fm_asr_max_steps:-1000000}"
 fm_asr_min_speed="${fm_asr_min_speed:-}"
 
@@ -39,8 +40,8 @@ pypar2_enabled="${pypar2_enabled:-1}"
 pypar2_dt="${pypar2_dt:-0.01}"
 pypar2_steps="${pypar2_steps:-200000}"
 pypar2_dm="${pypar2_dm:-1e-9}"
-pypar2_alpha_l="${pypar2_alpha_l:-0.1}"
-pypar2_alpha_t="${pypar2_alpha_t:-0.01}"
+pypar2_alpha_l="${pypar2_alpha_l:-0.2}"
+pypar2_alpha_t="${pypar2_alpha_t:-0.2}"
 pypar2_velocity_floor="${pypar2_velocity_floor:-}"
 pypar2_taichi_arch="${pypar2_taichi_arch:-gpu}"
 pypar2_max_points="${pypar2_max_points:-2000}"
@@ -93,6 +94,7 @@ if [[ "${fm_asr_enabled}" == "0" ]]; then
 else
     fm_asr_args+=" --fm_asr_perp_ratio ${fm_asr_perp_ratio}"
     fm_asr_args+=" --fm_asr_back_factor ${fm_asr_back_factor}"
+    fm_asr_args+=" --fm_asr_velocity_multiplier ${fm_asr_velocity_multiplier}"
     fm_asr_args+=" --fm_asr_max_steps ${fm_asr_max_steps}"
     if [[ -n "${fm_asr_min_speed}" ]]; then
         fm_asr_args+=" --fm_asr_min_speed ${fm_asr_min_speed}"

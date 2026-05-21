@@ -35,7 +35,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 14
+MC_SCHEMA_VERSION = 15
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -108,6 +108,7 @@ MC_FIELDS = [
     "fm_asr_perp_ratio",
     "fm_asr_back_factor",
     "fm_asr_min_speed",
+    "fm_asr_velocity_multiplier",
     "fm_asr_max_steps",
     "pypar2_enabled",
     "pypar2_dt",
@@ -693,6 +694,7 @@ def compute_fm_asr_path_velocity(
     perp_ratio: float,
     back_factor: float,
     min_speed: float,
+    velocity_multiplier: float,
     max_steps: int,
     isotropic_only: bool,
 ) -> tuple[np.ndarray, float]:
@@ -705,6 +707,7 @@ def compute_fm_asr_path_velocity(
         perp_ratio=perp_ratio,
         back_factor=back_factor,
         min_speed=min_speed,
+        velocity_multiplier=velocity_multiplier,
         isotropic_only=isotropic_only,
         direction="from_source",
     )
@@ -1046,6 +1049,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         perp_ratio=float(fp_fm_asr_cfg.get("perp_ratio", 0.5)),
                         back_factor=float(fp_fm_asr_cfg.get("back_factor", 2.0)),
                         min_speed=float(fp_fm_asr_cfg.get("min_speed", config_mc["fmm_arg"]["min_speed"])),
+                        velocity_multiplier=float(fp_fm_asr_cfg.get("velocity_multiplier", 1.0)),
                         max_steps=int(fp_fm_asr_cfg.get("max_steps", 200_000)),
                         isotropic_only=False,
                     )
@@ -1069,6 +1073,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         perp_ratio=float(fp_fm_asr_cfg.get("perp_ratio", 0.5)),
                         back_factor=float(fp_fm_asr_cfg.get("back_factor", 2.0)),
                         min_speed=float(fp_fm_asr_cfg.get("min_speed", config_mc["fmm_arg"]["min_speed"])),
+                        velocity_multiplier=float(fp_fm_asr_cfg.get("velocity_multiplier", 1.0)),
                         max_steps=int(fp_fm_asr_cfg.get("max_steps", 200_000)),
                         isotropic_only=True,
                     )
@@ -1212,6 +1217,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "perp_ratio": float(fp_fm_asr_cfg.get("perp_ratio", 0.5)),
                     "back_factor": float(fp_fm_asr_cfg.get("back_factor", 2.0)),
                     "min_speed": float(fp_fm_asr_cfg.get("min_speed", config_mc["fmm_arg"]["min_speed"])),
+                    "velocity_multiplier": float(fp_fm_asr_cfg.get("velocity_multiplier", 1.0)),
                     "max_steps": int(fp_fm_asr_cfg.get("max_steps", 200_000)),
                 },
                 "pypar2": {
@@ -1496,6 +1502,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fm_asr_perp_ratio": config_dict["fm_asr"]["perp_ratio"],
                     "fm_asr_back_factor": config_dict["fm_asr"]["back_factor"],
                     "fm_asr_min_speed": config_dict["fm_asr"]["min_speed"],
+                    "fm_asr_velocity_multiplier": config_dict["fm_asr"]["velocity_multiplier"],
                     "fm_asr_max_steps": config_dict["fm_asr"]["max_steps"],
                     "pypar2_enabled": config_dict["pypar2"]["enabled"],
                     "pypar2_dt": config_dict["pypar2"]["dt"],
@@ -1550,6 +1557,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "fm_asr_perp_ratio": float(config_mc.get("fm_asr_arg", {}).get("perp_ratio", np.nan)),
             "fm_asr_back_factor": float(config_mc.get("fm_asr_arg", {}).get("back_factor", np.nan)),
             "fm_asr_min_speed": float(config_mc.get("fm_asr_arg", {}).get("min_speed", np.nan)),
+            "fm_asr_velocity_multiplier": float(config_mc.get("fm_asr_arg", {}).get("velocity_multiplier", 1.0)),
             "fm_asr_max_steps": int(config_mc.get("fm_asr_arg", {}).get("max_steps", -1)),
             "pypar2_enabled": bool(config_mc.get("pypar2_arg", {}).get("enabled", False)),
             "pypar2_dt": float(config_mc.get("pypar2_arg", {}).get("dt", np.nan)),
@@ -1627,6 +1635,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 "perp_ratio": float(config_mc.get("fm_asr_arg", {}).get("perp_ratio", np.nan)),
                 "back_factor": float(config_mc.get("fm_asr_arg", {}).get("back_factor", np.nan)),
                 "min_speed": float(config_mc.get("fm_asr_arg", {}).get("min_speed", np.nan)),
+                "velocity_multiplier": float(config_mc.get("fm_asr_arg", {}).get("velocity_multiplier", 1.0)),
                 "max_steps": int(config_mc.get("fm_asr_arg", {}).get("max_steps", -1)),
             },
             "pypar2": {
@@ -1838,6 +1847,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fm_asr_perp_ratio", type=float, default=0.5)
     parser.add_argument("--fm_asr_back_factor", type=float, default=2.0)
     parser.add_argument("--fm_asr_min_speed", type=float, default=None)
+    parser.add_argument("--fm_asr_velocity_multiplier", type=float, default=1.0)
     parser.add_argument("--fm_asr_max_steps", type=int, default=200_000)
     parser.add_argument(
         "--pypar2",
@@ -1991,6 +2001,7 @@ def main() -> None:
             "perp_ratio": float(args.fm_asr_perp_ratio),
             "back_factor": float(args.fm_asr_back_factor),
             "min_speed": float(args.fmm_min_speed if args.fm_asr_min_speed is None else args.fm_asr_min_speed),
+            "velocity_multiplier": float(args.fm_asr_velocity_multiplier),
             "max_steps": int(args.fm_asr_max_steps),
         },
         "pypar2_arg": {

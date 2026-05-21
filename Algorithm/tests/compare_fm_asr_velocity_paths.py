@@ -86,6 +86,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--perp-ratio", type=float, default=0.5)
     parser.add_argument("--back-factor", type=float, default=2.0)
     parser.add_argument("--min-speed", type=float, default=1e-12)
+    parser.add_argument("--velocity-multiplier", type=float, default=1.0)
     parser.add_argument("--fmm-solver", choices=["custom", "scikit"], default="scikit")
     parser.add_argument("--fmm-backtracking", choices=["discrete", "continuous"], default="continuous")
     parser.add_argument("--align-with-modflow-velocity", action=argparse.BooleanOptionalAction, default=False)
@@ -251,6 +252,7 @@ def solve_asr_path(
         perp_ratio=float(args.perp_ratio),
         back_factor=float(args.back_factor),
         min_speed=float(args.min_speed),
+        velocity_multiplier=float(args.velocity_multiplier),
         isotropic_only=bool(isotropic_only),
         direction="from_source",
     )

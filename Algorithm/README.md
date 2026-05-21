@@ -88,6 +88,7 @@ Options:
 - `--fm_asr_perp_ratio`: sideways anisotropic speed ratio for FM-ASR, default `0.5`
 - `--fm_asr_back_factor`: backward speed reduction factor for FM-ASR, default `2.0`
 - `--fm_asr_min_speed`: velocity magnitude floor for FM-ASR; defaults to `--fmm_min_speed`
+- `--fm_asr_velocity_multiplier`: dimensionless multiplier applied to the velocity field before FM-ASR Randers construction, default `1.0`
 - `--fm_asr_max_steps`: FM-ASR backtracking step cap, default `200000`
 
 Defaults:
@@ -233,7 +234,7 @@ Additional schema fields now include:
 - `len_fp_fm_asr`, `len_fp_fm_asr_iso`, `travel_time_fm_asr`, `travel_time_fm_asr_iso`
 - `endpoint_dy_fp_vs_fm_asr`, `endpoint_dy_fp_vs_fm_asr_iso`
 - `x_end_fp_fm_asr`, `y_end_fp_fm_asr`, `x_end_fp_fm_asr_iso`, `y_end_fp_fm_asr_iso`
-- `fm_asr_enabled`, `fm_asr_perp_ratio`, `fm_asr_back_factor`, `fm_asr_min_speed`, `fm_asr_max_steps`
+- `fm_asr_enabled`, `fm_asr_perp_ratio`, `fm_asr_back_factor`, `fm_asr_min_speed`, `fm_asr_velocity_multiplier`, `fm_asr_max_steps`
 - `comp_time_fp_fm_asr`, `comp_time_fp_fm_asr_iso`
 
 ## Random Seed Control

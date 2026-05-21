@@ -439,6 +439,7 @@ class FMASR2D:
         perp_ratio: float = 0.5,
         back_factor: float = 2.0,
         min_speed: float = 1e-6,
+        velocity_multiplier: float = 1.0,
         isotropic_only: bool = False,
         direction: str = "from_source",
         stencil_strategy: str = "precompute",
@@ -455,6 +456,7 @@ class FMASR2D:
             perp_ratio=perp_ratio,
             back_factor=back_factor,
             min_speed=min_speed,
+            velocity_multiplier=velocity_multiplier,
             isotropic_only=isotropic_only,
         )
         del c_iso
@@ -758,12 +760,13 @@ def build_randers_from_W(
     perp_ratio=0.5,          # in (0,1]: sideways speed = perp_ratio * |W|
     back_factor=2.0,         # >=1: backward speed = |W| / back_factor
     min_speed=1e-6,          # floor for |W| to avoid divide-by-zero
+    velocity_multiplier=1.0, # scales W before deriving the Randers metric
     isotropic_only=False     # if True: returns pure isotropic metric (b=0, M=I/|W|^2)
 ):
     """
     Construct Randers metric F(u)=sqrt(u^T M u) - b·u from a given velocity field W(x),
     such that:
-      - baseline isotropic speed is c(x)=|W(x)|
+      - baseline isotropic speed is c(x)=|velocity_multiplier * W(x)|
       - when isotropic_only=True => M=I/c^2 and b=0 exactly
       - otherwise, we enforce:
             c_eff(+e) = |W|
@@ -784,6 +787,10 @@ def build_randers_from_W(
         raise ValueError("W_field must contain only finite values")
     if min_speed <= 0.0:
         raise ValueError("min_speed must be positive")
+    velocity_multiplier = float(velocity_multiplier)
+    if not math.isfinite(velocity_multiplier) or velocity_multiplier <= 0.0:
+        raise ValueError("velocity_multiplier must be positive and finite")
+    W = W * velocity_multiplier
 
     ny, nx, _ = W.shape
 
@@ -917,6 +924,7 @@ def visualize_indicatrix_field(
     W_field,
     perp_ratio=0.5,
     back_factor=2.0,
+    velocity_multiplier=1.0,
     h=1.0,
     stride=10,
     K=180,
@@ -948,7 +956,10 @@ def visualize_indicatrix_field(
         raise ValueError("background must be one of 'K', 'velocity', or 'none'.")
 
     c_iso, M_field, b_field, _ = build_randers_from_W(
-        W, perp_ratio=perp_ratio, back_factor=back_factor
+        W,
+        perp_ratio=perp_ratio,
+        back_factor=back_factor,
+        velocity_multiplier=velocity_multiplier,
     )
     del c_iso
 

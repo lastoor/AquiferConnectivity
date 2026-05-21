@@ -588,8 +588,8 @@ def run_pypar2_tracking_gpu_worker(
         "dt": float(cfg.get("dt", 0.01)),
         "steps": int(cfg.get("steps", 200_000)),
         "molecular_diffusion": float(cfg.get("molecular_diffusion", 0.0)),
-        "alpha_l": float(cfg.get("alpha_l", 0.0)),
-        "alpha_t": float(cfg.get("alpha_t", 0.0)),
+        "longitudinal_dispersivity": float(cfg.get("alpha_l", 0.0)),
+        "transverse_dispersivity": float(cfg.get("alpha_t", 0.0)),
         "max_points": int(cfg.get("max_points", 2_000)),
         "trajectory_memory_limit": int(cfg.get("trajectory_memory_limit", 5_000_000)),
         "replay_top_k": int(cfg.get("replay_top_k", 5)),
@@ -755,6 +755,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fm_asr_perp_ratio", type=float, default=0.5)
     parser.add_argument("--fm_asr_back_factor", type=float, default=2.0)
     parser.add_argument("--fm_asr_min_speed", type=float, default=None)
+    parser.add_argument("--fm_asr_velocity_multiplier", type=float, default=1.0)
     parser.add_argument("--fm_asr_max_steps", type=int, default=200_000)
     parser.add_argument(
         "--pypar2",
@@ -901,6 +902,7 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
             "perp_ratio": float(args.fm_asr_perp_ratio),
             "back_factor": float(args.fm_asr_back_factor),
             "min_speed": float(args.fmm_min_speed if args.fm_asr_min_speed is None else args.fm_asr_min_speed),
+            "velocity_multiplier": float(args.fm_asr_velocity_multiplier),
             "max_steps": int(args.fm_asr_max_steps),
         },
         "pypar2_arg": {
