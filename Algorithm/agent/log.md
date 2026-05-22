@@ -282,3 +282,33 @@
   - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q tests/test_fm_asr.py` (15 passed)
   - `tests/run_compare_fm_asr_velocity_paths.sh --help`
   - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q` (19 passed, 5 pre-existing FSM warnings)
+
+## 2026-05-22
+
+- Polished conic FM-ASR in `./src/fmm_core/fm_asr_conic.py`:
+  - added analytic `StrongWindZermeloNorm.grad` and smooth-gradient F-acuteness
+  - replaced greedy conic stencil thinning with cone-aware Stern-Brocot refinement seeded from the full admissible offset list
+  - replaced sampled admissible-interval detection in `edge_argmin` with closed-form linear/quadratic interval intersection
+  - rewrote `extract_conic_fm_asr_path` to use continuous Hopf-Lax backtracking via `_trace_continuous_path`
+  - added `MixedFMASR2D` with per-cell dispatch between Randers F-acute meshes (subcritical wind) and one-sided conic stencils (critical/strong wind), plus `randers_from_zermelo` and `extract_mixed_fm_asr_path`
+- Exported the new mixed-regime helpers from `./src/fmm_core/__init__.py`.
+- Extended `./tests/test_fm_asr_conic.py` with gradient, stencil, interval, Randers-parity, strong-wind geodesic, and mixed-field coverage.
+- Validation:
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi python -m py_compile scripts/run_fmm.py src/fmm_core/*.py`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q tests/test_fm_asr_conic.py` (20 passed)
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q` (39 passed, 5 pre-existing FSM warnings)
+
+## 2026-05-22
+
+- Polished conic FM-ASR in `./src/fmm_core/fm_asr_conic.py`:
+  - added analytic `StrongWindZermeloNorm.grad` and smooth-gradient F-acuteness
+  - replaced greedy conic stencil thinning with cone-aware Stern-Brocot refinement seeded from the full admissible offset list
+  - replaced sampled admissible-interval detection in `edge_argmin` with closed-form linear/quadratic interval intersection
+  - rewrote `extract_conic_fm_asr_path` to use continuous Hopf-Lax backtracking via `_trace_continuous_path`
+  - added `MixedFMASR2D` with per-cell dispatch between Randers F-acute meshes (subcritical wind) and one-sided conic stencils (critical/strong wind), plus `randers_from_zermelo` and `extract_mixed_fm_asr_path`
+- Exported the new mixed-regime helpers from `./src/fmm_core/__init__.py`.
+- Extended `./tests/test_fm_asr_conic.py` with gradient, stencil, interval, Randers-parity, strong-wind geodesic, and mixed-field coverage.
+- Validation:
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi python -m py_compile scripts/run_fmm.py src/fmm_core/*.py`
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q tests/test_fm_asr_conic.py` (20 passed)
+  - `PYTHONPATH=../../FlowSimulation:./src conda run -n taichi pytest -q` (39 passed, 5 pre-existing FSM warnings)

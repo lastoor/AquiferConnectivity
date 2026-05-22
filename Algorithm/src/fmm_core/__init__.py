@@ -43,11 +43,15 @@ from .fm_asr import (
 )
 from .fm_asr_conic import (
     ConicFMASR2D,
+    MixedFMASR2D,
+    MixedStencil,
     StrongWindZermeloNorm,
     build_conic_stencil,
     build_strong_wind_metric_from_W,
     dispersion_tensor_field_from_velocity,
     extract_conic_fm_asr_path,
+    extract_mixed_fm_asr_path,
+    randers_from_zermelo,
     self_metric_from_dispersion_velocity,
 )
 from .metrics import distance_distribution, directed_nn_distances, resample_by_arclength
@@ -97,9 +101,13 @@ __all__ = [
     "visualize_indicatrix_field",
     "StrongWindZermeloNorm",
     "ConicFMASR2D",
+    "MixedFMASR2D",
+    "MixedStencil",
     "build_conic_stencil",
     "build_strong_wind_metric_from_W",
     "dispersion_tensor_field_from_velocity",
     "extract_conic_fm_asr_path",
+    "extract_mixed_fm_asr_path",
+    "randers_from_zermelo",
     "self_metric_from_dispersion_velocity",
 ]
