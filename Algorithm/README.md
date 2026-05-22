@@ -23,6 +23,7 @@ FMM-specific code lives in `./src/fmm_core`:
 - `fmm.py`: travel-time solvers (`custom`, `scikit`) and path backtracking (`discrete`, `continuous`).
 - `fsm.py`: velocity-driven FSM travel-time solve/path extraction for `v·∇T = 1`, including residual-field and residual-MSE helpers for convergence checks.
 - `fm_asr.py`: 2D Mirebeau-style FM-ASR solver for smooth Finsler norms, with paper-style exterior discrete boundary handling for escape-time solves.
+- `fm_asr_conic.py`: mixed Randers/conic FM-ASR solver for arbitrary-wind Zermelo metrics. Subcritical cells use the Randers equivalent; critical/strong-wind cells use one-sided conic stencils. It also provides PyPar2-style dispersion tensor helpers.
 - `metrics.py`: path comparison metrics (`distance_distribution`).
 
 ## Dependency on FlowSimulation
@@ -33,7 +34,7 @@ The wrapper script `./scripts/run_in_fmm_env.sh` injects both `./src` and `../..
 
 ## Output Schema
 
-`scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py` write schema v12 outputs:
+`scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py` write schema v16 outputs:
 
 - Per MC run: `mainOutput_size{field_size}_mc{mc_index}.npz`
 - Per size aggregate: `mainOutput_size{field_size}.npz`
@@ -90,6 +91,16 @@ Options:
 - `--fm_asr_min_speed`: velocity magnitude floor for FM-ASR; defaults to `--fmm_min_speed`
 - `--fm_asr_velocity_multiplier`: dimensionless multiplier applied to the velocity field before FM-ASR Randers construction, default `1.0`
 - `--fm_asr_max_steps`: FM-ASR backtracking step cap, default `200000`
+- `--fm_asr_conic` / `--no-fm_asr_conic`: enable or disable the mixed Randers/conic FM-ASR comparison path (`fp_fm_asr_conic`)
+- `--fm_asr_conic_self_velocity`: self-motivated metric for conic/mixed FM-ASR, `dispersion` or `unit`, default `dispersion`
+- `--fm_asr_conic_velocity_multiplier`: multiplier applied to the flow velocity used as Zermelo wind, default `1.0`
+- `--fm_asr_conic_lambda_threshold`: regime split; cells with `lambda = 1 - g(W,W)` above this value use Randers, otherwise conic, default `0.0`
+- `--fm_asr_conic_dispersion_c`: global calibration factor for the dispersion self-velocity, default `1.0`
+- `--fm_asr_conic_dispersion_tau`: global calibration timescale for the dispersion self-velocity, default `1.0`
+- `--fm_asr_conic_dispersion_eigenvalue_floor`: floor applied to local dispersion tensor eigenvalues before inversion, default `1e-12`
+- `--fm_asr_conic_stencil_radius`: conic stencil search radius for integer directions, default `8`
+- `--fm_asr_conic_edge_samples`: edge-search sample count for conic updates, default `64`
+- `--fm_asr_conic_max_steps`: mixed/conic FM-ASR backtracking step cap, default `200000`
 
 Defaults:
 
@@ -100,6 +111,7 @@ Defaults:
 - `--velocity-location face`
 - `--no-align-with-modflow-velocity`
 - `--fm_asr`
+- `--fm_asr_conic`
 
 Notes:
 
@@ -115,7 +127,10 @@ Notes:
 - The current persistent GPU worker is intended to run one field size and one exact `--num_particles` value per job. Mixed tracker shapes in one worker process are rejected explicitly.
 - The GPU worker uses a single dedicated GPU process, compact `seed_spec` payloads, shared-memory transfer for `vx` / `vy` / face arrays, and exact winner replay in arrival mode.
 - `scripts/run_fmm_gpu_worker.py` is compatible with newer FlowSimulation Pollock GPU trackers that return extra snapshot arrays from `tracker.run()`; the worker uses the first two outputs (`travel_times`, `status`) and ignores additional values in the summary path.
-- FM-ASR comparison paths are non-fatal diagnostics. If either FM-ASR solve fails, the MC trial can still succeed and the FM-ASR fields are saved as `NaN` with an error string in the per-MC consolidated output.
+- FM-ASR comparison paths are non-fatal diagnostics. If an FM-ASR solve fails, the MC trial can still succeed and the FM-ASR fields are saved as `NaN` with an error string in the per-MC consolidated output.
+- `fp_fm_asr_conic` uses the same full face Darcy velocity as wind after face-to-cell conversion. With `--fm_asr_conic_self_velocity dispersion`, the local dispersion tensor `D(x)` is built from the PyPar2 parameters (`Dm`, `alpha_l`, `alpha_t`, and optional velocity floor), but the deterministic self-velocity scale is calibrated by global `C` and `tau`:
+  `v_i(x) = C * sqrt(lambda_i(D(x)) / tau)`.
+  Equivalently, the metric tensor eigenvalues are `tau / (C^2 * lambda_i(D(x)))`. PyPar2 `dt` is not used in this deterministic scale.
 
 Example FBM run:
 
@@ -187,6 +202,37 @@ T = solver.solve(source)
 
 Use `isotropic_only=True` to reduce the local indicatrix to a circle whose radius is the velocity magnitude. Use `direction="to_source"` for the backward/escape orientation.
 
+## Mixed/Conic FM-ASR Solver
+
+`MixedFMASR2D` handles the arbitrary-wind Zermelo case with a per-cell regime split. It accepts a cell-centered wind field and an optional SPD ground metric field:
+
+```python
+import numpy as np
+from fmm_core import MixedFMASR2D, extract_mixed_fm_asr_path
+
+ny, nx = 101, 101
+W = np.zeros((ny, nx, 2), dtype=float)
+W[..., 0] = 2.0
+
+source = np.zeros((ny, nx), dtype=bool)
+source[:, 0] = True
+target = np.zeros((ny, nx), dtype=bool)
+target[:, -1] = True
+
+solver = MixedFMASR2D.from_velocity_field(
+    W,
+    h=1.0,
+    direction="from_source",
+    lambda_threshold=0.0,
+    stencil_radius=8,
+    edge_samples=64,
+)
+T = solver.solve(source)
+path, travel_time, chosen_target = extract_mixed_fm_asr_path(solver, T, source, target)
+```
+
+In the Monte Carlo runners, `fp_fm_asr_conic` uses `MixedFMASR2D` with flow velocity as wind. When `self_velocity=dispersion`, local anisotropy and ellipse orientation come from the PyPar2 dispersion tensor `D(x)`, while `--fm_asr_conic_dispersion_c` and `--fm_asr_conic_dispersion_tau` set one global speed scale for the whole run.
+
 ## FMM Velocity Options
 
 FMM speed preparation is configurable:
@@ -232,10 +278,14 @@ Additional schema fields now include:
 - `fmm_zero_count`, `fmm_nontraversable_count`
 - `pt_solver`, `pt_backend`, `pt_num_particles`, `pt_velocity_location`, `pt_align_with_modflow_velocity`
 - `len_fp_fm_asr`, `len_fp_fm_asr_iso`, `travel_time_fm_asr`, `travel_time_fm_asr_iso`
-- `endpoint_dy_fp_vs_fm_asr`, `endpoint_dy_fp_vs_fm_asr_iso`
-- `x_end_fp_fm_asr`, `y_end_fp_fm_asr`, `x_end_fp_fm_asr_iso`, `y_end_fp_fm_asr_iso`
+- `len_fp_fm_asr_conic`, `travel_time_fm_asr_conic`
+- `endpoint_dy_fp_vs_fm_asr`, `endpoint_dy_fp_vs_fm_asr_iso`, `endpoint_dy_fp_vs_fm_asr_conic`
+- `x_end_fp_fm_asr`, `y_end_fp_fm_asr`, `x_end_fp_fm_asr_iso`, `y_end_fp_fm_asr_iso`, `x_end_fp_fm_asr_conic`, `y_end_fp_fm_asr_conic`
 - `fm_asr_enabled`, `fm_asr_perp_ratio`, `fm_asr_back_factor`, `fm_asr_min_speed`, `fm_asr_velocity_multiplier`, `fm_asr_max_steps`
-- `comp_time_fp_fm_asr`, `comp_time_fp_fm_asr_iso`
+- `fm_asr_conic_enabled`, `fm_asr_conic_self_velocity`, `fm_asr_conic_velocity_multiplier`, `fm_asr_conic_lambda_threshold`
+- `fm_asr_conic_dispersion_c`, `fm_asr_conic_dispersion_tau`, `fm_asr_conic_dispersion_eigenvalue_floor`
+- `fm_asr_conic_stencil_radius`, `fm_asr_conic_edge_samples`, `fm_asr_conic_max_steps`
+- `comp_time_fp_fm_asr`, `comp_time_fp_fm_asr_iso`, `comp_time_fp_fm_asr_conic`
 
 ## Random Seed Control
 

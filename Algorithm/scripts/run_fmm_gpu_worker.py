@@ -773,6 +773,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fm_asr_conic_velocity_multiplier", type=float, default=1.0)
     parser.add_argument("--fm_asr_conic_lambda_threshold", type=float, default=0.0)
+    parser.add_argument("--fm_asr_conic_dispersion_c", type=float, default=1.0)
+    parser.add_argument("--fm_asr_conic_dispersion_tau", type=float, default=1.0)
     parser.add_argument("--fm_asr_conic_dispersion_eigenvalue_floor", type=float, default=1e-12)
     parser.add_argument("--fm_asr_conic_stencil_radius", type=int, default=8)
     parser.add_argument("--fm_asr_conic_edge_samples", type=int, default=64)
@@ -930,6 +932,8 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
             "self_velocity": str(args.fm_asr_conic_self_velocity),
             "velocity_multiplier": float(args.fm_asr_conic_velocity_multiplier),
             "lambda_threshold": float(args.fm_asr_conic_lambda_threshold),
+            "dispersion_c": float(args.fm_asr_conic_dispersion_c),
+            "dispersion_tau": float(args.fm_asr_conic_dispersion_tau),
             "dispersion_eigenvalue_floor": float(args.fm_asr_conic_dispersion_eigenvalue_floor),
             "stencil_radius": int(args.fm_asr_conic_stencil_radius),
             "edge_samples": int(args.fm_asr_conic_edge_samples),

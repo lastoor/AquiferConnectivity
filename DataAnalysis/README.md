@@ -15,6 +15,8 @@ Additional standalone utilities:
 
 All implementation logic is inside the step scripts (no `visualization/` package).
 
+The comparison pipeline recognizes optional solver outputs from `Algorithm`, including `fp_fm_asr`, `fp_fm_asr_iso`, `fp_fm_asr_conic`, and `fp_pypar2`. When present in consolidated per-MC files or flat main-output fields, `fp_fm_asr_conic` is included in endpoint, Hausdorff, Frechet, travel-time, computation-time, path-length CDF, Wasserstein-length, and entropy/Hausdorff summaries.
+
 ## Repository Layout
 
 - `configs/visualization.default.yaml`: default pipeline config

@@ -1,5 +1,21 @@
 # Agent Work Log
 
+## 2026-05-22
+- Agent/tool: Codex (GPT-5)
+- Summary: Added `fp_fm_asr_conic` to the comparison/plotting pipeline so the mixed Randers/conic FM-ASR path is indexed, summarized, and plotted alongside existing FM-ASR, FM-ASR-iso, PyPar2, FSM, FMM, Dijkstra, and LRP solvers.
+- Files changed:
+  - `scripts/step1_index.py`
+  - `scripts/step2_metrics.py`
+  - `scripts/step3_stats.py`
+  - `scripts/step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step1_index.py DataAnalysis/scripts/step2_metrics.py DataAnalysis/scripts/step3_stats.py DataAnalysis/scripts/step4_plot.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - Full Stage 2-4 data processing and figure generation were not executed in this local environment.
+
 ## 2026-03-10
 - Agent/tool: Codex (GPT-5)
 - Summary: Updated Stage 4 plotting so `endpoint` renders as a grouped sample-based box plot, added separate `times_box` and `hausdorff_box` grouped box-plot sections while keeping the existing `times` and `hausdorff` summary plots, and refreshed README documentation to match the current path/plot outputs.

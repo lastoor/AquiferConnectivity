@@ -23,9 +23,9 @@ from fmm_core import (
     FMASR2D,
     MixedFMASR2D,
     compute_fmm_path,
+    dispersion_tensor_field_from_velocity,
     extract_fm_asr_path,
     extract_mixed_fm_asr_path,
-    self_metric_from_dispersion_velocity,
 )
 from fmm_core.fsm import compute_fsm_path as compute_fsm_path_velocity
 from fmm_core.metrics import distance_distribution
@@ -126,6 +126,8 @@ MC_FIELDS = [
     "fm_asr_conic_self_velocity",
     "fm_asr_conic_velocity_multiplier",
     "fm_asr_conic_lambda_threshold",
+    "fm_asr_conic_dispersion_c",
+    "fm_asr_conic_dispersion_tau",
     "fm_asr_conic_dispersion_eigenvalue_floor",
     "fm_asr_conic_stencil_radius",
     "fm_asr_conic_edge_samples",
@@ -755,11 +757,12 @@ def compute_fm_asr_conic_path_velocity(
     self_velocity: str,
     velocity_multiplier: float,
     lambda_threshold: float,
-    dispersion_dt: float,
     dispersion_molecular_diffusion: float,
     dispersion_alpha_l: float,
     dispersion_alpha_t: float,
     dispersion_velocity_floor: float | None,
+    dispersion_c: float,
+    dispersion_tau: float,
     dispersion_eigenvalue_floor: float,
     stencil_radius: int,
     edge_samples: int,
@@ -771,15 +774,27 @@ def compute_fm_asr_conic_path_velocity(
     W_wind = float(velocity_multiplier) * W_flow
 
     if self_velocity == "dispersion":
-        G_field = self_metric_from_dispersion_velocity(
+        if dispersion_c <= 0.0 or not np.isfinite(dispersion_c):
+            raise ValueError("fm_asr_conic dispersion_c must be positive and finite")
+        if dispersion_tau <= 0.0 or not np.isfinite(dispersion_tau):
+            raise ValueError("fm_asr_conic dispersion_tau must be positive and finite")
+        if dispersion_eigenvalue_floor <= 0.0 or not np.isfinite(dispersion_eigenvalue_floor):
+            raise ValueError("fm_asr_conic dispersion_eigenvalue_floor must be positive and finite")
+        D_field = dispersion_tensor_field_from_velocity(
             W_flow,
-            dt=dispersion_dt,
             molecular_diffusion=dispersion_molecular_diffusion,
             alpha_l=dispersion_alpha_l,
             alpha_t=dispersion_alpha_t,
             velocity_floor=dispersion_velocity_floor,
-            eigenvalue_floor=dispersion_eigenvalue_floor,
         )
+        ny, nx = D_field.shape[:2]
+        G_field = np.zeros_like(D_field)
+        scale = float(dispersion_tau) / (float(dispersion_c) * float(dispersion_c))
+        for j in range(ny):
+            for i in range(nx):
+                eigvals, eigvecs = np.linalg.eigh(D_field[j, i])
+                eigvals = np.maximum(eigvals, dispersion_eigenvalue_floor)
+                G_field[j, i] = eigvecs @ np.diag(scale / eigvals) @ eigvecs.T
     elif self_velocity == "unit":
         G_field = None
     else:
@@ -1189,13 +1204,14 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         self_velocity=str(fp_fm_asr_conic_cfg.get("self_velocity", "dispersion")),
                         velocity_multiplier=float(fp_fm_asr_conic_cfg.get("velocity_multiplier", 1.0)),
                         lambda_threshold=float(fp_fm_asr_conic_cfg.get("lambda_threshold", 0.0)),
-                        dispersion_dt=float(pypar2_cfg.get("dt", 0.01)),
                         dispersion_molecular_diffusion=float(pypar2_cfg.get("molecular_diffusion", 1e-9)),
                         dispersion_alpha_l=float(pypar2_cfg.get("alpha_l", 0.1)),
                         dispersion_alpha_t=float(pypar2_cfg.get("alpha_t", 0.01)),
                         dispersion_velocity_floor=(
                             None if pypar2_cfg.get("velocity_floor") is None else float(pypar2_cfg["velocity_floor"])
                         ),
+                        dispersion_c=float(fp_fm_asr_conic_cfg.get("dispersion_c", 1.0)),
+                        dispersion_tau=float(fp_fm_asr_conic_cfg.get("dispersion_tau", 1.0)),
                         dispersion_eigenvalue_floor=float(
                             fp_fm_asr_conic_cfg.get("dispersion_eigenvalue_floor", 1e-12)
                         ),
@@ -1356,6 +1372,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "self_velocity": str(fp_fm_asr_conic_cfg.get("self_velocity", "dispersion")),
                     "velocity_multiplier": float(fp_fm_asr_conic_cfg.get("velocity_multiplier", 1.0)),
                     "lambda_threshold": float(fp_fm_asr_conic_cfg.get("lambda_threshold", 0.0)),
+                    "dispersion_c": float(fp_fm_asr_conic_cfg.get("dispersion_c", 1.0)),
+                    "dispersion_tau": float(fp_fm_asr_conic_cfg.get("dispersion_tau", 1.0)),
                     "dispersion_eigenvalue_floor": float(
                         fp_fm_asr_conic_cfg.get("dispersion_eigenvalue_floor", 1e-12)
                     ),
@@ -1680,6 +1698,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fm_asr_conic_self_velocity": config_dict["fm_asr_conic"]["self_velocity"],
                     "fm_asr_conic_velocity_multiplier": config_dict["fm_asr_conic"]["velocity_multiplier"],
                     "fm_asr_conic_lambda_threshold": config_dict["fm_asr_conic"]["lambda_threshold"],
+                    "fm_asr_conic_dispersion_c": config_dict["fm_asr_conic"]["dispersion_c"],
+                    "fm_asr_conic_dispersion_tau": config_dict["fm_asr_conic"]["dispersion_tau"],
                     "fm_asr_conic_dispersion_eigenvalue_floor": config_dict["fm_asr_conic"][
                         "dispersion_eigenvalue_floor"
                     ],
@@ -1751,6 +1771,12 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             ),
             "fm_asr_conic_lambda_threshold": float(
                 config_mc.get("fm_asr_conic_arg", {}).get("lambda_threshold", 0.0)
+            ),
+            "fm_asr_conic_dispersion_c": float(
+                config_mc.get("fm_asr_conic_arg", {}).get("dispersion_c", 1.0)
+            ),
+            "fm_asr_conic_dispersion_tau": float(
+                config_mc.get("fm_asr_conic_arg", {}).get("dispersion_tau", 1.0)
             ),
             "fm_asr_conic_dispersion_eigenvalue_floor": float(
                 config_mc.get("fm_asr_conic_arg", {}).get("dispersion_eigenvalue_floor", 1e-12)
@@ -1844,6 +1870,8 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     config_mc.get("fm_asr_conic_arg", {}).get("velocity_multiplier", 1.0)
                 ),
                 "lambda_threshold": float(config_mc.get("fm_asr_conic_arg", {}).get("lambda_threshold", 0.0)),
+                "dispersion_c": float(config_mc.get("fm_asr_conic_arg", {}).get("dispersion_c", 1.0)),
+                "dispersion_tau": float(config_mc.get("fm_asr_conic_arg", {}).get("dispersion_tau", 1.0)),
                 "dispersion_eigenvalue_floor": float(
                     config_mc.get("fm_asr_conic_arg", {}).get("dispersion_eigenvalue_floor", 1e-12)
                 ),
@@ -2078,6 +2106,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--fm_asr_conic_velocity_multiplier", type=float, default=1.0)
     parser.add_argument("--fm_asr_conic_lambda_threshold", type=float, default=0.0)
+    parser.add_argument("--fm_asr_conic_dispersion_c", type=float, default=1.0)
+    parser.add_argument("--fm_asr_conic_dispersion_tau", type=float, default=1.0)
     parser.add_argument("--fm_asr_conic_dispersion_eigenvalue_floor", type=float, default=1e-12)
     parser.add_argument("--fm_asr_conic_stencil_radius", type=int, default=8)
     parser.add_argument("--fm_asr_conic_edge_samples", type=int, default=64)
@@ -2242,6 +2272,8 @@ def main() -> None:
             "self_velocity": str(args.fm_asr_conic_self_velocity),
             "velocity_multiplier": float(args.fm_asr_conic_velocity_multiplier),
             "lambda_threshold": float(args.fm_asr_conic_lambda_threshold),
+            "dispersion_c": float(args.fm_asr_conic_dispersion_c),
+            "dispersion_tau": float(args.fm_asr_conic_dispersion_tau),
             "dispersion_eigenvalue_floor": float(args.fm_asr_conic_dispersion_eigenvalue_floor),
             "stencil_radius": int(args.fm_asr_conic_stencil_radius),
             "edge_samples": int(args.fm_asr_conic_edge_samples),

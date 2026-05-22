@@ -219,6 +219,26 @@
 - Note:
   - a direct GPU-worker smoke could not start on this Mac because `scripts/run_fmm_gpu_worker.py` requires a visible CUDA-style GPU token; Taichi/Metal is not detected by that entrypoint's GPU discovery.
 
+## 2026-05-22
+
+- Integrated `fp_fm_asr_conic` into the Monte Carlo runner pipeline and run4 GPU sweep:
+  - `scripts/run_fmm.py` now computes a non-fatal mixed Randers/conic FM-ASR path with `MixedFMASR2D`
+  - `scripts/run_fmm_gpu_worker.py` exposes matching `--fm_asr_conic*` CLI/config controls
+  - `submit_run4_var_sweep_gpu.sh` enables and forwards the mixed/conic FM-ASR solver by default
+  - output schema bumped to v16 with conic length, travel time, endpoint, config, and computation-time fields
+- Updated the dispersion self-velocity model for `fp_fm_asr_conic`:
+  - local anisotropy and orientation come from the PyPar2-style dispersion tensor `D(x)`
+  - global `--fm_asr_conic_dispersion_c` and `--fm_asr_conic_dispersion_tau` set the deterministic speed scale
+  - PyPar2 `dt` is no longer used to scale the deterministic FM-ASR-conic self velocity
+- Updated downstream comparison support in `DataAnalysis/scripts/step1_index.py`, `step2_metrics.py`, `step3_stats.py`, and `step4_plot.py` so `fp_fm_asr_conic` is indexed, summarized, and plotted with other solvers.
+- Validation:
+  - `python -m py_compile Algorithm/scripts/run_fmm.py Algorithm/scripts/run_fmm_gpu_worker.py`
+  - `bash -n Algorithm/submit_run4_var_sweep_gpu.sh`
+  - `git diff --check`
+- Limitations/follow-up:
+  - Local pytest execution was not available in the default Python environment.
+  - The local `taichi_env` Conda environment was not present at `/Users/binhaoli/.conda/envs/taichi_env`, so full solver tests were not run here.
+
 ## 2026-05-04
 
 - Updated comparison and indicatrix visualizations:
