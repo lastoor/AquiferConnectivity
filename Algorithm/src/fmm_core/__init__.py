@@ -41,6 +41,15 @@ from .fm_asr import (
     trace_minimal_path,
     visualize_indicatrix_field,
 )
+from .fm_asr_conic import (
+    ConicFMASR2D,
+    StrongWindZermeloNorm,
+    build_conic_stencil,
+    build_strong_wind_metric_from_W,
+    dispersion_tensor_field_from_velocity,
+    extract_conic_fm_asr_path,
+    self_metric_from_dispersion_velocity,
+)
 from .metrics import distance_distribution, directed_nn_distances, resample_by_arclength
 from .speed import prepare_fmm_speed
 
@@ -86,4 +95,11 @@ __all__ = [
     "validate_f_acute_mesh",
     "trace_minimal_path",
     "visualize_indicatrix_field",
+    "StrongWindZermeloNorm",
+    "ConicFMASR2D",
+    "build_conic_stencil",
+    "build_strong_wind_metric_from_W",
+    "dispersion_tensor_field_from_velocity",
+    "extract_conic_fm_asr_path",
+    "self_metric_from_dispersion_velocity",
 ]

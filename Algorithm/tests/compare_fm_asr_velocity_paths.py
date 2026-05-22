@@ -30,6 +30,11 @@ for path in (SRC_ROOT, SCRIPTS_ROOT, FLOWSIM_ROOT):
 
 import run_fmm as base
 from fmm_core.fm_asr import FMASR2D, extract_fm_asr_path, visualize_indicatrix_field
+from fmm_core.fm_asr_conic import (
+    ConicFMASR2D,
+    extract_conic_fm_asr_path,
+    self_metric_from_dispersion_velocity,
+)
 from fmm_core.fmm import compute_fmm_path, solve_travel_time
 from fmm_core.speed import _face_to_cell_speed_full, prepare_fmm_speed
 from simulation import hydraulic as sim_hyd
@@ -93,6 +98,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-points", type=int, default=100_000)
     parser.add_argument("--max-iters", type=int, default=1_000_000)
     parser.add_argument("--asr-max-steps", type=int, default=200_000)
+    parser.add_argument("--conic-asr", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--conic-asr-velocity-multiplier", type=float, default=1.0)
+    parser.add_argument("--conic-asr-self-velocity", choices=["dispersion", "unit"], default="dispersion")
+    parser.add_argument("--conic-asr-min-speed", type=float, default=1.0 + 1e-9)
+    parser.add_argument("--conic-asr-min-wind-factor", type=float, default=1.0 + 1e-9)
+    parser.add_argument("--conic-asr-dispersion-eigenvalue-floor", type=float, default=1e-12)
+    parser.add_argument("--conic-asr-stencil-radius", type=int, default=8)
+    parser.add_argument("--conic-asr-edge-samples", type=int, default=64)
+    parser.add_argument("--pypar2", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--pypar2-dt", type=float, default=0.01)
+    parser.add_argument("--pypar2-steps", type=int, default=200_000)
+    parser.add_argument("--pypar2-dm", "--pypar2-molecular-diffusion", dest="pypar2_dm", type=float, default=1e-9)
+    parser.add_argument("--pypar2-alpha-l", type=float, default=0.1)
+    parser.add_argument("--pypar2-alpha-t", type=float, default=0.01)
+    parser.add_argument("--pypar2-velocity-floor", type=float, default=None)
+    parser.add_argument("--pypar2-taichi-arch", choices=["gpu", "cpu"], default="gpu")
+    parser.add_argument("--pypar2-max-points", type=int, default=2_000)
+    parser.add_argument("--pypar2-num-particles", type=int, default=None)
+    parser.add_argument("--pypar2-trajectory-memory-limit", type=int, default=5_000_000)
+    parser.add_argument("--pypar2-replay-top-k", type=int, default=5)
+    parser.add_argument("--pypar2-replay-particles-per-center", type=int, default=40)
+    parser.add_argument("--pypar2-replay-radius-cells", type=float, default=0.5)
+    parser.add_argument("--pypar2-replay-tolerance", type=float, default=1.05)
+    parser.add_argument("--pypar2-replay-max-redos", type=int, default=3)
     parser.add_argument("--indicatrix-stride", type=int, default=8)
     parser.add_argument("--indicatrix-glyph-scale", type=float, default=0.75)
     parser.add_argument("--no-indicatrix", action="store_true")
@@ -267,6 +296,130 @@ def solve_asr_path(
     return T, path, travel_time, target
 
 
+def solve_conic_asr_path(
+    W_cell: np.ndarray,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    *,
+    h: float,
+    args: argparse.Namespace,
+) -> tuple[np.ndarray, np.ndarray, float, tuple[int, int]]:
+    W_scaled = np.asarray(W_cell, dtype=float) * float(args.conic_asr_velocity_multiplier)
+    G_field = None
+    if str(args.conic_asr_self_velocity) == "dispersion":
+        G_field = self_metric_from_dispersion_velocity(
+            W_scaled,
+            dt=float(args.pypar2_dt),
+            molecular_diffusion=float(args.pypar2_dm),
+            alpha_l=float(args.pypar2_alpha_l),
+            alpha_t=float(args.pypar2_alpha_t),
+            velocity_floor=args.pypar2_velocity_floor,
+            eigenvalue_floor=float(args.conic_asr_dispersion_eigenvalue_floor),
+        )
+    solver = ConicFMASR2D.from_velocity_field(
+        W_scaled,
+        h=h,
+        G_field=G_field,
+        direction="from_source",
+        min_speed=float(args.conic_asr_min_speed),
+        min_wind_factor=float(args.conic_asr_min_wind_factor),
+        stencil_radius=int(args.conic_asr_stencil_radius),
+        edge_samples=int(args.conic_asr_edge_samples),
+    )
+    T = solver.solve(source_mask)
+    path, travel_time, target = extract_conic_fm_asr_path(
+        solver,
+        T,
+        source_mask,
+        target_mask,
+    )
+    return T, path, travel_time, target
+
+
+def run_pypar2_path(
+    *,
+    x: np.ndarray,
+    y: np.ndarray,
+    x_faces: np.ndarray,
+    y_faces: np.ndarray,
+    vx_face: np.ndarray,
+    vy_face: np.ndarray,
+    source_rows: np.ndarray,
+    source_col: int,
+    target_col: int,
+    args: argparse.Namespace,
+) -> tuple[np.ndarray | None, float | None, dict[str, Any], str | None]:
+    n_particles = int(args.pypar2_num_particles or args.num_particles)
+    n_particles = max(2, n_particles)
+    seeds_x = np.full(n_particles, float(x[source_col]), dtype=np.float32)
+    seeds_y = np.linspace(
+        float(y[source_rows[0]]),
+        float(y[source_rows[-1]]),
+        n_particles,
+        endpoint=True,
+        dtype=np.float32,
+    )
+    params: dict[str, Any] = {
+        "method": "pypar2",
+        "backend": str(args.pypar2_taichi_arch),
+        "tracking_mode": "arrival",
+        "stop_mode": "first",
+        "save_trajectories": True,
+        "return_fastest": True,
+        "x_faces": np.asarray(x_faces, dtype=np.float32),
+        "y_faces": np.asarray(y_faces, dtype=np.float32),
+        "vx": np.asarray(vx_face, dtype=np.float32),
+        "vy": np.asarray(vy_face, dtype=np.float32),
+        "seeds_x": seeds_x,
+        "seeds_y": seeds_y,
+        "right_x": float(x[target_col]),
+        "dt": float(args.pypar2_dt),
+        "steps": int(args.pypar2_steps),
+        "molecular_diffusion": float(args.pypar2_dm),
+        "alpha_l": float(args.pypar2_alpha_l),
+        "alpha_t": float(args.pypar2_alpha_t),
+        "max_points": int(args.pypar2_max_points),
+        "trajectory_memory_limit": int(args.pypar2_trajectory_memory_limit),
+        "replay_top_k": int(args.pypar2_replay_top_k),
+        "replay_particles_per_center": int(args.pypar2_replay_particles_per_center),
+        "replay_radius_cells": float(args.pypar2_replay_radius_cells),
+        "replay_tolerance": float(args.pypar2_replay_tolerance),
+        "replay_max_redos": int(args.pypar2_replay_max_redos),
+        "seed": int(args.seed),
+    }
+    if args.pypar2_velocity_floor is not None:
+        params["velocity_floor"] = float(args.pypar2_velocity_floor)
+
+    try:
+        summary = sim_pt.particle_tracking_summary(params)
+    except Exception as exc:
+        return None, None, {}, f"PyPar2 dispatcher failed: {exc}"
+
+    fastest = summary.get("fastest")
+    replay_meta = summary.get("replay", {}) or {}
+    meta = {
+        "backend": summary.get("backend", "gpu"),
+        "taichi_arch": summary.get("taichi_arch", params["backend"]),
+        "n_particles": int(summary.get("n_particles", n_particles)),
+        "n_arrived": int(summary.get("n_arrived", 0)),
+        "arrival_fraction": float(summary.get("arrival_fraction", np.nan)),
+        "replay": replay_meta,
+    }
+    if fastest is None:
+        return None, None, meta, "PyPar2: no particle reached right_x"
+
+    path = np.vstack((np.asarray(fastest["x"]), np.asarray(fastest["y"]))).T.astype(float)
+    travel_time = float(fastest["travel_time"])
+    meta.update(
+        {
+            "travel_time": travel_time,
+            "particle_id": int(fastest.get("particle_id", -1)),
+            "source": str(fastest.get("source", "pilot")),
+        }
+    )
+    return path, travel_time, meta, None
+
+
 def save_results_npz(path: Path, results: dict[str, Any]) -> None:
     np.savez(
         path,
@@ -284,6 +437,20 @@ def json_safe_config(args: argparse.Namespace) -> dict[str, Any]:
         if isinstance(value, Path):
             config[key] = str(value)
     return config
+
+
+def json_safe_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(k): json_safe_value(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_safe_value(v) for v in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, Path):
+        return str(value)
+    return value
 
 
 def travel_time_error_metrics(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | int]:
@@ -324,14 +491,20 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
     T_fmm = results["T_fmm"]
     T_asr = results["T_asr"]
     T_asr_iso = results["T_asr_iso"]
+    T_conic_asr = results.get("T_conic_asr")
     diff_asr = T_asr - T_fmm
     diff_asr_iso = T_asr_iso - T_fmm
+    diff_conic_asr = T_conic_asr - T_fmm if isinstance(T_conic_asr, np.ndarray) else None
     paths = {
         "GPU Pollock": (results["path_pt"], "white", 2.4),
         "FMM speed": (results["path_fmm"], "tab:orange", 1.8),
         "FM-ASR ellipse": (results["path_asr"], "tab:red", 1.8),
         "FM-ASR isotropic": (results["path_asr_iso"], "tab:cyan", 1.8),
     }
+    if np.asarray(results.get("path_conic_asr", np.empty((0, 2)))).size:
+        paths["Conic FM-ASR"] = (results["path_conic_asr"], "tab:green", 1.9)
+    if np.asarray(results.get("path_pypar2", np.empty((0, 2)))).size:
+        paths["PyPar2 dispersion"] = (results["path_pypar2"], "magenta", 1.9)
 
     def diff_norm(arr: np.ndarray) -> TwoSlopeNorm | None:
         finite = np.asarray(arr, dtype=float)
@@ -345,8 +518,9 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
 
     rel_l2_asr = float(results.get("relative_l2_error_asr_vs_fmm", np.nan))
     rel_l2_asr_iso = float(results.get("relative_l2_error_asr_iso_vs_fmm", np.nan))
+    rel_l2_conic_asr = float(results.get("relative_l2_error_conic_asr_vs_fmm", np.nan))
 
-    fig, axes = plt.subplots(2, 3, figsize=(15, 9), constrained_layout=True)
+    fig, axes = plt.subplots(2, 4, figsize=(20, 9), constrained_layout=True)
     panels = [
         (axes[0, 0], logk, "log K", "viridis", None, None),
         (
@@ -358,10 +532,26 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
             rel_l2_asr,
         ),
         (axes[0, 2], T_fmm, "FMM travel time", "plasma", None, None),
+        (
+            axes[0, 3],
+            diff_conic_asr if diff_conic_asr is not None else np.full_like(T_fmm, np.nan),
+            "Conic FM-ASR T - FMM T",
+            "coolwarm",
+            diff_norm(diff_conic_asr) if diff_conic_asr is not None else None,
+            rel_l2_conic_asr,
+        ),
         (axes[1, 0], T_asr, "FM-ASR acentric ellipse T", "plasma", None, None),
         (axes[1, 1], T_asr_iso, "FM-ASR reduced isotropic T", "plasma", None, None),
         (
             axes[1, 2],
+            T_conic_asr if isinstance(T_conic_asr, np.ndarray) else np.full_like(T_fmm, np.nan),
+            "Conic FM-ASR travel time",
+            "plasma",
+            None,
+            None,
+        ),
+        (
+            axes[1, 3],
             diff_asr_iso,
             "FM-ASR isotropic T - FMM T",
             "coolwarm",
@@ -375,7 +565,9 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
         ax.set_title(title)
         ax.set_aspect("equal")
         for label, (path, color, linewidth) in paths.items():
-            ax.plot(path[:, 0], path[:, 1], color=color, linewidth=linewidth, label=label)
+            path = np.asarray(path, dtype=float)
+            if path.ndim == 2 and path.shape[0] > 0:
+                ax.plot(path[:, 0], path[:, 1], color=color, linewidth=linewidth, label=label)
         if rel_l2 is not None:
             ax.text(
                 0.02,
@@ -515,9 +707,56 @@ def main() -> None:
         isotropic_only=True,
     )
 
+    T_conic_asr = np.full_like(T_fmm, np.nan, dtype=float)
+    path_conic_asr = np.empty((0, 2), dtype=float)
+    t_conic_asr = float("nan")
+    target_conic_asr: tuple[int, int] | None = None
+    conic_asr_error: str | None = None
+    if bool(args.conic_asr):
+        try:
+            T_conic_asr, path_conic_asr, t_conic_asr, target_conic_asr = solve_conic_asr_path(
+                W_cell,
+                source_mask,
+                target_mask,
+                h=h_grid,
+                args=args,
+            )
+        except Exception as exc:
+            conic_asr_error = str(exc)
+
+    path_pypar2 = np.empty((0, 2), dtype=float)
+    t_pypar2 = float("nan")
+    pypar2_meta: dict[str, Any] = {}
+    pypar2_error: str | None = None
+    if bool(args.pypar2):
+        path_pypar2_opt, t_pypar2_opt, pypar2_meta, pypar2_error = run_pypar2_path(
+            x=x,
+            y=y,
+            x_faces=x_faces,
+            y_faces=y_faces,
+            vx_face=vx_face,
+            vy_face=vy_face,
+            source_rows=source_rows,
+            source_col=source_col,
+            target_col=target_col,
+            args=args,
+        )
+        if path_pypar2_opt is not None and t_pypar2_opt is not None:
+            path_pypar2 = np.asarray(path_pypar2_opt, dtype=float)
+            t_pypar2 = float(t_pypar2_opt)
+            if path_pypar2.size == 0 or path_pypar2[-1, 0] < float(x[target_col]) - 1e-4:
+                pypar2_error = (
+                    "PyPar2 fastest replay did not reach target line: "
+                    f"last_x={path_pypar2[-1, 0] if path_pypar2.size else np.nan:.6g}, "
+                    f"right_x={float(x[target_col]):.6g}"
+                )
+                path_pypar2 = np.empty((0, 2), dtype=float)
+                t_pypar2 = float("nan")
+
     error_metrics = {
         "fm_asr_vs_fmm": travel_time_error_metrics(T_fmm, T_asr),
         "fm_asr_isotropic_vs_fmm": travel_time_error_metrics(T_fmm, T_asr_iso),
+        "conic_fm_asr_vs_fmm": travel_time_error_metrics(T_fmm, T_conic_asr),
     }
     config = json_safe_config(args)
     summary = {
@@ -527,6 +766,21 @@ def main() -> None:
         "fm_asr_isotropic": {
             "travel_time": float(t_asr_iso),
             "target": tuple(map(int, target_asr_iso)),
+        },
+        "conic_fm_asr": {
+            "enabled": bool(args.conic_asr),
+            "self_velocity": str(args.conic_asr_self_velocity),
+            "travel_time": float(t_conic_asr),
+            "target": (
+                None if target_conic_asr is None else tuple(map(int, target_conic_asr))
+            ),
+            "error": conic_asr_error,
+        },
+        "pypar2": {
+            "enabled": bool(args.pypar2),
+            "travel_time": float(t_pypar2),
+            "error": pypar2_error,
+            "meta": pypar2_meta,
         },
         "domain": {
             "source_col": int(source_col),
@@ -555,14 +809,19 @@ def main() -> None:
         "T_fmm": T_fmm,
         "T_asr": T_asr,
         "T_asr_iso": T_asr_iso,
+        "T_conic_asr": T_conic_asr,
         "path_pt": path_pt,
         "path_fmm": path_fmm,
         "path_asr": path_asr,
         "path_asr_iso": path_asr_iso,
+        "path_conic_asr": path_conic_asr,
+        "path_pypar2": path_pypar2,
         "travel_time_pt": np.array(float(t_pt)),
         "travel_time_fmm": np.array(float(t_fmm)),
         "travel_time_asr": np.array(float(t_asr)),
         "travel_time_asr_iso": np.array(float(t_asr_iso)),
+        "travel_time_conic_asr": np.array(float(t_conic_asr)),
+        "travel_time_pypar2": np.array(float(t_pypar2)),
         "l2_error_asr_vs_fmm": np.array(float(error_metrics["fm_asr_vs_fmm"]["l2_error"])),
         "relative_l2_error_asr_vs_fmm": np.array(
             float(error_metrics["fm_asr_vs_fmm"]["relative_l2_error"])
@@ -573,10 +832,16 @@ def main() -> None:
         "relative_l2_error_asr_iso_vs_fmm": np.array(
             float(error_metrics["fm_asr_isotropic_vs_fmm"]["relative_l2_error"])
         ),
+        "l2_error_conic_asr_vs_fmm": np.array(
+            float(error_metrics["conic_fm_asr_vs_fmm"]["l2_error"])
+        ),
+        "relative_l2_error_conic_asr_vs_fmm": np.array(
+            float(error_metrics["conic_fm_asr_vs_fmm"]["relative_l2_error"])
+        ),
     }
     save_results_npz(args.output_dir / "results.npz", results)
     with (args.output_dir / "summary.json").open("w", encoding="utf-8") as f:
-        json.dump(summary, f, indent=2)
+        json.dump(json_safe_value(summary), f, indent=2)
 
     plot_comparison(results, args.output_dir / "comparison.png")
     if not args.no_indicatrix:
