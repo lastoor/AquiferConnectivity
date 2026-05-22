@@ -86,6 +86,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_fp_fsm = []
     stats_fp_fm_asr = []
     stats_fp_fm_asr_iso = []
+    stats_fp_fm_asr_conic = []
     stats_fp_pypar2 = []
     stats_mhr = []
     stats_mhr_fmm = []
@@ -95,6 +96,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_fpt_fsm = []
     stats_fpt_fm_asr = []
     stats_fpt_fm_asr_iso = []
+    stats_fpt_fm_asr_conic = []
     stats_fpt_pypar2 = []
     stats_ct_lrp_dijkstra = []
     stats_ct_lrp_fmm = []
@@ -104,6 +106,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_ct_fp = []
     stats_ct_fp_fm_asr = []
     stats_ct_fp_fm_asr_iso = []
+    stats_ct_fp_fm_asr_conic = []
     stats_ct_fp_pypar2 = []
     stats_hausdorff_lrp = []
     stats_hausdorff_lrp_fmm = []
@@ -112,6 +115,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_hausdorff_fsm = []
     stats_hausdorff_fm_asr = []
     stats_hausdorff_fm_asr_iso = []
+    stats_hausdorff_fm_asr_conic = []
     stats_hausdorff_pypar2 = []
     stats_frechet_lrp = []
     stats_frechet_lrp_fmm = []
@@ -120,6 +124,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_frechet_fsm = []
     stats_frechet_fm_asr = []
     stats_frechet_fm_asr_iso = []
+    stats_frechet_fm_asr_conic = []
     stats_frechet_pypar2 = []
     stats_endpoint_lrp = []
     stats_endpoint_lrp_fmm = []
@@ -128,6 +133,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
     stats_endpoint_fsm = []
     stats_endpoint_fm_asr = []
     stats_endpoint_fm_asr_iso = []
+    stats_endpoint_fm_asr_conic = []
     stats_endpoint_pypar2 = []
 
     for var_ in var_values:
@@ -141,6 +147,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_fp_fsm.append(_mean_std_pair(entry["lengths"].get("fp_fsm", [np.nan, np.nan])))
         stats_fp_fm_asr.append(_mean_std_pair(entry["lengths"].get("fp_fm_asr", [np.nan, np.nan])))
         stats_fp_fm_asr_iso.append(_mean_std_pair(entry["lengths"].get("fp_fm_asr_iso", [np.nan, np.nan])))
+        stats_fp_fm_asr_conic.append(_mean_std_pair(entry["lengths"].get("fp_fm_asr_conic", [np.nan, np.nan])))
         stats_fp_pypar2.append(_mean_std_pair(entry["lengths"].get("fp_pypar2", [np.nan, np.nan])))
         stats_mhr.append(_mean_std_pair(entry["times"]["mhr"]))
         stats_mhr_fmm.append(_mean_std_pair(entry["times"]["mhr_fmm"]))
@@ -150,6 +157,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_fpt_fsm.append(_mean_std_pair(entry["times"].get("fpt_fsm", [np.nan, np.nan])))
         stats_fpt_fm_asr.append(_mean_std_pair(entry["times"].get("fpt_fm_asr", [np.nan, np.nan])))
         stats_fpt_fm_asr_iso.append(_mean_std_pair(entry["times"].get("fpt_fm_asr_iso", [np.nan, np.nan])))
+        stats_fpt_fm_asr_conic.append(_mean_std_pair(entry["times"].get("fpt_fm_asr_conic", [np.nan, np.nan])))
         stats_fpt_pypar2.append(_mean_std_pair(entry["times"].get("fpt_pypar2", [np.nan, np.nan])))
         ct = entry.get("comp_times", {})
         stats_ct_lrp_dijkstra.append(_mean_std_pair(ct.get("ct_lrp_dijkstra", [np.nan, np.nan])))
@@ -160,6 +168,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_ct_fp.append(_mean_std_pair(ct.get("ct_fp", [np.nan, np.nan])))
         stats_ct_fp_fm_asr.append(_mean_std_pair(ct.get("ct_fp_fm_asr", [np.nan, np.nan])))
         stats_ct_fp_fm_asr_iso.append(_mean_std_pair(ct.get("ct_fp_fm_asr_iso", [np.nan, np.nan])))
+        stats_ct_fp_fm_asr_conic.append(_mean_std_pair(ct.get("ct_fp_fm_asr_conic", [np.nan, np.nan])))
         stats_ct_fp_pypar2.append(_mean_std_pair(ct.get("ct_fp_pypar2", [np.nan, np.nan])))
         stats_hausdorff_lrp.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrp"]))
         stats_hausdorff_lrp_fmm.append(_mean_std_pair(entry["distances"]["hausdorff"]["fp_lrpFMM"]))
@@ -168,6 +177,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_hausdorff_fsm.append(_mean_std_pair(entry["distances"]["hausdorff"].get("fp_fpFSM", [np.nan, np.nan])))
         stats_hausdorff_fm_asr.append(_mean_std_pair(entry["distances"]["hausdorff"].get("fp_fm_asr", [np.nan, np.nan])))
         stats_hausdorff_fm_asr_iso.append(_mean_std_pair(entry["distances"]["hausdorff"].get("fp_fm_asr_iso", [np.nan, np.nan])))
+        stats_hausdorff_fm_asr_conic.append(_mean_std_pair(entry["distances"]["hausdorff"].get("fp_fm_asr_conic", [np.nan, np.nan])))
         stats_hausdorff_pypar2.append(_mean_std_pair(entry["distances"]["hausdorff"].get("fp_pypar2", [np.nan, np.nan])))
         stats_frechet_lrp.append(_mean_std_pair(entry["distances"]["frechet"]["fp_lrp"]))
         stats_frechet_lrp_fmm.append(_mean_std_pair(entry["distances"]["frechet"]["fp_lrpFMM"]))
@@ -176,6 +186,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_frechet_fsm.append(_mean_std_pair(entry["distances"]["frechet"].get("fp_fpFSM", [np.nan, np.nan])))
         stats_frechet_fm_asr.append(_mean_std_pair(entry["distances"]["frechet"].get("fp_fm_asr", [np.nan, np.nan])))
         stats_frechet_fm_asr_iso.append(_mean_std_pair(entry["distances"]["frechet"].get("fp_fm_asr_iso", [np.nan, np.nan])))
+        stats_frechet_fm_asr_conic.append(_mean_std_pair(entry["distances"]["frechet"].get("fp_fm_asr_conic", [np.nan, np.nan])))
         stats_frechet_pypar2.append(_mean_std_pair(entry["distances"]["frechet"].get("fp_pypar2", [np.nan, np.nan])))
         stats_endpoint_lrp.append(_mean_std_pair(entry["distances"]["end_point"]["fp_lrp"]))
         stats_endpoint_lrp_fmm.append(_mean_std_pair(entry["distances"]["end_point"]["fp_lrpFMM"]))
@@ -184,6 +195,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         stats_endpoint_fsm.append(_mean_std_pair(entry["distances"]["end_point"].get("fp_fpFSM", [np.nan, np.nan])))
         stats_endpoint_fm_asr.append(_mean_std_pair(entry["distances"]["end_point"].get("fp_fm_asr", [np.nan, np.nan])))
         stats_endpoint_fm_asr_iso.append(_mean_std_pair(entry["distances"]["end_point"].get("fp_fm_asr_iso", [np.nan, np.nan])))
+        stats_endpoint_fm_asr_conic.append(_mean_std_pair(entry["distances"]["end_point"].get("fp_fm_asr_conic", [np.nan, np.nan])))
         stats_endpoint_pypar2.append(_mean_std_pair(entry["distances"]["end_point"].get("fp_pypar2", [np.nan, np.nan])))
 
     return {
@@ -195,6 +207,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_fp_fsm": np.asarray(stats_fp_fsm, dtype=float),
         "stats_fp_fm_asr": np.asarray(stats_fp_fm_asr, dtype=float),
         "stats_fp_fm_asr_iso": np.asarray(stats_fp_fm_asr_iso, dtype=float),
+        "stats_fp_fm_asr_conic": np.asarray(stats_fp_fm_asr_conic, dtype=float),
         "stats_fp_pypar2": np.asarray(stats_fp_pypar2, dtype=float),
         "stats_mhr": np.asarray(stats_mhr, dtype=float),
         "stats_mhr_fmm": np.asarray(stats_mhr_fmm, dtype=float),
@@ -204,6 +217,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_fpt_fsm": np.asarray(stats_fpt_fsm, dtype=float),
         "stats_fpt_fm_asr": np.asarray(stats_fpt_fm_asr, dtype=float),
         "stats_fpt_fm_asr_iso": np.asarray(stats_fpt_fm_asr_iso, dtype=float),
+        "stats_fpt_fm_asr_conic": np.asarray(stats_fpt_fm_asr_conic, dtype=float),
         "stats_fpt_pypar2": np.asarray(stats_fpt_pypar2, dtype=float),
         "stats_hausdorff_lrp": np.asarray(stats_hausdorff_lrp, dtype=float),
         "stats_hausdorff_lrp_fmm": np.asarray(stats_hausdorff_lrp_fmm, dtype=float),
@@ -212,6 +226,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_hausdorff_fsm": np.asarray(stats_hausdorff_fsm, dtype=float),
         "stats_hausdorff_fm_asr": np.asarray(stats_hausdorff_fm_asr, dtype=float),
         "stats_hausdorff_fm_asr_iso": np.asarray(stats_hausdorff_fm_asr_iso, dtype=float),
+        "stats_hausdorff_fm_asr_conic": np.asarray(stats_hausdorff_fm_asr_conic, dtype=float),
         "stats_hausdorff_pypar2": np.asarray(stats_hausdorff_pypar2, dtype=float),
         "stats_frechet_lrp": np.asarray(stats_frechet_lrp, dtype=float),
         "stats_frechet_lrp_fmm": np.asarray(stats_frechet_lrp_fmm, dtype=float),
@@ -220,6 +235,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_frechet_fsm": np.asarray(stats_frechet_fsm, dtype=float),
         "stats_frechet_fm_asr": np.asarray(stats_frechet_fm_asr, dtype=float),
         "stats_frechet_fm_asr_iso": np.asarray(stats_frechet_fm_asr_iso, dtype=float),
+        "stats_frechet_fm_asr_conic": np.asarray(stats_frechet_fm_asr_conic, dtype=float),
         "stats_frechet_pypar2": np.asarray(stats_frechet_pypar2, dtype=float),
         "stats_endpoint_lrp": np.asarray(stats_endpoint_lrp, dtype=float),
         "stats_endpoint_lrp_fmm": np.asarray(stats_endpoint_lrp_fmm, dtype=float),
@@ -228,6 +244,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_endpoint_fsm": np.asarray(stats_endpoint_fsm, dtype=float),
         "stats_endpoint_fm_asr": np.asarray(stats_endpoint_fm_asr, dtype=float),
         "stats_endpoint_fm_asr_iso": np.asarray(stats_endpoint_fm_asr_iso, dtype=float),
+        "stats_endpoint_fm_asr_conic": np.asarray(stats_endpoint_fm_asr_conic, dtype=float),
         "stats_endpoint_pypar2": np.asarray(stats_endpoint_pypar2, dtype=float),
         "stats_ct_lrp_dijkstra": np.asarray(stats_ct_lrp_dijkstra, dtype=float),
         "stats_ct_lrp_fmm": np.asarray(stats_ct_lrp_fmm, dtype=float),
@@ -237,6 +254,7 @@ def collect_primary_stats(stats: dict[str, dict[str, Any]], var_values: list[flo
         "stats_ct_fp": np.asarray(stats_ct_fp, dtype=float),
         "stats_ct_fp_fm_asr": np.asarray(stats_ct_fp_fm_asr, dtype=float),
         "stats_ct_fp_fm_asr_iso": np.asarray(stats_ct_fp_fm_asr_iso, dtype=float),
+        "stats_ct_fp_fm_asr_conic": np.asarray(stats_ct_fp_fm_asr_conic, dtype=float),
         "stats_ct_fp_pypar2": np.asarray(stats_ct_fp_pypar2, dtype=float),
     }
 
@@ -259,6 +277,8 @@ def collect_integral_stats(line_integrals: dict[str, dict[str, Any]], var_values
         "int2_fp_fm_asr": [],
         "int_fp_fm_asr_iso": [],
         "int2_fp_fm_asr_iso": [],
+        "int_fp_fm_asr_conic": [],
+        "int2_fp_fm_asr_conic": [],
     }
     for var_ in var_values:
         li = line_integrals[f"var_{var_}"]
@@ -284,6 +304,10 @@ def collect_integral_stats(line_integrals: dict[str, dict[str, Any]], var_values
         _asri2 = li.get("int_logk2_fp_fm_asr_iso", {"mean": np.nan, "std": np.nan})
         out["int_fp_fm_asr_iso"].append([_asri["mean"], _asri["std"]])
         out["int2_fp_fm_asr_iso"].append([_asri2["mean"], _asri2["std"]])
+        _asrc = li.get("int_logk_fp_fm_asr_conic", {"mean": np.nan, "std": np.nan})
+        _asrc2 = li.get("int_logk2_fp_fm_asr_conic", {"mean": np.nan, "std": np.nan})
+        out["int_fp_fm_asr_conic"].append([_asrc["mean"], _asrc["std"]])
+        out["int2_fp_fm_asr_conic"].append([_asrc2["mean"], _asrc2["std"]])
 
     return {k: np.asarray(v, dtype=float) for k, v in out.items()}
 
@@ -310,6 +334,7 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
         "fp_fpFSM": [],
         "fp_fm_asr": [],
         "fp_fm_asr_iso": [],
+        "fp_fm_asr_conic": [],
         "fp_pypar2": [],
     }
     warnings: list[str] = []
@@ -324,6 +349,7 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
             out["fp_fpFSM"].append(np.nan)
             out["fp_fm_asr"].append(np.nan)
             out["fp_fm_asr_iso"].append(np.nan)
+            out["fp_fm_asr_conic"].append(np.nan)
             out["fp_pypar2"].append(np.nan)
             warnings.append(f"Missing variance entry for Wasserstein length metric at sigma2={var_}.")
             continue
@@ -337,6 +363,7 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
         fp_fsm = _safe_first_size_samples(lengths, "fp_fsm")
         fp_fm_asr = _safe_first_size_samples(lengths, "fp_fm_asr")
         fp_fm_asr_iso = _safe_first_size_samples(lengths, "fp_fm_asr_iso")
+        fp_fm_asr_conic = _safe_first_size_samples(lengths, "fp_fm_asr_conic")
         fp_pypar2 = _safe_first_size_samples(lengths, "fp_pypar2")
 
         pair_data = {
@@ -347,6 +374,7 @@ def collect_wasserstein_length_distance(var_data: dict[str, dict[str, Any]], var
             "fp_fpFSM": fp_fsm,
             "fp_fm_asr": fp_fm_asr,
             "fp_fm_asr_iso": fp_fm_asr_iso,
+            "fp_fm_asr_conic": fp_fm_asr_conic,
             "fp_pypar2": fp_pypar2,
         }
         for pair_key, other in pair_data.items():
@@ -380,6 +408,7 @@ def collect_length_cdf_samples(var_data: dict[str, dict[str, Any]], var_values: 
             "fp_fsm": _safe_first_size_samples(lengths, "fp_fsm"),
             "fp_fm_asr": _safe_first_size_samples(lengths, "fp_fm_asr"),
             "fp_fm_asr_iso": _safe_first_size_samples(lengths, "fp_fm_asr_iso"),
+            "fp_fm_asr_conic": _safe_first_size_samples(lengths, "fp_fm_asr_conic"),
             "fp_pypar2": _safe_first_size_samples(lengths, "fp_pypar2"),
         }
         required_keys = ("fp", "lrp", "lrp_fmm", "fp_fmm", "fp_dijkstra")
@@ -398,10 +427,13 @@ def collect_length_cdf_samples(var_data: dict[str, dict[str, Any]], var_values: 
             out[key]["fp_fsm"] = np.asarray(samples["fp_fsm"], dtype=float)
         fm_asr_s = _safe_first_size_samples(lengths, "fp_fm_asr")
         fm_iso_s = _safe_first_size_samples(lengths, "fp_fm_asr_iso")
+        fm_conic_s = _safe_first_size_samples(lengths, "fp_fm_asr_conic")
         if fm_asr_s is not None:
             out[key]["fp_fm_asr"] = np.asarray(fm_asr_s, dtype=float)
         if fm_iso_s is not None:
             out[key]["fp_fm_asr_iso"] = np.asarray(fm_iso_s, dtype=float)
+        if fm_conic_s is not None:
+            out[key]["fp_fm_asr_conic"] = np.asarray(fm_conic_s, dtype=float)
         pypar2_s = _safe_first_size_samples(lengths, "fp_pypar2")
         if pypar2_s is not None:
             out[key]["fp_pypar2"] = np.asarray(pypar2_s, dtype=float)
@@ -414,7 +446,7 @@ def collect_scatter_time_samples(var_data: dict[str, dict[str, Any]], var_values
     warnings: list[str] = []
 
     required_keys = ("fpt", "fpt_fmm", "fpt_dijkstra", "mhr", "mhr_fmm")
-    optional_keys = ("fpt_fsm", "fpt_fm_asr", "fpt_fm_asr_iso", "fpt_pypar2")
+    optional_keys = ("fpt_fsm", "fpt_fm_asr", "fpt_fm_asr_iso", "fpt_fm_asr_conic", "fpt_pypar2")
     keys = required_keys + optional_keys
     for var_ in var_values:
         var_key = f"var_{var_}"
@@ -470,6 +502,7 @@ def collect_comp_time_samples(var_data: dict[str, dict[str, Any]], var_values: l
         "ct_fp",
         "ct_fp_fm_asr",
         "ct_fp_fm_asr_iso",
+        "ct_fp_fm_asr_conic",
         "ct_fp_pypar2",
     )
 
@@ -504,7 +537,7 @@ def collect_endpoint_box_samples(var_data: dict[str, dict[str, Any]], var_values
     out: dict[str, dict[str, np.ndarray]] = {}
     warnings: list[str] = []
     required_pair_keys = ("fp_lrp", "fp_lrpFMM", "fp_fpFMM", "fp_fpDijkstra")
-    optional_pair_keys = ("fp_fpFSM", "fp_fm_asr", "fp_fm_asr_iso", "fp_pypar2")
+    optional_pair_keys = ("fp_fpFSM", "fp_fm_asr", "fp_fm_asr_iso", "fp_fm_asr_conic", "fp_pypar2")
 
     for var_ in var_values:
         key = f"var_{var_}"
@@ -551,7 +584,7 @@ def collect_hausdorff_box_samples(var_data: dict[str, dict[str, Any]], var_value
     out: dict[str, dict[str, np.ndarray]] = {}
     warnings: list[str] = []
     required_pair_keys = ("fp_lrp", "fp_lrpFMM", "fp_fpFMM", "fp_fpDijkstra")
-    optional_pair_keys = ("fp_fpFSM", "fp_fm_asr", "fp_fm_asr_iso", "fp_pypar2")
+    optional_pair_keys = ("fp_fpFSM", "fp_fm_asr", "fp_fm_asr_iso", "fp_fm_asr_conic", "fp_pypar2")
 
     for var_ in var_values:
         key = f"var_{var_}"
@@ -602,6 +635,7 @@ _MC_HAUSDORFF_PAIRS = (
     ("fp_vs_fsm", "fp_fpFSM"),
     ("fp_vs_fm_asr", "fp_fm_asr"),
     ("fp_vs_fm_asr_iso", "fp_fm_asr_iso"),
+    ("fp_vs_fm_asr_conic", "fp_fm_asr_conic"),
     ("fp_vs_pypar2", "fp_pypar2"),
 )
 _CDF_GRID_SIZE = 500

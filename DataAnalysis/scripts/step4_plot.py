@@ -36,6 +36,7 @@ COLORS = {
     "fpFSM": "#2CA02C",
     "fpFmAsr": "#E377C2",
     "fpFmAsrIso": "#17BECF",
+    "fpFmAsrConic": "#9467BD",
     "fpPypar2": "#FF7F0E",
 }
 
@@ -48,6 +49,7 @@ LINESTYLES = {
     "fpFSM": (0, (3, 1, 1, 1)),
     "fpFmAsr": (0, (5, 2)),
     "fpFmAsrIso": (0, (1, 1)),
+    "fpFmAsrConic": (0, (7, 2, 1, 2)),
     "fpPypar2": (0, (3, 1, 1, 1, 1, 1)),
 }
 
@@ -232,6 +234,7 @@ def plot_characteristic_time(
     stats_fpt_fsm: np.ndarray | None = None,
     stats_fpt_fm_asr: np.ndarray | None = None,
     stats_fpt_fm_asr_iso: np.ndarray | None = None,
+    stats_fpt_fm_asr_conic: np.ndarray | None = None,
     stats_fpt_pypar2: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[6, 3])
@@ -266,6 +269,17 @@ def plot_characteristic_time(
             markersize=4,
             markerfacecolor="None",
             label=r"FP (FM-ASR\, iso)",
+        )
+    if stats_fpt_fm_asr_conic is not None and np.any(np.isfinite(stats_fpt_fm_asr_conic[:, 0])):
+        ax.errorbar(
+            var,
+            stats_fpt_fm_asr_conic[:, 0] / t_ref,
+            color=COLORS["fpFmAsrConic"],
+            linestyle="--",
+            marker="x",
+            markersize=4,
+            markerfacecolor="None",
+            label=r"FP (FM-ASR\, conic)",
         )
     if stats_fpt_pypar2 is not None and np.any(np.isfinite(stats_fpt_pypar2[:, 0])):
         ax.errorbar(
@@ -563,6 +577,7 @@ def plot_hausdorff_vs_variance(
     stats_hausdorff_fsm: np.ndarray | None = None,
     stats_hausdorff_fm_asr: np.ndarray | None = None,
     stats_hausdorff_fm_asr_iso: np.ndarray | None = None,
+    stats_hausdorff_fm_asr_conic: np.ndarray | None = None,
     stats_hausdorff_pypar2: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[6, 3])
@@ -590,6 +605,17 @@ def plot_hausdorff_vs_variance(
             label=r"FP (FM-ASR\, iso)",
             linestyle="--",
             color=COLORS["fpFmAsrIso"],
+            marker="x",
+            markersize=4,
+            markerfacecolor="None",
+        )
+    if stats_hausdorff_fm_asr_conic is not None and np.any(np.isfinite(stats_hausdorff_fm_asr_conic[:, 0])):
+        ax.errorbar(
+            var,
+            stats_hausdorff_fm_asr_conic[:, 0] / i_y,
+            label=r"FP (FM-ASR\, conic)",
+            linestyle="--",
+            color=COLORS["fpFmAsrConic"],
             marker="x",
             markersize=4,
             markerfacecolor="None",
@@ -631,6 +657,7 @@ def plot_frechet_vs_variance(
     stats_frechet_fsm: np.ndarray | None = None,
     stats_frechet_fm_asr: np.ndarray | None = None,
     stats_frechet_fm_asr_iso: np.ndarray | None = None,
+    stats_frechet_fm_asr_conic: np.ndarray | None = None,
     stats_frechet_pypar2: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
@@ -659,6 +686,17 @@ def plot_frechet_vs_variance(
             label=r"$d_F$[FP,\,FM-ASR\,iso]",
             linestyle="-",
             color=COLORS["fpFmAsrIso"],
+            marker="o",
+            markerfacecolor="None",
+        )
+    if stats_frechet_fm_asr_conic is not None and np.any(np.isfinite(stats_frechet_fm_asr_conic[:, 0])):
+        ax.errorbar(
+            var,
+            stats_frechet_fm_asr_conic[:, 0] / i_y,
+            yerr=stats_frechet_fm_asr_conic[:, 1] / i_y,
+            label=r"$d_F$[FP,\,FM-ASR\,conic]",
+            linestyle="-",
+            color=COLORS["fpFmAsrConic"],
             marker="o",
             markerfacecolor="None",
         )
@@ -696,6 +734,7 @@ def plot_endpoint_box_by_variance(
         ("fp_fpFSM", "$d_{EP}$[FP, FP(FSM)]", COLORS["fpFSM"]),
         ("fp_fm_asr", r"$d_{EP}$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"$d_{EP}$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
+        ("fp_fm_asr_conic", r"$d_{EP}$[FP,\,FM-ASR\,conic]", COLORS["fpFmAsrConic"]),
         ("fp_pypar2", r"$d_{EP}$[FP,\,PyPar2]", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
@@ -765,6 +804,7 @@ def plot_hausdorff_box_by_variance(
         ("fp_fpFSM", "$d_H$[FP, FP(FSM)]", COLORS["fpFSM"]),
         ("fp_fm_asr", r"$d_H$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"$d_H$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
+        ("fp_fm_asr_conic", r"$d_H$[FP,\,FM-ASR\,conic]", COLORS["fpFmAsrConic"]),
         ("fp_pypar2", r"$d_H$[FP,\,PyPar2]", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
@@ -821,6 +861,7 @@ _HAUSDORFF_CDF_PAIRS = (
     ("fp_fpFSM", "$d_H$[FP, FP(FSM)]", COLORS["fpFSM"]),
     ("fp_fm_asr", r"$d_H$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
     ("fp_fm_asr_iso", r"$d_H$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
+    ("fp_fm_asr_conic", r"$d_H$[FP,\,FM-ASR\,conic]", COLORS["fpFmAsrConic"]),
     ("fp_pypar2", r"$d_H$[FP,\,PyPar2]", COLORS["fpPypar2"]),
 )
 
@@ -861,6 +902,7 @@ _ENTROPY_HAUSDORFF_PANELS = (
     ("fp_fpFSM", "FP (FSM)"),
     ("fp_fm_asr", "FP (FM-ASR)"),
     ("fp_fm_asr_iso", r"FP (FM-ASR\, iso)"),
+    ("fp_fm_asr_conic", r"FP (FM-ASR\, conic)"),
     ("fp_pypar2", "FP (PyPar2)"),
     ("fp_lrpFMM", "LRP (FMM)"),
     ("fp_lrp", "LRP (Dijkstra)"),
@@ -956,6 +998,7 @@ def plot_times_box_by_variance(
         ("fpt_fsm", "FP (FSM)", COLORS["fpFSM"], t_ref),
         ("fpt_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"], t_ref),
         ("fpt_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"], t_ref),
+        ("fpt_fm_asr_conic", r"FP (FM-ASR\, conic)", COLORS["fpFmAsrConic"], t_ref),
         ("fpt_pypar2", "FP (PyPar2)", COLORS["fpPypar2"], t_ref),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
@@ -1018,6 +1061,7 @@ def plot_comp_time_mean_vs_variance(
         ("stats_ct_fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
         ("stats_ct_fp_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("stats_ct_fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
+        ("stats_ct_fp_fm_asr_conic", r"FP (FM-ASR\, conic)", COLORS["fpFmAsrConic"]),
         ("stats_ct_fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
     ]
     for key, label, color in series_defs:
@@ -1058,6 +1102,7 @@ def plot_comp_time_box_by_variance(
         ("ct_fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
         ("ct_fp_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("ct_fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
+        ("ct_fp_fm_asr_conic", r"FP (FM-ASR\, conic)", COLORS["fpFmAsrConic"]),
         ("ct_fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
@@ -1163,6 +1208,7 @@ def plot_wasserstein_len_vs_variance(
     w_fp_fsm: np.ndarray | None = None,
     w_fp_fm_asr: np.ndarray | None = None,
     w_fp_fm_asr_iso: np.ndarray | None = None,
+    w_fp_fm_asr_conic: np.ndarray | None = None,
     w_fp_pypar2: np.ndarray | None = None,
 ):
     fig, ax = plt.subplots(figsize=[5, 4])
@@ -1176,6 +1222,8 @@ def plot_wasserstein_len_vs_variance(
         ax.plot(var, w_fp_fm_asr / i_y, linestyle="-", color=COLORS["fpFmAsr"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,FM-ASR]")
     if w_fp_fm_asr_iso is not None and np.any(np.isfinite(w_fp_fm_asr_iso)):
         ax.plot(var, w_fp_fm_asr_iso / i_y, linestyle="-", color=COLORS["fpFmAsrIso"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,FM-ASR\,iso]")
+    if w_fp_fm_asr_conic is not None and np.any(np.isfinite(w_fp_fm_asr_conic)):
+        ax.plot(var, w_fp_fm_asr_conic / i_y, linestyle="-", color=COLORS["fpFmAsrConic"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,FM-ASR\,conic]")
     if w_fp_pypar2 is not None and np.any(np.isfinite(w_fp_pypar2)):
         ax.plot(var, w_fp_pypar2 / i_y, linestyle="-", color=COLORS["fpPypar2"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,PyPar2]")
     # ax.set_xscale("log")
@@ -1199,6 +1247,7 @@ def plot_length_cdf_for_variance(*, samples: dict[str, np.ndarray], variance_val
         ("fp_fsm", "FP (FSM)", COLORS["fpFSM"]),
         ("fp_fm_asr", r"FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
+        ("fp_fm_asr_conic", r"FP (FM-ASR\, conic)", COLORS["fpFmAsrConic"]),
         ("fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
     ]:
         arr = np.asarray(samples.get(key, []), dtype=float).ravel()
@@ -1327,6 +1376,7 @@ def run_stage4(
             stats_fpt_fsm=s.get("stats_fpt_fsm"),
             stats_fpt_fm_asr=s.get("stats_fpt_fm_asr"),
             stats_fpt_fm_asr_iso=s.get("stats_fpt_fm_asr_iso"),
+            stats_fpt_fm_asr_conic=s.get("stats_fpt_fm_asr_conic"),
             stats_fpt_pypar2=s.get("stats_fpt_pypar2"),
         )
         artifacts.extend(save_figure(fig, section="times", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
@@ -1416,6 +1466,7 @@ def run_stage4(
             stats_hausdorff_fsm=s.get("stats_hausdorff_fsm"),
             stats_hausdorff_fm_asr=s.get("stats_hausdorff_fm_asr"),
             stats_hausdorff_fm_asr_iso=s.get("stats_hausdorff_fm_asr_iso"),
+            stats_hausdorff_fm_asr_conic=s.get("stats_hausdorff_fm_asr_conic"),
             stats_hausdorff_pypar2=s.get("stats_hausdorff_pypar2"),
         )
         artifacts.extend(save_figure(fig, section="hausdorff", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
@@ -1441,6 +1492,7 @@ def run_stage4(
             stats_frechet_fsm=s.get("stats_frechet_fsm"),
             stats_frechet_fm_asr=s.get("stats_frechet_fm_asr"),
             stats_frechet_fm_asr_iso=s.get("stats_frechet_fm_asr_iso"),
+            stats_frechet_fm_asr_conic=s.get("stats_frechet_fm_asr_conic"),
             stats_frechet_pypar2=s.get("stats_frechet_pypar2"),
         )
         artifacts.extend(save_figure(fig, section="frechet", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
@@ -1511,6 +1563,7 @@ def run_stage4(
             w_fp_fsm = _coerce_series(wl["fp_fpFSM"], len(var), label="wasserstein_len.fp_fpFSM", warnings=all_warnings) if "fp_fpFSM" in wl else None
             w_fp_fm_asr = _coerce_series(wl.get("fp_fm_asr", []), len(var), label="wasserstein_len.fp_fm_asr", warnings=all_warnings)
             w_fp_fm_asr_iso = _coerce_series(wl.get("fp_fm_asr_iso", []), len(var), label="wasserstein_len.fp_fm_asr_iso", warnings=all_warnings)
+            w_fp_fm_asr_conic = _coerce_series(wl.get("fp_fm_asr_conic", []), len(var), label="wasserstein_len.fp_fm_asr_conic", warnings=all_warnings)
             w_fp_pypar2 = _coerce_series(wl.get("fp_pypar2", []), len(var), label="wasserstein_len.fp_pypar2", warnings=all_warnings)
             fig, meta = plot_wasserstein_len_vs_variance(
                 var,
@@ -1522,6 +1575,7 @@ def run_stage4(
                 w_fp_fsm=w_fp_fsm,
                 w_fp_fm_asr=w_fp_fm_asr,
                 w_fp_fm_asr_iso=w_fp_fm_asr_iso,
+                w_fp_fm_asr_conic=w_fp_fm_asr_conic,
                 w_fp_pypar2=w_fp_pypar2,
             )
             artifacts.extend(save_figure(fig, section="wasserstein_len", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))

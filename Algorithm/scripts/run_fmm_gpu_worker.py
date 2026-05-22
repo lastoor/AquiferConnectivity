@@ -758,6 +758,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fm_asr_velocity_multiplier", type=float, default=1.0)
     parser.add_argument("--fm_asr_max_steps", type=int, default=200_000)
     parser.add_argument(
+        "--fm_asr_conic",
+        "--fm-asr-conic",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable the mixed Randers/conic FM-ASR comparison path (fp_fm_asr_conic).",
+    )
+    parser.add_argument(
+        "--fm_asr_conic_self_velocity",
+        type=str,
+        default="dispersion",
+        choices=["dispersion", "unit"],
+        help="Self-motivated metric for mixed/conic FM-ASR.",
+    )
+    parser.add_argument("--fm_asr_conic_velocity_multiplier", type=float, default=1.0)
+    parser.add_argument("--fm_asr_conic_lambda_threshold", type=float, default=0.0)
+    parser.add_argument("--fm_asr_conic_dispersion_eigenvalue_floor", type=float, default=1e-12)
+    parser.add_argument("--fm_asr_conic_stencil_radius", type=int, default=8)
+    parser.add_argument("--fm_asr_conic_edge_samples", type=int, default=64)
+    parser.add_argument("--fm_asr_conic_max_steps", type=int, default=200_000)
+    parser.add_argument(
         "--pypar2",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -904,6 +924,16 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
             "min_speed": float(args.fmm_min_speed if args.fm_asr_min_speed is None else args.fm_asr_min_speed),
             "velocity_multiplier": float(args.fm_asr_velocity_multiplier),
             "max_steps": int(args.fm_asr_max_steps),
+        },
+        "fm_asr_conic_arg": {
+            "enabled": bool(args.fm_asr_conic),
+            "self_velocity": str(args.fm_asr_conic_self_velocity),
+            "velocity_multiplier": float(args.fm_asr_conic_velocity_multiplier),
+            "lambda_threshold": float(args.fm_asr_conic_lambda_threshold),
+            "dispersion_eigenvalue_floor": float(args.fm_asr_conic_dispersion_eigenvalue_floor),
+            "stencil_radius": int(args.fm_asr_conic_stencil_radius),
+            "edge_samples": int(args.fm_asr_conic_edge_samples),
+            "max_steps": int(args.fm_asr_conic_max_steps),
         },
         "pypar2_arg": {
             "enabled": bool(args.pypar2),

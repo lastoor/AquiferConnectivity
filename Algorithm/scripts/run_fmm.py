@@ -19,7 +19,14 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in os.sys.path:
     os.sys.path.insert(0, str(SRC_ROOT))
 
-from fmm_core import FMASR2D, compute_fmm_path, extract_fm_asr_path
+from fmm_core import (
+    FMASR2D,
+    MixedFMASR2D,
+    compute_fmm_path,
+    extract_fm_asr_path,
+    extract_mixed_fm_asr_path,
+    self_metric_from_dispersion_velocity,
+)
 from fmm_core.fsm import compute_fsm_path as compute_fsm_path_velocity
 from fmm_core.metrics import distance_distribution
 from fmm_core.speed import _face_to_cell_speed_full, prepare_fmm_speed
@@ -35,7 +42,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 15
+MC_SCHEMA_VERSION = 16
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -52,6 +59,7 @@ MC_FIELDS = [
     "len_fp_fsm",
     "len_fp_fm_asr",
     "len_fp_fm_asr_iso",
+    "len_fp_fm_asr_conic",
     "len_fp_pypar2",
     "travel_time_fp",
     "travel_time_dijkstra",
@@ -59,6 +67,7 @@ MC_FIELDS = [
     "travel_time_fsm",
     "travel_time_fm_asr",
     "travel_time_fm_asr_iso",
+    "travel_time_fm_asr_conic",
     "travel_time_pypar2",
     "resistance_lrp",
     "resistance_lrp_fmm",
@@ -69,6 +78,7 @@ MC_FIELDS = [
     "endpoint_dy_fp_vs_fsm",
     "endpoint_dy_fp_vs_fm_asr",
     "endpoint_dy_fp_vs_fm_asr_iso",
+    "endpoint_dy_fp_vs_fm_asr_conic",
     "endpoint_dy_fp_vs_pypar2",
     "endpoint_method",
     "endpoint_x_ref",
@@ -80,6 +90,7 @@ MC_FIELDS = [
     "x_end_fp_fsm",
     "x_end_fp_fm_asr",
     "x_end_fp_fm_asr_iso",
+    "x_end_fp_fm_asr_conic",
     "x_end_fp_pypar2",
     "y_end_fp",
     "y_end_lrp",
@@ -89,6 +100,7 @@ MC_FIELDS = [
     "y_end_fp_fsm",
     "y_end_fp_fm_asr",
     "y_end_fp_fm_asr_iso",
+    "y_end_fp_fm_asr_conic",
     "y_end_fp_pypar2",
     "pt_solver",
     "pt_backend",
@@ -110,6 +122,14 @@ MC_FIELDS = [
     "fm_asr_min_speed",
     "fm_asr_velocity_multiplier",
     "fm_asr_max_steps",
+    "fm_asr_conic_enabled",
+    "fm_asr_conic_self_velocity",
+    "fm_asr_conic_velocity_multiplier",
+    "fm_asr_conic_lambda_threshold",
+    "fm_asr_conic_dispersion_eigenvalue_floor",
+    "fm_asr_conic_stencil_radius",
+    "fm_asr_conic_edge_samples",
+    "fm_asr_conic_max_steps",
     "pypar2_enabled",
     "pypar2_dt",
     "pypar2_steps",
@@ -139,6 +159,7 @@ MC_FIELDS = [
     "comp_time_fp_fsm",
     "comp_time_fp_fm_asr",
     "comp_time_fp_fm_asr_iso",
+    "comp_time_fp_fm_asr_conic",
     "comp_time_fp_pypar2",
     "comp_time_fp",
 ]
@@ -157,6 +178,7 @@ OBJECT_FIELDS = {
     "fmm_zero_policy",
     "seed_mode",
     "variance_seed_policy",
+    "fm_asr_conic_self_velocity",
     "pypar2_taichi_arch",
     "pypar2_replay_status",
 }
@@ -173,6 +195,7 @@ INT_FIELDS = {
 BOOL_FIELDS = {
     "pt_align_with_modflow_velocity",
     "fm_asr_enabled",
+    "fm_asr_conic_enabled",
     "pypar2_enabled",
 }
 
@@ -722,6 +745,66 @@ def compute_fm_asr_path_velocity(
     return path_xy, float(travel_value)
 
 
+def compute_fm_asr_conic_path_velocity(
+    vx_face: np.ndarray,
+    vy_face: np.ndarray,
+    source_mask: np.ndarray,
+    target_mask: np.ndarray,
+    *,
+    grid_spacing: float,
+    self_velocity: str,
+    velocity_multiplier: float,
+    lambda_threshold: float,
+    dispersion_dt: float,
+    dispersion_molecular_diffusion: float,
+    dispersion_alpha_l: float,
+    dispersion_alpha_t: float,
+    dispersion_velocity_floor: float | None,
+    dispersion_eigenvalue_floor: float,
+    stencil_radius: int,
+    edge_samples: int,
+    max_steps: int,
+) -> tuple[np.ndarray, float]:
+    """Compute a mixed Randers/conic FM-ASR fastest path from face velocity."""
+    vx_cell, vy_cell = _face_to_cell_speed_full(vx_face, vy_face, return_vector=True)
+    W_flow = np.stack((vx_cell, vy_cell), axis=2)
+    W_wind = float(velocity_multiplier) * W_flow
+
+    if self_velocity == "dispersion":
+        G_field = self_metric_from_dispersion_velocity(
+            W_flow,
+            dt=dispersion_dt,
+            molecular_diffusion=dispersion_molecular_diffusion,
+            alpha_l=dispersion_alpha_l,
+            alpha_t=dispersion_alpha_t,
+            velocity_floor=dispersion_velocity_floor,
+            eigenvalue_floor=dispersion_eigenvalue_floor,
+        )
+    elif self_velocity == "unit":
+        G_field = None
+    else:
+        raise ValueError(f"Unsupported fm_asr_conic self_velocity: {self_velocity!r}")
+
+    solver = MixedFMASR2D.from_velocity_field(
+        W_wind,
+        h=grid_spacing,
+        G_field=G_field,
+        direction="from_source",
+        lambda_threshold=lambda_threshold,
+        stencil_radius=stencil_radius,
+        edge_samples=edge_samples,
+    )
+    travel_time = solver.solve(source_mask)
+    path_xy, travel_value, _chosen_target = extract_mixed_fm_asr_path(
+        solver,
+        travel_time,
+        source_mask,
+        target_mask,
+        max_steps=max_steps,
+    )
+    return path_xy, float(travel_value)
+
+
 def make_config_for_size(config_base: dict[str, Any], idx_size: int) -> dict[str, Any]:
     field_size_ = int(config_base["field_size"][idx_size])
     config = config_base.copy()
@@ -1086,6 +1169,49 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     fp_fm_asr_iso_error = str(exc)
                     logger.warning(f"[MC {mc_index}] FM-ASR isotropic path failed (non-fatal): {exc}")
 
+            # 3.5) Mixed Randers/conic FM-ASR path using dispersion as self metric (non-fatal)
+            fp_fm_asr_conic_cfg = config_mc.get("fm_asr_conic_arg", {})
+            fm_asr_conic_enabled = bool(fp_fm_asr_conic_cfg.get("enabled", True))
+            pypar2_cfg = config_mc.get("pypar2_arg", {})
+            fp_fm_asr_conic: np.ndarray | None = None
+            arrival_fm_asr_conic: float | None = None
+            fp_fm_asr_conic_error: str | None = None
+            _t_fp_fm_asr_conic_solver: float = np.nan
+            if fm_asr_conic_enabled:
+                try:
+                    _t0 = time.perf_counter()
+                    fp_fm_asr_conic, arrival_fm_asr_conic = compute_fm_asr_conic_path_velocity(
+                        vx_face,
+                        vy_face,
+                        fsm_source_mask,
+                        fsm_target_mask,
+                        grid_spacing=config_mc["dx"],
+                        self_velocity=str(fp_fm_asr_conic_cfg.get("self_velocity", "dispersion")),
+                        velocity_multiplier=float(fp_fm_asr_conic_cfg.get("velocity_multiplier", 1.0)),
+                        lambda_threshold=float(fp_fm_asr_conic_cfg.get("lambda_threshold", 0.0)),
+                        dispersion_dt=float(pypar2_cfg.get("dt", 0.01)),
+                        dispersion_molecular_diffusion=float(pypar2_cfg.get("molecular_diffusion", 1e-9)),
+                        dispersion_alpha_l=float(pypar2_cfg.get("alpha_l", 0.1)),
+                        dispersion_alpha_t=float(pypar2_cfg.get("alpha_t", 0.01)),
+                        dispersion_velocity_floor=(
+                            None if pypar2_cfg.get("velocity_floor") is None else float(pypar2_cfg["velocity_floor"])
+                        ),
+                        dispersion_eigenvalue_floor=float(
+                            fp_fm_asr_conic_cfg.get("dispersion_eigenvalue_floor", 1e-12)
+                        ),
+                        stencil_radius=int(fp_fm_asr_conic_cfg.get("stencil_radius", 8)),
+                        edge_samples=int(fp_fm_asr_conic_cfg.get("edge_samples", 64)),
+                        max_steps=int(fp_fm_asr_conic_cfg.get("max_steps", 200_000)),
+                    )
+                    _t_fp_fm_asr_conic_solver = time.perf_counter() - _t0
+                    if not sim_path.is_path_valid(fp_fm_asr_conic, domain_box, len_min=np.abs(x1 - x0)):
+                        fp_fm_asr_conic_error = "Invalid FP(FM-ASR conic) geometry"
+                        fp_fm_asr_conic = None
+                        arrival_fm_asr_conic = None
+                except Exception as exc:
+                    fp_fm_asr_conic_error = str(exc)
+                    logger.warning(f"[MC {mc_index}] FM-ASR conic path failed (non-fatal): {exc}")
+
             # 4) Particle tracking
             try:
                 _t0 = time.perf_counter()
@@ -1114,7 +1240,6 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 continue
 
             # 4.1) PyPar2 Taichi random-walk particle tracking (full-face Darcy velocity, non-fatal)
-            pypar2_cfg = config_mc.get("pypar2_arg", {})
             pypar2_enabled = bool(pypar2_cfg.get("enabled", False))
             fp_pypar2: np.ndarray | None = None
             arrival_pypar2: float | None = None
@@ -1160,6 +1285,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             D_fp_fm_asr_iso: np.ndarray | None = None
             if fp_fm_asr_iso is not None:
                 D_fp_fm_asr_iso, _, _ = distance_distribution(fp, fp_fm_asr_iso, ds=1.0)
+            D_fp_fm_asr_conic: np.ndarray | None = None
+            if fp_fm_asr_conic is not None:
+                D_fp_fm_asr_conic, _, _ = distance_distribution(fp, fp_fm_asr_conic, ds=1.0)
             D_fp_pypar2: np.ndarray | None = None
             if fp_pypar2 is not None:
                 D_fp_pypar2, _, _ = distance_distribution(fp, fp_pypar2, ds=1.0)
@@ -1176,6 +1304,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             y_end_fp_fm_asr = endpoint_y_at_x(fp_fm_asr, x_ref=x_ref) if fp_fm_asr is not None else np.nan
             y_end_fp_fm_asr_iso = (
                 endpoint_y_at_x(fp_fm_asr_iso, x_ref=x_ref) if fp_fm_asr_iso is not None else np.nan
+            )
+            y_end_fp_fm_asr_conic = (
+                endpoint_y_at_x(fp_fm_asr_conic, x_ref=x_ref) if fp_fm_asr_conic is not None else np.nan
             )
             y_end_fp_pypar2 = endpoint_y_at_x(fp_pypar2, x_ref=x_ref) if fp_pypar2 is not None else np.nan
 
@@ -1220,6 +1351,18 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "velocity_multiplier": float(fp_fm_asr_cfg.get("velocity_multiplier", 1.0)),
                     "max_steps": int(fp_fm_asr_cfg.get("max_steps", 200_000)),
                 },
+                "fm_asr_conic": {
+                    "enabled": fm_asr_conic_enabled,
+                    "self_velocity": str(fp_fm_asr_conic_cfg.get("self_velocity", "dispersion")),
+                    "velocity_multiplier": float(fp_fm_asr_conic_cfg.get("velocity_multiplier", 1.0)),
+                    "lambda_threshold": float(fp_fm_asr_conic_cfg.get("lambda_threshold", 0.0)),
+                    "dispersion_eigenvalue_floor": float(
+                        fp_fm_asr_conic_cfg.get("dispersion_eigenvalue_floor", 1e-12)
+                    ),
+                    "stencil_radius": int(fp_fm_asr_conic_cfg.get("stencil_radius", 8)),
+                    "edge_samples": int(fp_fm_asr_conic_cfg.get("edge_samples", 64)),
+                    "max_steps": int(fp_fm_asr_conic_cfg.get("max_steps", 200_000)),
+                },
                 "pypar2": {
                     "enabled": pypar2_enabled,
                     "dt": float(pypar2_cfg.get("dt", np.nan)) if pypar2_enabled else np.nan,
@@ -1258,6 +1401,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             _comp_time_fp_fsm = _t_head + _t_vel_face + _t_fp_fsm_solver
             _comp_time_fp_fm_asr = _t_head + _t_vel_face + _t_fp_fm_asr_solver
             _comp_time_fp_fm_asr_iso = _t_head + _t_vel_face + _t_fp_fm_asr_iso_solver
+            _comp_time_fp_fm_asr_conic = _t_head + _t_vel_face + _t_fp_fm_asr_conic_solver
             _comp_time_fp_pypar2 = _t_head + _t_vel_face + _t_fp_pypar2
             _comp_time_fp = _t_head + _t_fp_pt
 
@@ -1322,6 +1466,18 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "travel_time": float(arrival_fm_asr_iso) if arrival_fm_asr_iso is not None else np.nan,
                         "error": fp_fm_asr_iso_error,
                     },
+                    "fp_fm_asr_conic": {
+                        "coords": fp_fm_asr_conic,
+                        "length": (
+                            float(sim_utils.euclidean_length(fp_fm_asr_conic))
+                            if fp_fm_asr_conic is not None
+                            else np.nan
+                        ),
+                        "travel_time": (
+                            float(arrival_fm_asr_conic) if arrival_fm_asr_conic is not None else np.nan
+                        ),
+                        "error": fp_fm_asr_conic_error,
+                    },
                     "fp_pypar2": {
                         "coords": fp_pypar2,
                         "length": (
@@ -1378,6 +1534,10 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "x": float(fp_fm_asr_iso[-1, 0]) if fp_fm_asr_iso is not None else np.nan,
                         "y": float(y_end_fp_fm_asr_iso),
                     },
+                    "fp_fm_asr_conic": {
+                        "x": float(fp_fm_asr_conic[-1, 0]) if fp_fm_asr_conic is not None else np.nan,
+                        "y": float(y_end_fp_fm_asr_conic),
+                    },
                     "fp_pypar2": {
                         "x": float(fp_pypar2[-1, 0]) if fp_pypar2 is not None else np.nan,
                         "y": float(y_end_fp_pypar2),
@@ -1396,6 +1556,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                         "fp_vs_fm_asr_iso": (
                             float(y_end_fp - y_end_fp_fm_asr_iso) if fp_fm_asr_iso is not None else np.nan
                         ),
+                        "fp_vs_fm_asr_conic": (
+                            float(y_end_fp - y_end_fp_fm_asr_conic) if fp_fm_asr_conic is not None else np.nan
+                        ),
                         "fp_vs_pypar2": (
                             float(y_end_fp - y_end_fp_pypar2) if fp_pypar2 is not None else np.nan
                         ),
@@ -1410,6 +1573,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp_vs_fm_asr": _hausdorff_detail(D_fp_fm_asr) if D_fp_fm_asr is not None else None,
                     "fp_vs_fm_asr_iso": (
                         _hausdorff_detail(D_fp_fm_asr_iso) if D_fp_fm_asr_iso is not None else None
+                    ),
+                    "fp_vs_fm_asr_conic": (
+                        _hausdorff_detail(D_fp_fm_asr_conic) if D_fp_fm_asr_conic is not None else None
                     ),
                     "fp_vs_pypar2": (
                         _hausdorff_detail(D_fp_pypar2) if D_fp_pypar2 is not None else None
@@ -1427,6 +1593,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fp_fsm": _comp_time_fp_fsm,
                     "fp_fm_asr": _comp_time_fp_fm_asr,
                     "fp_fm_asr_iso": _comp_time_fp_fm_asr_iso,
+                    "fp_fm_asr_conic": _comp_time_fp_fm_asr_conic,
                     "fp_pypar2": _comp_time_fp_pypar2,
                     "fp": _comp_time_fp,
                 },
@@ -1446,6 +1613,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "len_fp_fsm": consolidated["paths"]["fp_fsm"]["length"],
                     "len_fp_fm_asr": consolidated["paths"]["fp_fm_asr"]["length"],
                     "len_fp_fm_asr_iso": consolidated["paths"]["fp_fm_asr_iso"]["length"],
+                    "len_fp_fm_asr_conic": consolidated["paths"]["fp_fm_asr_conic"]["length"],
                     "len_fp_pypar2": consolidated["paths"]["fp_pypar2"]["length"],
                     "travel_time_fp": consolidated["paths"]["fp"]["travel_time"],
                     "travel_time_dijkstra": consolidated["paths"]["fp_dijkstra"]["travel_time"],
@@ -1453,6 +1621,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "travel_time_fsm": consolidated["paths"]["fp_fsm"]["travel_time"],
                     "travel_time_fm_asr": consolidated["paths"]["fp_fm_asr"]["travel_time"],
                     "travel_time_fm_asr_iso": consolidated["paths"]["fp_fm_asr_iso"]["travel_time"],
+                    "travel_time_fm_asr_conic": consolidated["paths"]["fp_fm_asr_conic"]["travel_time"],
                     "travel_time_pypar2": consolidated["paths"]["fp_pypar2"]["travel_time"],
                     "resistance_lrp": consolidated["paths"]["lrp"]["resistance"],
                     "resistance_lrp_fmm": consolidated["paths"]["lrp_fmm"]["resistance"],
@@ -1466,6 +1635,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "x_end_fp_fsm": consolidated["endpoint"]["fp_fsm"]["x"],
                     "x_end_fp_fm_asr": consolidated["endpoint"]["fp_fm_asr"]["x"],
                     "x_end_fp_fm_asr_iso": consolidated["endpoint"]["fp_fm_asr_iso"]["x"],
+                    "x_end_fp_fm_asr_conic": consolidated["endpoint"]["fp_fm_asr_conic"]["x"],
                     "x_end_fp_pypar2": consolidated["endpoint"]["fp_pypar2"]["x"],
                     "y_end_fp": consolidated["endpoint"]["fp"]["y"],
                     "y_end_lrp": consolidated["endpoint"]["lrp"]["y"],
@@ -1475,6 +1645,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "y_end_fp_fsm": consolidated["endpoint"]["fp_fsm"]["y"],
                     "y_end_fp_fm_asr": consolidated["endpoint"]["fp_fm_asr"]["y"],
                     "y_end_fp_fm_asr_iso": consolidated["endpoint"]["fp_fm_asr_iso"]["y"],
+                    "y_end_fp_fm_asr_conic": consolidated["endpoint"]["fp_fm_asr_conic"]["y"],
                     "y_end_fp_pypar2": consolidated["endpoint"]["fp_pypar2"]["y"],
                     "endpoint_dy_fp_vs_lrp": consolidated["endpoint"]["dy"]["fp_vs_lrp"],
                     "endpoint_dy_fp_vs_lrp_fmm": consolidated["endpoint"]["dy"]["fp_vs_lrp_fmm"],
@@ -1483,6 +1654,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "endpoint_dy_fp_vs_fsm": consolidated["endpoint"]["dy"]["fp_vs_fsm"],
                     "endpoint_dy_fp_vs_fm_asr": consolidated["endpoint"]["dy"]["fp_vs_fm_asr"],
                     "endpoint_dy_fp_vs_fm_asr_iso": consolidated["endpoint"]["dy"]["fp_vs_fm_asr_iso"],
+                    "endpoint_dy_fp_vs_fm_asr_conic": consolidated["endpoint"]["dy"]["fp_vs_fm_asr_conic"],
                     "endpoint_dy_fp_vs_pypar2": consolidated["endpoint"]["dy"]["fp_vs_pypar2"],
                     "pt_solver": config_dict["particle_tracking"]["solver"],
                     "pt_backend": config_dict["particle_tracking"]["backend"],
@@ -1504,6 +1676,16 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "fm_asr_min_speed": config_dict["fm_asr"]["min_speed"],
                     "fm_asr_velocity_multiplier": config_dict["fm_asr"]["velocity_multiplier"],
                     "fm_asr_max_steps": config_dict["fm_asr"]["max_steps"],
+                    "fm_asr_conic_enabled": config_dict["fm_asr_conic"]["enabled"],
+                    "fm_asr_conic_self_velocity": config_dict["fm_asr_conic"]["self_velocity"],
+                    "fm_asr_conic_velocity_multiplier": config_dict["fm_asr_conic"]["velocity_multiplier"],
+                    "fm_asr_conic_lambda_threshold": config_dict["fm_asr_conic"]["lambda_threshold"],
+                    "fm_asr_conic_dispersion_eigenvalue_floor": config_dict["fm_asr_conic"][
+                        "dispersion_eigenvalue_floor"
+                    ],
+                    "fm_asr_conic_stencil_radius": config_dict["fm_asr_conic"]["stencil_radius"],
+                    "fm_asr_conic_edge_samples": config_dict["fm_asr_conic"]["edge_samples"],
+                    "fm_asr_conic_max_steps": config_dict["fm_asr_conic"]["max_steps"],
                     "pypar2_enabled": config_dict["pypar2"]["enabled"],
                     "pypar2_dt": config_dict["pypar2"]["dt"],
                     "pypar2_steps": config_dict["pypar2"]["steps"],
@@ -1527,6 +1709,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "comp_time_fp_fsm": _comp_time_fp_fsm,
                     "comp_time_fp_fm_asr": _comp_time_fp_fm_asr,
                     "comp_time_fp_fm_asr_iso": _comp_time_fp_fm_asr_iso,
+                    "comp_time_fp_fm_asr_conic": _comp_time_fp_fm_asr_conic,
                     "comp_time_fp_pypar2": _comp_time_fp_pypar2,
                     "comp_time_fp": _comp_time_fp,
                 }
@@ -1559,6 +1742,22 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "fm_asr_min_speed": float(config_mc.get("fm_asr_arg", {}).get("min_speed", np.nan)),
             "fm_asr_velocity_multiplier": float(config_mc.get("fm_asr_arg", {}).get("velocity_multiplier", 1.0)),
             "fm_asr_max_steps": int(config_mc.get("fm_asr_arg", {}).get("max_steps", -1)),
+            "fm_asr_conic_enabled": bool(config_mc.get("fm_asr_conic_arg", {}).get("enabled", True)),
+            "fm_asr_conic_self_velocity": str(
+                config_mc.get("fm_asr_conic_arg", {}).get("self_velocity", "dispersion")
+            ),
+            "fm_asr_conic_velocity_multiplier": float(
+                config_mc.get("fm_asr_conic_arg", {}).get("velocity_multiplier", 1.0)
+            ),
+            "fm_asr_conic_lambda_threshold": float(
+                config_mc.get("fm_asr_conic_arg", {}).get("lambda_threshold", 0.0)
+            ),
+            "fm_asr_conic_dispersion_eigenvalue_floor": float(
+                config_mc.get("fm_asr_conic_arg", {}).get("dispersion_eigenvalue_floor", 1e-12)
+            ),
+            "fm_asr_conic_stencil_radius": int(config_mc.get("fm_asr_conic_arg", {}).get("stencil_radius", -1)),
+            "fm_asr_conic_edge_samples": int(config_mc.get("fm_asr_conic_arg", {}).get("edge_samples", -1)),
+            "fm_asr_conic_max_steps": int(config_mc.get("fm_asr_conic_arg", {}).get("max_steps", -1)),
             "pypar2_enabled": bool(config_mc.get("pypar2_arg", {}).get("enabled", False)),
             "pypar2_dt": float(config_mc.get("pypar2_arg", {}).get("dt", np.nan)),
             "pypar2_steps": int(config_mc.get("pypar2_arg", {}).get("steps", -1)),
@@ -1637,6 +1836,20 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                 "min_speed": float(config_mc.get("fm_asr_arg", {}).get("min_speed", np.nan)),
                 "velocity_multiplier": float(config_mc.get("fm_asr_arg", {}).get("velocity_multiplier", 1.0)),
                 "max_steps": int(config_mc.get("fm_asr_arg", {}).get("max_steps", -1)),
+            },
+            "fm_asr_conic": {
+                "enabled": bool(config_mc.get("fm_asr_conic_arg", {}).get("enabled", True)),
+                "self_velocity": str(config_mc.get("fm_asr_conic_arg", {}).get("self_velocity", "dispersion")),
+                "velocity_multiplier": float(
+                    config_mc.get("fm_asr_conic_arg", {}).get("velocity_multiplier", 1.0)
+                ),
+                "lambda_threshold": float(config_mc.get("fm_asr_conic_arg", {}).get("lambda_threshold", 0.0)),
+                "dispersion_eigenvalue_floor": float(
+                    config_mc.get("fm_asr_conic_arg", {}).get("dispersion_eigenvalue_floor", 1e-12)
+                ),
+                "stencil_radius": int(config_mc.get("fm_asr_conic_arg", {}).get("stencil_radius", -1)),
+                "edge_samples": int(config_mc.get("fm_asr_conic_arg", {}).get("edge_samples", -1)),
+                "max_steps": int(config_mc.get("fm_asr_conic_arg", {}).get("max_steps", -1)),
             },
             "pypar2": {
                 "enabled": bool(config_mc.get("pypar2_arg", {}).get("enabled", False)),
@@ -1850,6 +2063,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fm_asr_velocity_multiplier", type=float, default=1.0)
     parser.add_argument("--fm_asr_max_steps", type=int, default=200_000)
     parser.add_argument(
+        "--fm_asr_conic",
+        "--fm-asr-conic",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable the mixed Randers/conic FM-ASR comparison path (fp_fm_asr_conic).",
+    )
+    parser.add_argument(
+        "--fm_asr_conic_self_velocity",
+        type=str,
+        default="dispersion",
+        choices=["dispersion", "unit"],
+        help="Self-motivated metric for mixed/conic FM-ASR.",
+    )
+    parser.add_argument("--fm_asr_conic_velocity_multiplier", type=float, default=1.0)
+    parser.add_argument("--fm_asr_conic_lambda_threshold", type=float, default=0.0)
+    parser.add_argument("--fm_asr_conic_dispersion_eigenvalue_floor", type=float, default=1e-12)
+    parser.add_argument("--fm_asr_conic_stencil_radius", type=int, default=8)
+    parser.add_argument("--fm_asr_conic_edge_samples", type=int, default=64)
+    parser.add_argument("--fm_asr_conic_max_steps", type=int, default=200_000)
+    parser.add_argument(
         "--pypar2",
         action=argparse.BooleanOptionalAction,
         default=True,
@@ -2003,6 +2236,16 @@ def main() -> None:
             "min_speed": float(args.fmm_min_speed if args.fm_asr_min_speed is None else args.fm_asr_min_speed),
             "velocity_multiplier": float(args.fm_asr_velocity_multiplier),
             "max_steps": int(args.fm_asr_max_steps),
+        },
+        "fm_asr_conic_arg": {
+            "enabled": bool(args.fm_asr_conic),
+            "self_velocity": str(args.fm_asr_conic_self_velocity),
+            "velocity_multiplier": float(args.fm_asr_conic_velocity_multiplier),
+            "lambda_threshold": float(args.fm_asr_conic_lambda_threshold),
+            "dispersion_eigenvalue_floor": float(args.fm_asr_conic_dispersion_eigenvalue_floor),
+            "stencil_radius": int(args.fm_asr_conic_stencil_radius),
+            "edge_samples": int(args.fm_asr_conic_edge_samples),
+            "max_steps": int(args.fm_asr_conic_max_steps),
         },
         "pypar2_arg": {
             "enabled": bool(args.pypar2),

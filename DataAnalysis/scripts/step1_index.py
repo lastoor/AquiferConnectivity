@@ -10,7 +10,17 @@ from pathlib import Path
 from typing import Any
 
 DISTANCE_TYPES = ("end_point", "hausdorff", "frechet")
-DISTANCE_PAIRS = ("fp_lrp", "fp_lrpFMM", "fp_fpDijkstra", "fp_fpFMM", "fp_fpFSM", "fp_fm_asr", "fp_fm_asr_iso", "fp_pypar2")
+DISTANCE_PAIRS = (
+    "fp_lrp",
+    "fp_lrpFMM",
+    "fp_fpDijkstra",
+    "fp_fpFMM",
+    "fp_fpFSM",
+    "fp_fm_asr",
+    "fp_fm_asr_iso",
+    "fp_fm_asr_conic",
+    "fp_pypar2",
+)
 DISTANCE_MODE_VALUES = ("load_from_main_output", "compute_from_paths")
 DISTANCE_FALLBACK_VALUES = ("compute_from_paths", "nan")
 DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
@@ -22,6 +32,7 @@ DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
         "fp_fpFSM": "endpoint_dy_fp_vs_fsm",
         "fp_fm_asr": "endpoint_dy_fp_vs_fm_asr",
         "fp_fm_asr_iso": "endpoint_dy_fp_vs_fm_asr_iso",
+        "fp_fm_asr_conic": "endpoint_dy_fp_vs_fm_asr_conic",
         "fp_pypar2": "endpoint_dy_fp_vs_pypar2",
     },
     "hausdorff": {
@@ -32,6 +43,7 @@ DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
         "fp_fpFSM": "hausdorffDist_fp_fpFSM_m",
         "fp_fm_asr": "hausdorffDist_fp_fm_asr_m",
         "fp_fm_asr_iso": "hausdorffDist_fp_fm_asr_iso_m",
+        "fp_fm_asr_conic": "hausdorffDist_fp_fm_asr_conic_m",
         "fp_pypar2": "hausdorffDist_fp_pypar2_m",
     },
     "frechet": {
@@ -42,6 +54,7 @@ DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS: dict[str, dict[str, str]] = {
         "fp_fpFSM": "frechetDist_fp_fpFSM_m",
         "fp_fm_asr": "frechetDist_fp_fm_asr_m",
         "fp_fm_asr_iso": "frechetDist_fp_fm_asr_iso_m",
+        "fp_fm_asr_conic": "frechetDist_fp_fm_asr_conic_m",
         "fp_pypar2": "frechetDist_fp_pypar2_m",
     },
 }
@@ -54,6 +67,7 @@ DISTANCE_MAIN_OUTPUT_KEY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "fp_fpFSM": ("endpoint_dy_fp_vs_fsm", "endPointDist_fp_fpFSM_m"),
         "fp_fm_asr": ("endpoint_dy_fp_vs_fm_asr", "endPointDist_fp_fm_asr_m"),
         "fp_fm_asr_iso": ("endpoint_dy_fp_vs_fm_asr_iso", "endPointDist_fp_fm_asr_iso_m"),
+        "fp_fm_asr_conic": ("endpoint_dy_fp_vs_fm_asr_conic", "endPointDist_fp_fm_asr_conic_m"),
         "fp_pypar2": ("endpoint_dy_fp_vs_pypar2",),
     },
     "hausdorff": {
@@ -64,6 +78,7 @@ DISTANCE_MAIN_OUTPUT_KEY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "fp_fpFSM": ("hausdorff_fp_vs_fsm", "hausdorffDist_fp_fpFSM_m"),
         "fp_fm_asr": ("hausdorff_fp_vs_fm_asr", "hausdorffDist_fp_fm_asr_m"),
         "fp_fm_asr_iso": ("hausdorff_fp_vs_fm_asr_iso", "hausdorffDist_fp_fm_asr_iso_m"),
+        "fp_fm_asr_conic": ("hausdorff_fp_vs_fm_asr_conic", "hausdorffDist_fp_fm_asr_conic_m"),
         "fp_pypar2": ("hausdorff_fp_vs_pypar2", "hausdorffDist_fp_pypar2_m"),
     },
     "frechet": {
@@ -74,6 +89,7 @@ DISTANCE_MAIN_OUTPUT_KEY_ALIASES: dict[str, dict[str, tuple[str, ...]]] = {
         "fp_fpFSM": ("frechetDist_fp_fpFSM_m",),
         "fp_fm_asr": ("frechetDist_fp_fm_asr_m",),
         "fp_fm_asr_iso": ("frechetDist_fp_fm_asr_iso_m",),
+        "fp_fm_asr_conic": ("frechetDist_fp_fm_asr_conic_m",),
         "fp_pypar2": ("frechetDist_fp_pypar2_m",),
     },
 }
@@ -283,6 +299,9 @@ def load_config(path: str | Path) -> VisualizationConfig:
                 "fp_fm_asr_iso": str(
                     raw_keys.get("end_point", {}).get("fp_fm_asr_iso", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_fm_asr_iso"])
                 ),
+                "fp_fm_asr_conic": str(
+                    raw_keys.get("end_point", {}).get("fp_fm_asr_conic", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_fm_asr_conic"])
+                ),
                 "fp_pypar2": str(
                     raw_keys.get("end_point", {}).get("fp_pypar2", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["end_point"]["fp_pypar2"])
                 ),
@@ -299,6 +318,9 @@ def load_config(path: str | Path) -> VisualizationConfig:
                 "fp_fm_asr_iso": str(
                     raw_keys.get("hausdorff", {}).get("fp_fm_asr_iso", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_fm_asr_iso"])
                 ),
+                "fp_fm_asr_conic": str(
+                    raw_keys.get("hausdorff", {}).get("fp_fm_asr_conic", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_fm_asr_conic"])
+                ),
                 "fp_pypar2": str(
                     raw_keys.get("hausdorff", {}).get("fp_pypar2", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["hausdorff"]["fp_pypar2"])
                 ),
@@ -314,6 +336,9 @@ def load_config(path: str | Path) -> VisualizationConfig:
                 "fp_fm_asr": str(raw_keys.get("frechet", {}).get("fp_fm_asr", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fm_asr"])),
                 "fp_fm_asr_iso": str(
                     raw_keys.get("frechet", {}).get("fp_fm_asr_iso", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fm_asr_iso"])
+                ),
+                "fp_fm_asr_conic": str(
+                    raw_keys.get("frechet", {}).get("fp_fm_asr_conic", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_fm_asr_conic"])
                 ),
                 "fp_pypar2": str(
                     raw_keys.get("frechet", {}).get("fp_pypar2", DEFAULT_DISTANCE_MAIN_OUTPUT_KEYS["frechet"]["fp_pypar2"])

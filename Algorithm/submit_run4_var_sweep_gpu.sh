@@ -33,6 +33,17 @@ fm_asr_velocity_multiplier="${fm_asr_velocity_multiplier:-1.2}"
 fm_asr_max_steps="${fm_asr_max_steps:-1000000}"
 fm_asr_min_speed="${fm_asr_min_speed:-}"
 
+# Mixed Randers/conic FM-ASR comparison. The wind is the flow velocity; the
+# default self metric is the PyPar2 dispersion velocity ellipse.
+fm_asr_conic_enabled="${fm_asr_conic_enabled:-1}"
+fm_asr_conic_self_velocity="${fm_asr_conic_self_velocity:-dispersion}"
+fm_asr_conic_velocity_multiplier="${fm_asr_conic_velocity_multiplier:-${fm_asr_velocity_multiplier}}"
+fm_asr_conic_lambda_threshold="${fm_asr_conic_lambda_threshold:-0.0}"
+fm_asr_conic_dispersion_eigenvalue_floor="${fm_asr_conic_dispersion_eigenvalue_floor:-1e-12}"
+fm_asr_conic_stencil_radius="${fm_asr_conic_stencil_radius:-8}"
+fm_asr_conic_edge_samples="${fm_asr_conic_edge_samples:-64}"
+fm_asr_conic_max_steps="${fm_asr_conic_max_steps:-1000000}"
+
 # PyPar2 Taichi random-walk particle tracking. Set pypar2_enabled=0 to disable.
 # Dispersion defaults: weak physical dispersion (Dm=1e-9, alpha_l=0.1, alpha_t=0.01).
 # Leave pypar2_velocity_floor empty to let pypar2 auto-derive from Dm/alpha_l.
@@ -99,6 +110,20 @@ else
     if [[ -n "${fm_asr_min_speed}" ]]; then
         fm_asr_args+=" --fm_asr_min_speed ${fm_asr_min_speed}"
     fi
+fi
+
+fm_asr_conic_args=""
+if [[ "${fm_asr_conic_enabled}" == "0" ]]; then
+    fm_asr_conic_args+=" --no-fm-asr-conic"
+else
+    fm_asr_conic_args+=" --fm_asr_conic"
+    fm_asr_conic_args+=" --fm_asr_conic_self_velocity ${fm_asr_conic_self_velocity}"
+    fm_asr_conic_args+=" --fm_asr_conic_velocity_multiplier ${fm_asr_conic_velocity_multiplier}"
+    fm_asr_conic_args+=" --fm_asr_conic_lambda_threshold ${fm_asr_conic_lambda_threshold}"
+    fm_asr_conic_args+=" --fm_asr_conic_dispersion_eigenvalue_floor ${fm_asr_conic_dispersion_eigenvalue_floor}"
+    fm_asr_conic_args+=" --fm_asr_conic_stencil_radius ${fm_asr_conic_stencil_radius}"
+    fm_asr_conic_args+=" --fm_asr_conic_edge_samples ${fm_asr_conic_edge_samples}"
+    fm_asr_conic_args+=" --fm_asr_conic_max_steps ${fm_asr_conic_max_steps}"
 fi
 
 pypar2_args=""
@@ -190,6 +215,7 @@ TAICHI_PY=/home1/binhaoli/.conda/envs/taichi_env/bin/python
   --fsm_dt ${fsm_dt} \\
   --fsm_max_steps ${fsm_max_steps} \\
   ${fm_asr_args} \\
+  ${fm_asr_conic_args} \\
   ${pypar2_args} \\
   ${fsm_extra_args}
 
