@@ -458,9 +458,9 @@ def build_conic_stencil(
 def dispersion_tensor_field_from_velocity(
     W_field: np.ndarray,
     *,
-    molecular_diffusion: float = 0.0,
-    alpha_l: float = 0.0,
-    alpha_t: float = 0.0,
+    molecular_diffusion: float = 1e-9,
+    alpha_l: float = 0.1,
+    alpha_t: float = 0.01,
     velocity_floor: Optional[float] = None,
 ) -> np.ndarray:
     """Compute the cellwise 2D PyPar2 dispersion tensor field.

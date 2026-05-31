@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -29,11 +30,18 @@ for path in (SRC_ROOT, SCRIPTS_ROOT, FLOWSIM_ROOT):
         sys.path.insert(0, path_str)
 
 import run_fmm as base
-from fmm_core.fm_asr import FMASR2D, extract_fm_asr_path, visualize_indicatrix_field
+from fmm_core.fm_asr import (
+    FMASR2D,
+    AsymmetricEuclideanNorm,
+    extract_fm_asr_path,
+    visualize_indicatrix_field,
+)
 from fmm_core.fm_asr_conic import (
-    ConicFMASR2D,
-    extract_conic_fm_asr_path,
-    self_metric_from_dispersion_velocity,
+    MixedFMASR2D,
+    StrongWindZermeloNorm,
+    dispersion_tensor_field_from_velocity,
+    extract_mixed_fm_asr_path,
+    randers_from_zermelo,
 )
 from fmm_core.fmm import compute_fmm_path, solve_travel_time
 from fmm_core.speed import _face_to_cell_speed_full, prepare_fmm_speed
@@ -103,6 +111,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--conic-asr-self-velocity", choices=["dispersion", "unit"], default="dispersion")
     parser.add_argument("--conic-asr-min-speed", type=float, default=1.0 + 1e-9)
     parser.add_argument("--conic-asr-min-wind-factor", type=float, default=1.0 + 1e-9)
+    parser.add_argument("--conic-asr-lambda-threshold", type=float, default=0.0)
+    parser.add_argument("--conic-asr-dispersion-c", type=float, default=1.0)
+    parser.add_argument("--conic-asr-dispersion-tau", type=float, default=1.0)
     parser.add_argument("--conic-asr-dispersion-eigenvalue-floor", type=float, default=1e-12)
     parser.add_argument("--conic-asr-stencil-radius", type=int, default=8)
     parser.add_argument("--conic-asr-edge-samples", type=int, default=64)
@@ -124,6 +135,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pypar2-replay-max-redos", type=int, default=3)
     parser.add_argument("--indicatrix-stride", type=int, default=8)
     parser.add_argument("--indicatrix-glyph-scale", type=float, default=0.75)
+    parser.add_argument("--conic-indicatrix-glyph-scale", type=float, default=0.8)
+    parser.add_argument("--conic-indicatrix-directions", type=int, default=240)
     parser.add_argument("--no-indicatrix", action="store_true")
     return parser.parse_args()
 
@@ -296,6 +309,44 @@ def solve_asr_path(
     return T, path, travel_time, target
 
 
+def build_conic_asr_fields(
+    W_cell: np.ndarray,
+    args: argparse.Namespace,
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """Return the wind and optional self-metric field used by MixedFMASR2D."""
+    W_flow = np.asarray(W_cell, dtype=float)
+    W_wind = W_flow * float(args.conic_asr_velocity_multiplier)
+    G_field = None
+    if str(args.conic_asr_self_velocity) == "dispersion":
+        dispersion_c = float(args.conic_asr_dispersion_c)
+        dispersion_tau = float(args.conic_asr_dispersion_tau)
+        eigenvalue_floor = float(args.conic_asr_dispersion_eigenvalue_floor)
+        if dispersion_c <= 0.0 or not np.isfinite(dispersion_c):
+            raise ValueError("--conic-asr-dispersion-c must be positive and finite")
+        if dispersion_tau <= 0.0 or not np.isfinite(dispersion_tau):
+            raise ValueError("--conic-asr-dispersion-tau must be positive and finite")
+        if eigenvalue_floor <= 0.0 or not np.isfinite(eigenvalue_floor):
+            raise ValueError("--conic-asr-dispersion-eigenvalue-floor must be positive and finite")
+
+        D_field = dispersion_tensor_field_from_velocity(
+            W_flow,
+            molecular_diffusion=float(args.pypar2_dm),
+            alpha_l=float(args.pypar2_alpha_l),
+            alpha_t=float(args.pypar2_alpha_t),
+            velocity_floor=args.pypar2_velocity_floor,
+        )
+        G_field = np.zeros_like(D_field)
+        scale = dispersion_tau / (dispersion_c * dispersion_c)
+        for j in range(D_field.shape[0]):
+            for i in range(D_field.shape[1]):
+                eigvals, eigvecs = np.linalg.eigh(D_field[j, i])
+                eigvals = np.maximum(eigvals, eigenvalue_floor)
+                G_field[j, i] = eigvecs @ np.diag(scale / eigvals) @ eigvecs.T
+    elif str(args.conic_asr_self_velocity) != "unit":
+        raise ValueError(f"Unsupported conic ASR self velocity: {args.conic_asr_self_velocity!r}")
+    return W_wind, G_field
+
+
 def solve_conic_asr_path(
     W_cell: np.ndarray,
     source_mask: np.ndarray,
@@ -304,34 +355,23 @@ def solve_conic_asr_path(
     h: float,
     args: argparse.Namespace,
 ) -> tuple[np.ndarray, np.ndarray, float, tuple[int, int]]:
-    W_scaled = np.asarray(W_cell, dtype=float) * float(args.conic_asr_velocity_multiplier)
-    G_field = None
-    if str(args.conic_asr_self_velocity) == "dispersion":
-        G_field = self_metric_from_dispersion_velocity(
-            W_scaled,
-            dt=float(args.pypar2_dt),
-            molecular_diffusion=float(args.pypar2_dm),
-            alpha_l=float(args.pypar2_alpha_l),
-            alpha_t=float(args.pypar2_alpha_t),
-            velocity_floor=args.pypar2_velocity_floor,
-            eigenvalue_floor=float(args.conic_asr_dispersion_eigenvalue_floor),
-        )
-    solver = ConicFMASR2D.from_velocity_field(
-        W_scaled,
+    W_wind, G_field = build_conic_asr_fields(W_cell, args)
+    solver = MixedFMASR2D.from_velocity_field(
+        W_wind,
         h=h,
         G_field=G_field,
         direction="from_source",
-        min_speed=float(args.conic_asr_min_speed),
-        min_wind_factor=float(args.conic_asr_min_wind_factor),
+        lambda_threshold=float(args.conic_asr_lambda_threshold),
         stencil_radius=int(args.conic_asr_stencil_radius),
         edge_samples=int(args.conic_asr_edge_samples),
     )
     T = solver.solve(source_mask)
-    path, travel_time, target = extract_conic_fm_asr_path(
+    path, travel_time, target = extract_mixed_fm_asr_path(
         solver,
         T,
         source_mask,
         target_mask,
+        max_steps=int(args.asr_max_steps),
     )
     return T, path, travel_time, target
 
@@ -520,9 +560,21 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
     rel_l2_asr_iso = float(results.get("relative_l2_error_asr_iso_vs_fmm", np.nan))
     rel_l2_conic_asr = float(results.get("relative_l2_error_conic_asr_vs_fmm", np.nan))
 
+    def scalar_result(key: str) -> float:
+        try:
+            return float(np.asarray(results.get(key, np.nan)))
+        except (TypeError, ValueError):
+            return float("nan")
+
+    def travel_time_box(label: str, key: str) -> str | None:
+        value = scalar_result(key)
+        if not np.isfinite(value):
+            return None
+        return f"{label} fastest path\nT = {value:.6g}"
+
     fig, axes = plt.subplots(2, 4, figsize=(20, 9), constrained_layout=True)
     panels = [
-        (axes[0, 0], logk, "log K", "viridis", None, None),
+        (axes[0, 0], logk, "log K", "viridis", None, None, None),
         (
             axes[0, 1],
             diff_asr,
@@ -530,8 +582,17 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
             "coolwarm",
             diff_norm(diff_asr),
             rel_l2_asr,
+            None,
         ),
-        (axes[0, 2], T_fmm, "FMM travel time", "plasma", None, None),
+        (
+            axes[0, 2],
+            T_fmm,
+            "FMM travel time",
+            "plasma",
+            None,
+            None,
+            travel_time_box("FMM", "travel_time_fmm"),
+        ),
         (
             axes[0, 3],
             diff_conic_asr if diff_conic_asr is not None else np.full_like(T_fmm, np.nan),
@@ -539,9 +600,26 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
             "coolwarm",
             diff_norm(diff_conic_asr) if diff_conic_asr is not None else None,
             rel_l2_conic_asr,
+            None,
         ),
-        (axes[1, 0], T_asr, "FM-ASR acentric ellipse T", "plasma", None, None),
-        (axes[1, 1], T_asr_iso, "FM-ASR reduced isotropic T", "plasma", None, None),
+        (
+            axes[1, 0],
+            T_asr,
+            "FM-ASR acentric ellipse T",
+            "plasma",
+            None,
+            None,
+            travel_time_box("FM-ASR ellipse", "travel_time_asr"),
+        ),
+        (
+            axes[1, 1],
+            T_asr_iso,
+            "FM-ASR reduced isotropic T",
+            "plasma",
+            None,
+            None,
+            travel_time_box("FM-ASR isotropic", "travel_time_asr_iso"),
+        ),
         (
             axes[1, 2],
             T_conic_asr if isinstance(T_conic_asr, np.ndarray) else np.full_like(T_fmm, np.nan),
@@ -549,6 +627,7 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
             "plasma",
             None,
             None,
+            travel_time_box("Conic FM-ASR", "travel_time_conic_asr"),
         ),
         (
             axes[1, 3],
@@ -557,9 +636,10 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
             "coolwarm",
             diff_norm(diff_asr_iso),
             rel_l2_asr_iso,
+            None,
         ),
     ]
-    for ax, arr, title, cmap, norm, rel_l2 in panels:
+    for ax, arr, title, cmap, norm, rel_l2, travel_text in panels:
         im = ax.imshow(arr, origin="lower", cmap=cmap, norm=norm)
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
         ax.set_title(title)
@@ -584,6 +664,22 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
                     "alpha": 0.82,
                 },
             )
+        if travel_text:
+            ax.text(
+                0.02,
+                0.04,
+                travel_text,
+                transform=ax.transAxes,
+                ha="left",
+                va="bottom",
+                fontsize=9,
+                bbox={
+                    "boxstyle": "round,pad=0.28",
+                    "facecolor": "white",
+                    "edgecolor": "0.35",
+                    "alpha": 0.84,
+                },
+            )
         ax.set_xlim(0, logk.shape[1] - 1)
         ax.set_ylim(0, logk.shape[0] - 1)
 
@@ -602,6 +698,168 @@ def plot_comparison(results: dict[str, Any], output_path: Path) -> None:
 
     fig.savefig(output_path, dpi=180)
     plt.close(fig)
+
+
+def _metric_indicatrix_points(metric: Any, directions: np.ndarray) -> np.ndarray:
+    points = np.full_like(directions, np.nan, dtype=float)
+    for k, direction in enumerate(directions):
+        value = float(metric(direction))
+        if np.isfinite(value) and value > 0.0:
+            points[k] = direction / value
+    return points
+
+
+def _reachable_velocity_ellipse_points(
+    wind: np.ndarray,
+    G: np.ndarray,
+    directions: np.ndarray,
+) -> np.ndarray:
+    eigvals, eigvecs = np.linalg.eigh(np.asarray(G, dtype=float))
+    eigvals = np.maximum(eigvals, 1e-300)
+    self_velocity = eigvecs @ np.diag(1.0 / np.sqrt(eigvals))
+    return np.asarray(wind, dtype=float) + directions @ self_velocity.T
+
+
+def visualize_conic_asr_indicatrix_field(
+    W_cell: np.ndarray,
+    *,
+    args: argparse.Namespace,
+    h: float,
+    output_path: Path,
+    K_field: np.ndarray | None = None,
+) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as local_plt
+
+    W_wind, G_field = build_conic_asr_fields(W_cell, args)
+    ny, nx = W_wind.shape[:2]
+    lambda_threshold = float(args.conic_asr_lambda_threshold)
+
+    def metric_at_cell(j: int, i: int) -> Any:
+        wind = np.asarray(W_wind[j, i], dtype=float)
+        G_local = np.eye(2, dtype=float) if G_field is None else np.asarray(G_field[j, i], dtype=float)
+        lam = 1.0 - float(wind @ G_local @ wind)
+        if lam > lambda_threshold:
+            M, beta = randers_from_zermelo(wind, G_local)
+            return AsymmetricEuclideanNorm(M=M, beta=beta)
+        return StrongWindZermeloNorm(wind, G=G_local)
+
+    stride = max(1, int(args.indicatrix_stride))
+    n_dirs = max(24, int(args.conic_indicatrix_directions))
+    theta = np.linspace(0.0, 2.0 * math.pi, n_dirs, endpoint=False)
+    directions = np.column_stack((np.cos(theta), np.sin(theta)))
+    sample_js = np.arange(0, ny, stride, dtype=int)
+    sample_is = np.arange(0, nx, stride, dtype=int)
+
+    glyphs: list[tuple[float, float, np.ndarray, np.ndarray, np.ndarray]] = []
+    finite_radii: list[float] = []
+    for j in sample_js:
+        for i in sample_is:
+            x0 = float(i) * h
+            y0 = float(j) * h
+            wind = np.asarray(W_wind[j, i], dtype=float)
+            G_local = np.eye(2, dtype=float) if G_field is None else np.asarray(G_field[j, i], dtype=float)
+            conic_points = _metric_indicatrix_points(metric_at_cell(j, i), directions)
+            conic_points = np.vstack((conic_points, conic_points[:1]))
+            ellipse_points = _reachable_velocity_ellipse_points(wind, G_local, directions)
+            ellipse_points = np.vstack((ellipse_points, ellipse_points[:1]))
+            radii = np.concatenate(
+                (
+                    np.linalg.norm(conic_points, axis=1),
+                    np.linalg.norm(ellipse_points, axis=1),
+                )
+            )
+            finite = radii[np.isfinite(radii)]
+            if finite.size == 0:
+                continue
+            finite_radii.extend(finite.tolist())
+            glyphs.append((x0, y0, conic_points, ellipse_points, wind))
+
+    if not glyphs or not finite_radii:
+        raise RuntimeError("No finite FM-ASR-conic indicatrix points were available to plot")
+
+    max_radius = float(np.nanmax(np.asarray(finite_radii, dtype=float)))
+    if not np.isfinite(max_radius) or max_radius <= 0.0:
+        max_radius = 1.0
+    plot_scale = float(args.conic_indicatrix_glyph_scale) * stride * h / max_radius
+
+    fig, ax = local_plt.subplots(figsize=(8.5, 8.0), constrained_layout=True)
+    if K_field is not None:
+        ax.imshow(
+            K_field,
+            origin="lower",
+            cmap="viridis",
+            extent=(-0.5 * h, (nx - 0.5) * h, -0.5 * h, (ny - 0.5) * h),
+            alpha=0.92,
+        )
+    else:
+        ax.set_facecolor("0.12")
+
+    centers_x: list[float] = []
+    centers_y: list[float] = []
+    quiver_u: list[float] = []
+    quiver_v: list[float] = []
+    for x0, y0, conic_points, ellipse_points, wind in glyphs:
+        ax.plot(
+            x0 + plot_scale * ellipse_points[:, 0],
+            y0 + plot_scale * ellipse_points[:, 1],
+            color="cyan",
+            linewidth=0.7,
+            linestyle=(0, (3, 2)),
+            alpha=0.75,
+            zorder=3,
+        )
+        ax.plot(
+            x0 + plot_scale * conic_points[:, 0],
+            y0 + plot_scale * conic_points[:, 1],
+            color="black",
+            linewidth=0.85,
+            alpha=0.88,
+            zorder=4,
+        )
+        centers_x.append(x0)
+        centers_y.append(y0)
+        quiver_u.append(plot_scale * wind[0])
+        quiver_v.append(plot_scale * wind[1])
+
+    ax.quiver(
+        centers_x,
+        centers_y,
+        quiver_u,
+        quiver_v,
+        angles="xy",
+        scale_units="xy",
+        scale=1.0,
+        color="white",
+        width=0.0032,
+        headwidth=3.8,
+        headlength=4.6,
+        headaxislength=4.0,
+        alpha=0.95,
+        zorder=5,
+    )
+    ax.set_title("FM-ASR-conic indicatrix")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    from matplotlib.lines import Line2D
+
+    ax.legend(
+        handles=[
+            Line2D([0], [0], color="cyan", linestyle=(0, (3, 2)), linewidth=1.3, label="W + dispersion ellipse"),
+            Line2D([0], [0], color="black", linewidth=1.3, label="conic FM-ASR branch"),
+            Line2D([0], [0], color="white", linewidth=2.0, label="advection W"),
+        ],
+        loc="upper right",
+        frameon=True,
+        fontsize=9,
+    )
+    ax.set_xlim(-0.5 * h, (nx - 0.5) * h)
+    ax.set_ylim(-0.5 * h, (ny - 0.5) * h)
+    ax.set_aspect("equal")
+    fig.savefig(output_path, dpi=300, bbox_inches="tight")
+    local_plt.close(fig)
 
 
 def main() -> None:
@@ -861,6 +1119,14 @@ def main() -> None:
 
         plt.savefig(args.output_dir / "indicatrix_field.png", dpi=300, bbox_inches="tight")
         plt.close()
+        if bool(args.conic_asr):
+            visualize_conic_asr_indicatrix_field(
+                W_cell,
+                args=args,
+                h=h_grid,
+                output_path=args.output_dir / "conic_indicatrix_field.png",
+                K_field=K,
+            )
 
     print(json.dumps(summary, indent=2))
 
