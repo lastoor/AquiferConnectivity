@@ -14,6 +14,7 @@ from typing import Any
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
+import cmcrameri.cm as cmc
 import numpy as np
 from scipy import constants
 from scipy.optimize import brentq
@@ -27,17 +28,18 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from step1_index import VisualizationConfig, default_cache_dir, load_config
 
+pathcm = cmc.davos.resampled(6)
 COLORS = {
-    "fp": "black",
-    "lrp": "#5278C4", #"#FC1212",
-    "lrpFMM": "#7C5AC2",
-    "fpFMM": "#C46552", #"#31830B",
-    "fpDijkstra": "#B1C452", #"#131EE2",
+    "fp": pathcm(0),
+    "lrp": pathcm(4), #"#FC1212",
+    "lrpFMM": pathcm(4),
+    "fpFMM": pathcm(3), #"#31830B",
+    "fpDijkstra": pathcm(3), #"#131EE2",
     "fpFSM": "#2CA02C",
-    "fpFmAsr": "#E377C2",
+    "fpFmAsr": pathcm(2),
     "fpFmAsrIso": "#17BECF",
     "fpFmAsrConic": "#9467BD",
-    "fpPypar2": "#FF7F0E",
+    "fpPypar2": pathcm(1),
 }
 
 LINESTYLES = {
@@ -237,72 +239,66 @@ def plot_characteristic_time(
     stats_fpt_fm_asr_conic: np.ndarray | None = None,
     stats_fpt_pypar2: np.ndarray | None = None,
 ):
-    fig, ax = plt.subplots(figsize=[6, 3])
+    fig, ax = plt.subplots(figsize=[6, 4])
     # fig, ax = plt.subplots(figsize=[5, 4])
 
-    if analytical_tmin is not None:
-        ax.plot(var[:5], analytical_tmin[:5], color="black", linestyle="-", linewidth=1.8, marker="o", markersize=6, markerfacecolor="None", label=analytical_label)
-    if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
-        pass
+    # if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
         # ax.errorbar(var, stats_fpt_fsm[:, 0] / t_ref, stats_fpt_fsm[:, 1] / t_ref, color=COLORS["fpFSM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FSM)")
-    ax.errorbar(var, stats_fpt[:, 0] / t_ref, color=COLORS["fp"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label=r"FP (RK45)")
-    ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="FP (FMM)")
-    ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="FP (Dijkstra)")
-    if stats_fpt_fm_asr is not None and np.any(np.isfinite(stats_fpt_fm_asr[:, 0])):
-        ax.errorbar(
-            var,
-            stats_fpt_fm_asr[:, 0] / t_ref,
-            color=COLORS["fpFmAsr"],
-            linestyle="--",
-            marker="x",
-            markersize=4,
-            markerfacecolor="None",
-            label="FP (FM-ASR)",
-        )
-    if stats_fpt_fm_asr_iso is not None and np.any(np.isfinite(stats_fpt_fm_asr_iso[:, 0])):
-        ax.errorbar(
-            var,
-            stats_fpt_fm_asr_iso[:, 0] / t_ref,
-            color=COLORS["fpFmAsrIso"],
-            linestyle="--",
-            marker="x",
-            markersize=4,
-            markerfacecolor="None",
-            label=r"FP (FM-ASR\, iso)",
-        )
-    if stats_fpt_fm_asr_conic is not None and np.any(np.isfinite(stats_fpt_fm_asr_conic[:, 0])):
-        ax.errorbar(
-            var,
-            stats_fpt_fm_asr_conic[:, 0] / t_ref,
-            color=COLORS["fpFmAsrConic"],
-            linestyle="--",
-            marker="x",
-            markersize=4,
-            markerfacecolor="None",
-            label=r"FP (FM-ASR\, conic)",
-        )
+    ax.plot(var, stats_fpt[:, 0] / t_ref, color=COLORS["fp"], linestyle="-", label=r"$\gamma^{\!\star}_{\mathcal{S}}$ (Pollock)")
+    if analytical_tmin is not None:
+        ax.plot(var[:5], analytical_tmin[:5], color=COLORS["fp"], linestyle=":", linewidth=1.8, marker="o", markersize=6, markerfacecolor="None", label=analytical_label)
     if stats_fpt_pypar2 is not None and np.any(np.isfinite(stats_fpt_pypar2[:, 0])):
         ax.errorbar(
             var,
             stats_fpt_pypar2[:, 0] / t_ref,
             color=COLORS["fpPypar2"],
-            linestyle="--",
-            marker="x",
-            markersize=4,
-            markerfacecolor="None",
-            label="FP (PyPar2)",
+            linestyle="-",
+            label=r"$\gamma^{\!\star}_{\mathcal{D}}$ (PyPar2)",
         )
-    ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="LRP (FMM)")
-    ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], linestyle="--", marker="x", markersize=4, markerfacecolor="None", label="LRP (Dijkstra)")
+    if stats_fpt_fm_asr is not None and np.any(np.isfinite(stats_fpt_fm_asr[:, 0])):
+        ax.errorbar(
+            var,
+            stats_fpt_fm_asr[:, 0] / t_ref,
+            color=COLORS["fpFmAsr"],
+            linestyle="-",
+            label=r"$\gamma^{\!\star}_{\mathcal{F}}$ (FM-ASR)",
+        )
+    ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], linestyle="-", label=r"$\gamma^{\!\star}_{\mathcal{E}}$ (FMM)")
+    ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], linestyle=":", label=r"$\gamma^{\!\star}_{\mathcal{E}}$ (Dijkstra)")
+    # if stats_fpt_fm_asr_iso is not None and np.any(np.isfinite(stats_fpt_fm_asr_iso[:, 0])):
+        # ax.errorbar(
+        #     var,
+        #     stats_fpt_fm_asr_iso[:, 0] / t_ref,
+        #     color=COLORS["fpFmAsrIso"],
+        #     linestyle="--",
+        #     marker="x",
+        #     markersize=4,
+        #     markerfacecolor="None",
+        #     label=r"FP (FM-ASR\, iso)",
+        # )
+    # if stats_fpt_fm_asr_conic is not None and np.any(np.isfinite(stats_fpt_fm_asr_conic[:, 0])):
+    #     ax.errorbar(
+    #         var,
+    #         stats_fpt_fm_asr_conic[:, 0] / t_ref,
+    #         color=COLORS["fpFmAsrConic"],
+    #         linestyle="--",
+    #         marker="x",
+    #         markersize=4,
+    #         markerfacecolor="None",
+    #         label=r"FP (FM-ASR\, conic)",
+    #     )
+    
+    ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", label=r"$\gamma^{\!\star}_{\mathcal{R}}$ (FMM)")
+    ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], linestyle=":", label=r"$\gamma^{\!\star}_{\mathcal{R}}$ (Dijkstra)")
     # ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="FP")
     # ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), stats_mhr[:, 1] / (t_ref * dh), color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="LRP")
     # ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), stats_mhr_fmm[:, 1] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="LRP (FMM)")
     # ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, stats_fpt_fmm[:, 1] / t_ref, color=COLORS["fpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FMM)")
     # ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, stats_fpt_dijkstra[:, 1] / t_ref, color=COLORS["fpDijkstra"], linestyle="-", marker="o", markerfacecolor="None", label="FP (Dijkstra)")
     # ax.set_yscale("log")
-    ax.set_xlabel("$\\sigma_{Y}^2$")
-    ax.set_ylabel(r"$\mathbb{E}\left[ t^* \right] U / I_Y$")
-    ax.legend()
+    ax.set_xlabel(r"$\sigma_{Y}^2$")
+    ax.set_ylabel(r"$\mathbb{E}\left[ t\!^\star \right] U / I_Y$")
+    ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "characteristic_time"}
@@ -580,56 +576,47 @@ def plot_hausdorff_vs_variance(
     stats_hausdorff_fm_asr_conic: np.ndarray | None = None,
     stats_hausdorff_pypar2: np.ndarray | None = None,
 ):
-    fig, ax = plt.subplots(figsize=[6, 3])
+    fig, ax = plt.subplots(figsize=[6, 4])
     # fig, ax = plt.subplots(figsize=[5, 4])
 
-    ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, label="FP (FMM)", linestyle="--", color=COLORS["fpFMM"], marker="x", markersize=4, markerfacecolor="None")
-    ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, label="FP (Dijkstra)", linestyle="--", color=COLORS["fpDijkstra"], marker="x", markersize=4, markerfacecolor="None")
-    ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, label="LRP (FMM)", linestyle="--", color=COLORS["lrpFMM"], marker="x", markersize=4, markerfacecolor="None")
-    ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, label="LRP (Dijkstra)", linestyle="--", color=COLORS["lrp"], marker="x", markersize=4, markerfacecolor="None")
+    ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, label="FP (FMM)", linestyle="-", color=COLORS["fpFMM"])
+    ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, label="FP (Dijkstra)", linestyle=":", color=COLORS["fpDijkstra"])
+    ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, label="LRP (FMM)", linestyle="-", color=COLORS["lrpFMM"])
+    ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, label="LRP (Dijkstra)", linestyle=":", color=COLORS["lrp"])
     if stats_hausdorff_fm_asr is not None and np.any(np.isfinite(stats_hausdorff_fm_asr[:, 0])):
         ax.errorbar(
             var,
             stats_hausdorff_fm_asr[:, 0] / i_y,
             label=r"FP (FM-ASR)",
-            linestyle="--",
+            linestyle="-",
             color=COLORS["fpFmAsr"],
-            marker="x",
-            markersize=4,
-            markerfacecolor="None",
         )
-    if stats_hausdorff_fm_asr_iso is not None and np.any(np.isfinite(stats_hausdorff_fm_asr_iso[:, 0])):
-        ax.errorbar(
-            var,
-            stats_hausdorff_fm_asr_iso[:, 0] / i_y,
-            label=r"FP (FM-ASR\, iso)",
-            linestyle="--",
-            color=COLORS["fpFmAsrIso"],
-            marker="x",
-            markersize=4,
-            markerfacecolor="None",
-        )
+    # if stats_hausdorff_fm_asr_iso is not None and np.any(np.isfinite(stats_hausdorff_fm_asr_iso[:, 0])):
+        # ax.errorbar(
+        #     var,
+        #     stats_hausdorff_fm_asr_iso[:, 0] / i_y,
+        #     label=r"FP (FM-ASR\, iso)",
+        #     linestyle="--",
+        #     color=COLORS["fpFmAsrIso"],
+        #     marker="x",
+        #     markersize=4,
+        #     markerfacecolor="None",
+        # )
     if stats_hausdorff_fm_asr_conic is not None and np.any(np.isfinite(stats_hausdorff_fm_asr_conic[:, 0])):
         ax.errorbar(
             var,
             stats_hausdorff_fm_asr_conic[:, 0] / i_y,
             label=r"FP (FM-ASR\, conic)",
-            linestyle="--",
+            linestyle="-",
             color=COLORS["fpFmAsrConic"],
-            marker="x",
-            markersize=4,
-            markerfacecolor="None",
         )
     if stats_hausdorff_pypar2 is not None and np.any(np.isfinite(stats_hausdorff_pypar2[:, 0])):
         ax.errorbar(
             var,
             stats_hausdorff_pypar2[:, 0] / i_y,
             label="FP (PyPar2)",
-            linestyle="--",
+            linestyle="-",
             color=COLORS["fpPypar2"],
-            marker="x",
-            markersize=4,
-            markerfacecolor="None",
         )
     # ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, yerr=stats_hausdorff_lrp[:, 1] / i_y, label="$d_H$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
     # ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, yerr=stats_hausdorff_lrp_fmm[:, 1] / i_y, label="$d_H$[FP, LRP(FMM)]", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
@@ -640,8 +627,8 @@ def plot_hausdorff_vs_variance(
         # ax.errorbar(var, stats_hausdorff_fsm[:, 0] / i_y, yerr=stats_hausdorff_fsm[:, 1] / i_y, label="$d_H$[FP, FP(FSM)]", linestyle="-", color=COLORS["fpFSM"], marker="o", markerfacecolor="None")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
-    ax.set_ylabel(r"$\mathbb{E}\left[ d_H / I_Y \right]$")
-    ax.legend(fontsize="9", loc="best")
+    ax.set_ylabel(r"$\mathbb{E}\left[ d_{\mathrm{H}} \right] / I_Y $")
+    ax.legend(fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "hausdorff_variance"}
@@ -714,7 +701,7 @@ def plot_frechet_vs_variance(
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[ d_F / I_Y \right]$")
-    ax.legend(fontsize="9", loc="upper left")
+    ax.legend(fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "frechet_variance"}
@@ -784,7 +771,7 @@ def plot_endpoint_box_by_variance(
     ax.set_xticklabels([f"{v:g}" for v in var_values])
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$d_{EP} / I_Y$")
-    ax.legend(handles=legend_handles, fontsize="9", loc="upper left")
+    ax.legend(handles=legend_handles, fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "endpoint_box_variance"}
@@ -847,7 +834,7 @@ def plot_hausdorff_box_by_variance(
     ax.set_xticklabels([f"{v:g}" for v in var_values])
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$d_H / I_Y$")
-    ax.legend(handles=legend_handles, fontsize="9", loc="upper left")
+    ax.legend(handles=legend_handles, fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "hausdorff_box_variance"}
@@ -890,7 +877,7 @@ def plot_hausdorff_cdf_ensemble(
     ax.set_xlabel(r"$d / I_Y$")
     ax.set_ylabel("Empirical CDF")
     ax.set_title(fr"Hausdorff Distance CDF ($\sigma_Y^2={variance_value:g}$)")
-    ax.legend(fontsize="9", loc="best")
+    ax.legend(fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "hausdorff_cdf_ensemble", "variance": float(variance_value)}
@@ -965,7 +952,7 @@ def plot_entropy_vs_hausdorff(
                 )
             ax.set_ylabel(r"$d_H / I_Y$")
             ax.set_yscale("log")
-            ax.legend(fontsize=6, loc="best")
+            ax.legend(fontsize=6, loc='upper left', bbox_to_anchor=(1.05, 1))
             ax.grid(True, alpha=0.3)
             if row_idx == 0:
                 ax.set_title(entropy_label, fontsize=10)
@@ -1041,7 +1028,7 @@ def plot_times_box_by_variance(
     ax.set_xticklabels([f"{v:g}" for v in var_values])
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$tU / I_Y$")
-    ax.legend(handles=legend_handles, fontsize="9", loc="upper left")
+    ax.legend(handles=legend_handles, fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "times_box_variance"}
@@ -1082,7 +1069,7 @@ def plot_comp_time_mean_vs_variance(
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel("Computation Time (s)")
     ax.set_title("Mean Computation Time per Solver")
-    ax.legend(fontsize="9", loc="best")
+    ax.legend(fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "comp_time_mean_variance"}
@@ -1146,7 +1133,7 @@ def plot_comp_time_box_by_variance(
     ax.set_yscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel("Computation Time (s)")
-    ax.legend(handles=legend_handles, fontsize="9", loc="upper left")
+    ax.legend(handles=legend_handles, fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "comp_time_box_variance"}
@@ -1169,7 +1156,7 @@ def plot_ratio_mean_vs_variance(
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathbb{E}\left[t_{\mathrm{min}}/(R_{\mathrm{min}}/dh)\right]$")
     ax.set_title("Variation of Mean Ratio with Variance")
-    ax.legend(fontsize="9", loc="best")
+    ax.legend(fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "ratio_mean_variance"}
@@ -1192,7 +1179,7 @@ def plot_ratio_var_vs_variance(
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$\mathrm{Var}\left(t_{\mathrm{min}}/(R_{\mathrm{min}}/dh)\right)$")
     ax.set_title("Variation of Variance Ratio with Variance")
-    ax.legend(fontsize="9", loc="best")
+    ax.legend(fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "ratio_var_variance"}
@@ -1230,7 +1217,7 @@ def plot_wasserstein_len_vs_variance(
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$W_1(\mathrm{len})/I_Y$")
     ax.set_title("Wasserstein Distance of Path-Length CDFs")
-    ax.legend(fontsize="9", loc="best")
+    ax.legend(fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "wasserstein_len_variance"}
@@ -1259,7 +1246,7 @@ def plot_length_cdf_for_variance(*, samples: dict[str, np.ndarray], variance_val
     ax.set_xlabel(r"$\ell / I_Y$")
     ax.set_ylabel("Empirical CDF")
     ax.set_title(fr"Path-Length CDFs ($\sigma_Y^2={variance_value:g}$)")
-    ax.legend(fontsize="9", loc="best")
+    ax.legend(fontsize="9", loc='upper left', bbox_to_anchor=(1.05, 1))
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "length_cdf", "variance": float(variance_value)}
@@ -1372,7 +1359,7 @@ def run_stage4(
             t_ref,
             cfg.dh,
             analytical_tmin=analytical_tmin,
-            analytical_label="Analytical", # f" $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
+            analytical_label=r"$\gamma^{\!\star}_{\mathcal{S}}$ (Analytical)", # f" $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
             stats_fpt_fsm=s.get("stats_fpt_fsm"),
             stats_fpt_fm_asr=s.get("stats_fpt_fm_asr"),
             stats_fpt_fm_asr_iso=s.get("stats_fpt_fm_asr_iso"),

@@ -32,14 +32,16 @@ import step4_plot as step4
 
 _MC_PATTERN = re.compile(r"(?:_mc|_)(-?\d+)$")
 
+pathcm = cmc.davos.resampled(6)
 COLORS = {
-    "fp": "#FF6B78",
-    "fpFMM": "#3F73B8",
-    "fpDijkstra": "#3F73B8",
-    "lrp": "#F9B43F",
-    "lrpFMM": "#F9B43F",
+    "fp": pathcm(0),
+    "lrp": pathcm(4), 
+    "lrpFMM": pathcm(4),
+    "fpFMM": pathcm(3),
+    "fpDijkstra": pathcm(3), 
+    "fpFmAsr": pathcm(2),
+    "fpPypar2": pathcm(1),
     "fpFSM": "#2CA02C",
-    "fpFmAsr": "#E377C2",
 }
 
 LINESTYLES = {

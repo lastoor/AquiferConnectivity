@@ -1,5 +1,5 @@
 data_root: /project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod
-run_id: 16_pypar2-al0p1-at0p1_asr-ratio0p05-factor10
+run_id: 16p1_pypar2-al0p1-at0p01_asr-ratio0p05-factor10
 length_scale: 0.05
 dh: 0.1
 field_size_ref: 200
