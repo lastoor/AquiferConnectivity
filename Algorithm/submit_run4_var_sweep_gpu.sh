@@ -1,11 +1,11 @@
 #!/bin/bash
 set -euo pipefail
 
-# VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
-VAR=("0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
+VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
+# VAR=("0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
 # VAR=("1" "5")
 length_scale="0.05"
-run="16_pypar2-al0p1-at0p1_asr-ratio0p05-factor10"
+run="16p1_pypar2-al0p1-at0p01_asr-ratio0p05-factor10"
 dh="0.1"
 
 num_mc="1000"
@@ -35,7 +35,7 @@ fm_asr_min_speed="${fm_asr_min_speed:-}"
 
 # Mixed Randers/conic FM-ASR comparison. The wind is the flow velocity; the
 # default self metric is the PyPar2 dispersion velocity ellipse.
-fm_asr_conic_enabled="${fm_asr_conic_enabled:-1}"
+fm_asr_conic_enabled="${fm_asr_conic_enabled:-0}"
 fm_asr_conic_self_velocity="${fm_asr_conic_self_velocity:-dispersion}"
 fm_asr_conic_velocity_multiplier="${fm_asr_conic_velocity_multiplier:-${fm_asr_velocity_multiplier}}"
 fm_asr_conic_lambda_threshold="${fm_asr_conic_lambda_threshold:-0.0}"
@@ -54,7 +54,7 @@ pypar2_dt="${pypar2_dt:-0.01}"
 pypar2_steps="${pypar2_steps:-200000}"
 pypar2_dm="${pypar2_dm:-1e-9}"
 pypar2_alpha_l="${pypar2_alpha_l:-0.1}"
-pypar2_alpha_t="${pypar2_alpha_t:-0.1}"
+pypar2_alpha_t="${pypar2_alpha_t:-0.01}"
 pypar2_velocity_floor="${pypar2_velocity_floor:-}"
 pypar2_taichi_arch="${pypar2_taichi_arch:-gpu}"
 pypar2_max_points="${pypar2_max_points:-2000}"
