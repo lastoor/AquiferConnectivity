@@ -32,16 +32,16 @@ import step4_plot as step4
 
 _MC_PATTERN = re.compile(r"(?:_mc|_)(-?\d+)$")
 
-pathcm = cmc.davos.resampled(6)
+pathcm = cmc.davos.resampled(7)
 COLORS = {
-    "fp": pathcm(0),
-    "lrp": pathcm(4), 
-    "lrpFMM": pathcm(4),
-    "fpFMM": pathcm(3),
-    "fpDijkstra": pathcm(3), 
-    "fpFmAsr": pathcm(2),
-    "fpPypar2": pathcm(1),
+    "fp": pathcm(1),
+    "lrp": pathcm(5), #"#FC1212",
+    "lrpFMM": pathcm(5),
+    "fpFMM": pathcm(4), #"#31830B",
+    "fpDijkstra": pathcm(4), #"#131EE2",
     "fpFSM": "#2CA02C",
+    "fpFmAsr": pathcm(3),
+    "fpPypar2": pathcm(2),
 }
 
 LINESTYLES = {
@@ -56,6 +56,30 @@ LINESTYLES = {
 }
 
 LINEWIDTHS = 1.2
+
+def configure_style():
+    import glob
+    import matplotlib.font_manager as fm
+
+    family: str = "CMU Sans Serif"
+    mathtext_fontset: str = "cm"
+    unicode_minus: bool = False
+    cmu_font_glob: list = ["/home1/binhaoli/.local/share/fonts/cmun*.ttf", "/Users/binhaoli/Library/Fonts/cmun*.ttf"]
+
+    for paths in cmu_font_glob:
+        for path in glob.glob(paths):
+            fm.fontManager.addfont(path)
+            
+    plt.rcParams["font.family"] = family
+    plt.rcParams["mathtext.fontset"] = mathtext_fontset
+    plt.rcParams["axes.unicode_minus"] = unicode_minus
+
+    plt.rcParams["font.size"] = 14
+    plt.rcParams["axes.labelsize"] = 16
+    plt.rcParams["axes.titlesize"] = 16
+    plt.rcParams["xtick.labelsize"] = 13
+    plt.rcParams["ytick.labelsize"] = 13
+    plt.rcParams["legend.fontsize"] = 12
 
 @dataclass(slots=True)
 class SelectedRun:
@@ -4683,6 +4707,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    configure_style()
     args = parse_args()
     cfg = step1.load_config(args.config)
     (logk_path, tmin_path, stream_path, balance_path,
