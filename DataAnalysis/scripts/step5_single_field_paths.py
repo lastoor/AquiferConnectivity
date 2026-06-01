@@ -46,13 +46,13 @@ COLORS = {
 
 LINESTYLES = {
     "fp": "-",
-    "fpFMM": "--",
-    "fpDijkstra": ":",
+    "fpFMM": "-",
+    "fpDijkstra": "-",
     "lrp": "-",
-    "lrpFMM": "-.",
-    "fpFSM": (0, (3, 1, 1, 1)),
-    "fpFmAsr": (0, (5, 2)),
-    "fpPypar2": (0, (3, 1, 1, 1, 1, 1)),
+    "lrpFMM": "-",
+    "fpFSM": "-",
+    "fpFmAsr": "-",
+    "fpPypar2": "-",
 }
 
 LINEWIDTHS = 1.2
@@ -1811,15 +1811,15 @@ def _plot_common_overlays(
     )
     ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^*_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
-    #     ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{FSM}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    #     ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{FSM}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
-        ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^*_{\mathcal{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+        ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_pypar2 is not None and len(result.fp_pypar2) >= 2:
-        ax.plot(result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y, color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"], linewidth=lw, label=r"$\gamma^*_{\mathcal{P}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+        ax.plot(result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y, color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{D}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if fp_diag is not None:
     #     ax.plot(
     #         fp_diag.spline_points[:, 0] / i_y,
@@ -3447,7 +3447,7 @@ def plot_curvature_balance(
         color=COLORS["fpFMM"],
         alpha=alpha,
         linewidth=lw,
-        label=r"$-\partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{E}}$",
+        label=r"$-\partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^{\!\star}_{\mathcal{E}}$",
     )
     axes[0].axhline(0.0, color="0.7", linewidth=1.0)
     axes[0].set_ylabel(r"FP $[\times I_Y]$")
@@ -3492,7 +3492,7 @@ def plot_curvature_balance(
         color=COLORS["lrpFMM"],
         alpha=alpha,
         linewidth=lw,
-        label=r"$-\partial_{\mathbf{n}} \ln K$ along $\gamma^*_{\mathcal{R}}$",
+        label=r"$-\partial_{\mathbf{n}} \ln K$ along $\gamma^{\!\star}_{\mathcal{R}}$",
     )
     axes[1].plot(
         lrp_diag.s_norm,
@@ -3500,7 +3500,7 @@ def plot_curvature_balance(
         color=COLORS["lrpFMM"],
         linestyle=":",
         linewidth=lw,
-        label=r"$- \partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{R}}$",
+        label=r"$- \partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^{\!\star}_{\mathcal{R}}$",
     )
     axes[1].axhline(0.0, color="0.7", linewidth=1.0)
     axes[1].set_ylabel(r"LRP $[\times I_Y]$")
@@ -3538,7 +3538,7 @@ def plot_curvature_balance(
         fp_diag.residual * i_y,
         color=COLORS["fpFMM"],
         linewidth=lw,
-        label=r"$\kappa^*_{\mathcal{E}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{E}}$",
+        label=r"$\kappa^*_{\mathcal{E}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^{\!\star}_{\mathcal{E}}$",
     )
     axes[2].plot(
         lrp_diag.s_norm,
@@ -3546,7 +3546,7 @@ def plot_curvature_balance(
         color=COLORS["lrpFMM"],
         alpha=alpha,
         linewidth=lw,
-        label=r"$\kappa^*_{\mathcal{R}} + \partial_{\mathbf{n}} \ln K$ along $\gamma^*_{\mathcal{R}}$",
+        label=r"$\kappa^*_{\mathcal{R}} + \partial_{\mathbf{n}} \ln K$ along $\gamma^{\!\star}_{\mathcal{R}}$",
     )
     # axes[2].plot(
     #     lrp_diag.s_norm,
@@ -3562,7 +3562,7 @@ def plot_curvature_balance(
         color=COLORS["lrpFMM"],
         linestyle=":",
         linewidth=lw,
-        label=r"$\kappa^*_{\mathcal{R}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^*_{\mathcal{R}}$",
+        label=r"$\kappa^*_{\mathcal{R}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^{\!\star}_{\mathcal{R}}$",
     )
     axes[2].axhline(0.0, color="0.7", linewidth=1.0)
     axes[2].set_xlabel(r"Normalized arclength $\ell/L$")
@@ -3802,39 +3802,6 @@ def plot_isochrones_with_plume(
         t_level_fp = f * t_fp_arrival
         t_level_lrp = f * t_lrp_arrival
 
-        # FP isochrone contour (white) — relative to FP first arrival
-        if t_min_val <= t_level_fp <= t_max_val:
-            ax.contour(
-                x_norm, y_norm, t_min_dimless,
-                levels=[t_level_fp], linewidths=LINEWIDTHS, colors=COLORS["fpFMM"],
-            )
-
-        # LRP isochrone contour (lrpFMM color, dashed) — relative to LRP first arrival
-        if t_lrp_min <= t_level_lrp <= t_lrp_max:
-            ax.contour(
-                x_norm, y_norm, t_min_lrp_dimless,
-                levels=[t_level_lrp], linewidths=LINEWIDTHS, colors=COLORS["lrpFMM"],
-            )
-
-        # # FSM isochrone contour — relative to FSM first arrival
-        # if t_min_fsm_dimless is not None:
-        #     t_level_fsm = f * t_fsm_arrival
-        #     if t_fsm_min <= t_level_fsm <= t_fsm_max:
-        #         ax.contour(
-        #             x_norm, y_norm, t_min_fsm_dimless,
-        #             levels=[t_level_fsm], linewidths=LINEWIDTHS, colors=COLORS["fpFSM"],
-        #             linestyles=["-"],
-        #         )
-
-        if t_min_fm_asr_dimless is not None:
-            t_level_fm_asr = f * t_fm_asr_arrival
-            if t_fm_asr_min <= t_level_fm_asr <= t_fm_asr_max:
-                ax.contour(
-                    x_norm, y_norm, t_min_fm_asr_dimless,
-                    levels=[t_level_fm_asr], linewidths=LINEWIDTHS, colors=COLORS["fpFmAsr"],
-                    linestyles=[LINESTYLES["fpFmAsr"]],
-                )
-
         # Particle plume scatter
         if snaps is not None and j < snaps.x.shape[1]:
             x_j = snaps.x[:, j]
@@ -3859,13 +3826,46 @@ def plot_isochrones_with_plume(
                 linewidth=LINEWIDTHS,
             )
 
+        if t_min_fm_asr_dimless is not None:
+            t_level_fm_asr = f * t_fm_asr_arrival
+            if t_fm_asr_min <= t_level_fm_asr <= t_fm_asr_max:
+                ax.contour(
+                    x_norm, y_norm, t_min_fm_asr_dimless,
+                    levels=[t_level_fm_asr], linewidths=LINEWIDTHS, colors=COLORS["fpFmAsr"],
+                    linestyles=[LINESTYLES["fpFmAsr"]],
+                )
+            
+        # FP (FMM) isochrone contour (white) — relative to FP first arrival
+        if t_min_val <= t_level_fp <= t_max_val:
+            ax.contour(
+                x_norm, y_norm, t_min_dimless,
+                levels=[t_level_fp], linewidths=LINEWIDTHS, colors=COLORS["fpFMM"],
+            )
+
+        # LRP isochrone contour (lrpFMM color, dashed) — relative to LRP first arrival
+        if t_lrp_min <= t_level_lrp <= t_lrp_max:
+            ax.contour(
+                x_norm, y_norm, t_min_lrp_dimless,
+                levels=[t_level_lrp], linewidths=LINEWIDTHS, colors=COLORS["lrpFMM"],
+            )
+
+        # # FSM isochrone contour — relative to FSM first arrival
+        # if t_min_fsm_dimless is not None:
+        #     t_level_fsm = f * t_fsm_arrival
+        #     if t_fsm_min <= t_level_fsm <= t_fsm_max:
+        #         ax.contour(
+        #             x_norm, y_norm, t_min_fsm_dimless,
+        #             levels=[t_level_fsm], linewidths=LINEWIDTHS, colors=COLORS["fpFSM"],
+        #             linestyles=["-"],
+        #         )
+
         # FP path
         line, = ax.plot(
             result.fp[:, 0] / i_y, result.fp[:, 1] / i_y,
             color=COLORS["fp"], linestyle=LINESTYLES["fp"],
             linewidth=LINEWIDTHS,
         )
-        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
         line.set_solid_capstyle("round")
         line.set_dash_capstyle("round")
 
@@ -3875,7 +3875,7 @@ def plot_isochrones_with_plume(
             color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"],
             linewidth=LINEWIDTHS,
         )
-        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
         line.set_solid_capstyle("round")
         line.set_dash_capstyle("round")
 
@@ -3885,7 +3885,7 @@ def plot_isochrones_with_plume(
             color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"],
             linewidth=LINEWIDTHS,
         )
-        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
         line.set_solid_capstyle("round")
         line.set_dash_capstyle("round")
 
@@ -3904,7 +3904,7 @@ def plot_isochrones_with_plume(
                 color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"],
                 linewidth=LINEWIDTHS,
             )
-            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
             line.set_solid_capstyle("round")
             line.set_dash_capstyle("round")
 
@@ -3914,7 +3914,7 @@ def plot_isochrones_with_plume(
                 color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"],
                 linewidth=LINEWIDTHS,
             )
-            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
             line.set_solid_capstyle("round")
             line.set_dash_capstyle("round")
 
@@ -3930,73 +3930,71 @@ def plot_isochrones_with_plume(
             color="purple", linewidth=LINEWIDTHS,
         )
 
-        # Legend on first panel only
-        if j == 0:
-            h_fp = Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, ls=LINESTYLES["fp"],
-                          label=r"$\gamma^*_\mathcal{S}$")
-            h_fp.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
-            h_fp.set_solid_capstyle("round")
-            h_fp.set_dash_capstyle("round")
+        # # Legend on first panel only
+        # if j == 0:
+        #     h_fp = Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, ls=LINESTYLES["fp"],
+        #                   label=r"$\gamma^{\!\star}_\mathcal{S}$")
+        #     h_fp.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        #     h_fp.set_solid_capstyle("round")
+        #     h_fp.set_dash_capstyle("round")
 
-            h_fp_fmm = Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFMM"],
-                              label=r"$\gamma^*_\mathcal{E}$")
-            h_fp_fmm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
-            h_fp_fmm.set_solid_capstyle("round")
-            h_fp_fmm.set_dash_capstyle("round")
+        #     h_fp_fmm = Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFMM"],
+        #                       label=r"$\gamma^{\!\star}_\mathcal{E}$")
+        #     h_fp_fmm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        #     h_fp_fmm.set_solid_capstyle("round")
+        #     h_fp_fmm.set_dash_capstyle("round")
 
-            h_lrp_fmm = Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, ls=LINESTYLES["lrpFMM"],
-                               label=r"$\gamma^*_\mathcal{R}$")
-            h_lrp_fmm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
-            h_lrp_fmm.set_solid_capstyle("round")
-            h_lrp_fmm.set_dash_capstyle("round")
+        #     h_lrp_fmm = Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, ls=LINESTYLES["lrpFMM"],
+        #                        label=r"$\gamma^{\!\star}_\mathcal{R}$")
+        #     h_lrp_fmm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        #     h_lrp_fmm.set_solid_capstyle("round")
+        #     h_lrp_fmm.set_dash_capstyle("round")
 
-            h_fm_asr = Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"],
-                              label=r"$\gamma^*_\mathcal{F}$")
-            h_fm_asr.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
-            h_fm_asr.set_solid_capstyle("round")
-            h_fm_asr.set_dash_capstyle("round")
+        #     h_fm_asr = Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"],
+        #                       label=r"$\gamma^{\!\star}_\mathcal{F}$")
+        #     h_fm_asr.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        #     h_fm_asr.set_solid_capstyle("round")
+        #     h_fm_asr.set_dash_capstyle("round")
 
-            h_pypar2 = Line2D([0], [0], color=COLORS["fpPypar2"], lw=LINEWIDTHS, ls=LINESTYLES["fpPypar2"],
-                              label=r"$\gamma^*_\mathcal{P}$")
-            h_pypar2.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
-            h_pypar2.set_solid_capstyle("round")
-            h_pypar2.set_dash_capstyle("round")
+        #     h_pypar2 = Line2D([0], [0], color=COLORS["fpPypar2"], lw=LINEWIDTHS, ls=LINESTYLES["fpPypar2"],
+        #                       label=r"$\gamma^{\!\star}_\mathcal{P}$")
+        #     h_pypar2.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        #     h_pypar2.set_solid_capstyle("round")
+        #     h_pypar2.set_dash_capstyle("round")
 
-            handles = [
-                h_fp, h_fp_fmm, h_lrp_fmm,
-                Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
-                Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{E}$ isochrone"),
-                Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{R}$ isochrone"),
-            ]
-            if result.fp_fm_asr is not None and t_min_fm_asr_dimless is not None:
-                handles += [
-                    h_fm_asr,
-                    Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"], label=r"$\mathcal{T}^*_\mathcal{F}$ isochrone"),
-                ]
-            if result.fp_pypar2 is not None:
-                handles.append(h_pypar2)
-            if result.pypar2_snapshots is not None:
-                handles.append(Line2D([0], [0], color=COLORS["fpPypar2"], lw=LINEWIDTHS, ls=LINESTYLES["fpPypar2"], label=r"PyPar2 snapshot contour"))
-            # if t_min_fsm_dimless is not None:
-            #     h_fp_fsm = Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFSM"],
-            #                       label=r"$\gamma^*_\mathcal{S}$")
-            #     h_fp_fsm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
-            #     handles += [
-            #         h_fp_fsm,
-            #         Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
-            #     ]
-            ax.legend(handles=handles, fontsize=6, loc="upper left", framealpha=0.5)
+        #     handles = [
+        #         h_fp, h_fp_fmm, h_lrp_fmm,
+        #         Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
+        #         Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{E}$ isochrone"),
+        #         Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{R}$ isochrone"),
+        #     ]
+        #     if result.fp_fm_asr is not None and t_min_fm_asr_dimless is not None:
+        #         handles += [
+        #             h_fm_asr,
+        #             Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"], label=r"$\mathcal{T}^*_\mathcal{F}$ isochrone"),
+        #         ]
+        #     if result.fp_pypar2 is not None:
+        #         handles.append(h_pypar2)
+        #     if result.pypar2_snapshots is not None:
+        #         handles.append(Line2D([0], [0], color=COLORS["fpPypar2"], lw=LINEWIDTHS, ls=LINESTYLES["fpPypar2"], label=r"PyPar2 snapshot contour"))
+        #     # if t_min_fsm_dimless is not None:
+        #     #     h_fp_fsm = Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFSM"],
+        #     #                       label=r"$\gamma^{\!\star}_\mathcal{S}$")
+        #     #     h_fp_fsm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+        #     #     handles += [
+        #     #         h_fp_fsm,
+        #     #         Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
+        #     #     ]
+        #     ax.legend(handles=handles, fontsize=6, loc="upper left", framealpha=0.5)
 
         if j == n_snaps - 1:
-            arrival_lines = [
-                rf"$t_{{\mathcal{{A}}}}^* = {t_fp_pt_arrival:.3g}$",
-                rf"$t_{{\mathcal{{E}}}}^* = {t_fp_arrival:.3g}$",
-                rf"$t_{{\mathcal{{R}}}}^* = {t_lrp_arrival:.3g}$",
-            ]
-            if t_min_fm_asr_dimless is not None:
-                arrival_lines.append(rf"$t_{{\mathcal{{F}}}}^* = {t_fm_asr_arrival:.3g}$")
+            arrival_lines = [rf"$t_{{\mathcal{{S}}}}^{{\!\star}} U/I_Y = {t_fp_pt_arrival:.3g}$",]
             if pypar2_arrival_time_dimless is not None and np.isfinite(pypar2_arrival_time_dimless):
-                arrival_lines.append(rf"$t_{{\mathcal{{P}}}}^* = {pypar2_arrival_time_dimless:.3g}$")
+                arrival_lines.append(rf"$t_{{\mathcal{{D}}}}^{{\!\star}} U/I_Y = {pypar2_arrival_time_dimless:.3g}$")
+            if t_min_fm_asr_dimless is not None:
+                arrival_lines.append(rf"$t_{{\mathcal{{F}}}}^{{\!\star}} U/I_Y = {t_fm_asr_arrival:.3g}$")
+            arrival_lines.append(rf"$t_{{\mathcal{{E}}}}^{{\!\star}} U/I_Y = {t_fp_arrival:.3g}$")
+            arrival_lines.append(rf"$t_{{\mathcal{{R}}}}^{{\!\star}} U/I_Y = {t_lrp_arrival:.3g}$")
             # if t_min_fsm_dimless is not None:
             #     arrival_lines.append(rf"$t_{{a,\mathcal{{S}}}}^* = {t_fsm_arrival:.3g}$")
             ax.text(
