@@ -38,6 +38,24 @@ fm_asr_back_factor="2.0"
 fm_asr_min_speed="1e-12"
 fm_asr_max_steps="200000"
 
+pypar2="true"
+pypar2_dt="0.01"
+pypar2_steps="200000"
+pypar2_dm="1e-9"
+pypar2_alpha_l="0.1"
+pypar2_alpha_t="0.01"
+pypar2_velocity_floor=""
+pypar2_taichi_arch="gpu"
+pypar2_max_points="2000"
+pypar2_num_particles=""
+pypar2_trajectory_memory_limit="5000000"
+pypar2_replay_top_k="5"
+pypar2_replay_particles_per_center="40"
+pypar2_replay_radius_cells="0.5"
+pypar2_replay_tolerance="1.05"
+pypar2_replay_max_redos="3"
+pypar2_seed="0"
+
 linearized_fp="false"
 linearized_scheme="linearized" # Options: linearized, full_eikonal
 linearized_outer_max="10"
@@ -145,6 +163,33 @@ fm_asr_args+=" --fm-asr-back-factor ${fm_asr_back_factor}"
 fm_asr_args+=" --fm-asr-min-speed ${fm_asr_min_speed}"
 fm_asr_args+=" --fm-asr-max-steps ${fm_asr_max_steps}"
 
+pypar2_args=""
+if [[ "${pypar2}" == "true" ]]; then
+    pypar2_args+=" --pypar2"
+else
+    pypar2_args+=" --no-pypar2"
+fi
+pypar2_args+=" --pypar2-dt ${pypar2_dt}"
+pypar2_args+=" --pypar2-steps ${pypar2_steps}"
+pypar2_args+=" --pypar2-dm ${pypar2_dm}"
+pypar2_args+=" --pypar2-alpha-l ${pypar2_alpha_l}"
+pypar2_args+=" --pypar2-alpha-t ${pypar2_alpha_t}"
+if [[ -n "${pypar2_velocity_floor}" ]]; then
+    pypar2_args+=" --pypar2-velocity-floor ${pypar2_velocity_floor}"
+fi
+pypar2_args+=" --pypar2-taichi-arch ${pypar2_taichi_arch}"
+pypar2_args+=" --pypar2-max-points ${pypar2_max_points}"
+if [[ -n "${pypar2_num_particles}" ]]; then
+    pypar2_args+=" --pypar2-num-particles ${pypar2_num_particles}"
+fi
+pypar2_args+=" --pypar2-trajectory-memory-limit ${pypar2_trajectory_memory_limit}"
+pypar2_args+=" --pypar2-replay-top-k ${pypar2_replay_top_k}"
+pypar2_args+=" --pypar2-replay-particles-per-center ${pypar2_replay_particles_per_center}"
+pypar2_args+=" --pypar2-replay-radius-cells ${pypar2_replay_radius_cells}"
+pypar2_args+=" --pypar2-replay-tolerance ${pypar2_replay_tolerance}"
+pypar2_args+=" --pypar2-replay-max-redos ${pypar2_replay_max_redos}"
+pypar2_args+=" --pypar2-seed ${pypar2_seed}"
+
 linearized_args=""
 if [[ "${linearized_fp}" == "true" ]]; then
     linearized_args+=" --linearized-fp"
@@ -237,6 +282,7 @@ common_args="\
   --fmm-continuous-step-size 0.1 \
   ${fsm_args} \
   ${fm_asr_args} \
+  ${pypar2_args} \
   ${linearized_args} \
   ${check_path_geometry_args} \
   ${geometry_args} \
@@ -278,6 +324,7 @@ print_run_context() {
     fi
     echo "Linearized FP: ${linearized_fp}"
     echo "FM-ASR FP: ${fm_asr_fp} (perp_ratio=${fm_asr_perp_ratio}, back_factor=${fm_asr_back_factor}, min_speed=${fm_asr_min_speed}, max_steps=${fm_asr_max_steps}, T_hessian=${fm_asr_hamiltonian_t_hessian}, p_dot=${fm_asr_hamiltonian_p_dot})"
+    echo "PyPar2 FP: ${pypar2} (arch=${pypar2_taichi_arch}, dt=${pypar2_dt}, steps=${pypar2_steps}, alpha_l=${pypar2_alpha_l}, alpha_t=${pypar2_alpha_t})"
     echo "Linearized scheme: ${linearized_scheme}"
     echo "Check path geometry: ${check_path_geometry}"
     echo "Curvature method: ${curvature_method} (mode=${curvature_spline_mode}, smooth=${curvature_spline_smooth}, degree=${curvature_spline_degree}, circle_window=${curvature_circle_window}, savgol_window=${curvature_savgol_window}, savgol_poly=${curvature_savgol_poly}), normal_deriv_method=${normal_deriv_method}"

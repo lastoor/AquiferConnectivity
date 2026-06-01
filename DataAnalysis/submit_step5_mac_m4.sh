@@ -42,6 +42,24 @@ fm_asr_back_factor="${FM_ASR_BACK_FACTOR:-10.0}"
 fm_asr_min_speed="${FM_ASR_MIN_SPEED:-1e-12}"
 fm_asr_max_steps="${FM_ASR_MAX_STEPS:-200000}"
 
+pypar2="${PYPAR2:-true}"
+pypar2_dt="${PYPAR2_DT:-0.01}"
+pypar2_steps="${PYPAR2_STEPS:-200000}"
+pypar2_dm="${PYPAR2_DM:-1e-9}"
+pypar2_alpha_l="${PYPAR2_ALPHA_L:-0.1}"
+pypar2_alpha_t="${PYPAR2_ALPHA_T:-0.01}"
+pypar2_velocity_floor="${PYPAR2_VELOCITY_FLOOR:-}"
+pypar2_taichi_arch="${PYPAR2_TAICHI_ARCH:-gpu}"
+pypar2_max_points="${PYPAR2_MAX_POINTS:-2000}"
+pypar2_num_particles="${PYPAR2_NUM_PARTICLES:-}"
+pypar2_trajectory_memory_limit="${PYPAR2_TRAJECTORY_MEMORY_LIMIT:-5000000}"
+pypar2_replay_top_k="${PYPAR2_REPLAY_TOP_K:-5}"
+pypar2_replay_particles_per_center="${PYPAR2_REPLAY_PARTICLES_PER_CENTER:-40}"
+pypar2_replay_radius_cells="${PYPAR2_REPLAY_RADIUS_CELLS:-0.5}"
+pypar2_replay_tolerance="${PYPAR2_REPLAY_TOLERANCE:-1.05}"
+pypar2_replay_max_redos="${PYPAR2_REPLAY_MAX_REDOS:-3}"
+pypar2_seed="${PYPAR2_SEED:-0}"
+
 linearized_fp="${LINEARIZED_FP:-false}"
 linearized_scheme="${LINEARIZED_SCHEME:-linearized}" # Options: linearized, full_eikonal
 linearized_outer_max="${LINEARIZED_OUTER_MAX:-10}"
@@ -156,6 +174,29 @@ fm_asr_args+=(--fm-asr-back-factor "${fm_asr_back_factor}")
 fm_asr_args+=(--fm-asr-min-speed "${fm_asr_min_speed}")
 fm_asr_args+=(--fm-asr-max-steps "${fm_asr_max_steps}")
 
+pypar2_args=()
+if [[ "${pypar2}" == "true" ]]; then
+    pypar2_args+=(--pypar2)
+else
+    pypar2_args+=(--no-pypar2)
+fi
+pypar2_args+=(--pypar2-dt "${pypar2_dt}")
+pypar2_args+=(--pypar2-steps "${pypar2_steps}")
+pypar2_args+=(--pypar2-dm "${pypar2_dm}")
+pypar2_args+=(--pypar2-alpha-l "${pypar2_alpha_l}")
+pypar2_args+=(--pypar2-alpha-t "${pypar2_alpha_t}")
+if [[ -n "${pypar2_velocity_floor}" ]]; then pypar2_args+=(--pypar2-velocity-floor "${pypar2_velocity_floor}"); fi
+pypar2_args+=(--pypar2-taichi-arch "${pypar2_taichi_arch}")
+pypar2_args+=(--pypar2-max-points "${pypar2_max_points}")
+if [[ -n "${pypar2_num_particles}" ]]; then pypar2_args+=(--pypar2-num-particles "${pypar2_num_particles}"); fi
+pypar2_args+=(--pypar2-trajectory-memory-limit "${pypar2_trajectory_memory_limit}")
+pypar2_args+=(--pypar2-replay-top-k "${pypar2_replay_top_k}")
+pypar2_args+=(--pypar2-replay-particles-per-center "${pypar2_replay_particles_per_center}")
+pypar2_args+=(--pypar2-replay-radius-cells "${pypar2_replay_radius_cells}")
+pypar2_args+=(--pypar2-replay-tolerance "${pypar2_replay_tolerance}")
+pypar2_args+=(--pypar2-replay-max-redos "${pypar2_replay_max_redos}")
+pypar2_args+=(--pypar2-seed "${pypar2_seed}")
+
 linearized_args=()
 if [[ "${linearized_fp}" == "true" ]]; then
     linearized_args+=(--linearized-fp)
@@ -250,6 +291,7 @@ echo "FlowSimulation path: ${FLOWSIM_PATH}"
 echo "logK source: ${logk_source}"
 echo "FSM FP: ${fsm_fp} (solver=${fsm_solver}, max_sweeps=${fsm_max_sweeps}, tol=${fsm_tol}, dt=${fsm_dt}, max_steps=${fsm_max_steps})"
 echo "FM-ASR FP: ${fm_asr_fp} (perp_ratio=${fm_asr_perp_ratio}, back_factor=${fm_asr_back_factor}, min_speed=${fm_asr_min_speed}, max_steps=${fm_asr_max_steps}, T_hessian=${fm_asr_hamiltonian_t_hessian}, p_dot=${fm_asr_hamiltonian_p_dot})"
+echo "PyPar2 FP: ${pypar2} (arch=${pypar2_taichi_arch}, dt=${pypar2_dt}, steps=${pypar2_steps}, alpha_l=${pypar2_alpha_l}, alpha_t=${pypar2_alpha_t})"
 echo "Linearized FP: ${linearized_fp} (${linearized_scheme})"
 echo "Snapshot mode: ${snapshot_mode:-disabled}, times: ${snapshot_times:-n/a}"
 
@@ -266,6 +308,7 @@ echo "Snapshot mode: ${snapshot_mode:-disabled}, times: ${snapshot_times:-n/a}"
     --fmm-continuous-step-size 0.1 \
     "${fsm_args[@]}" \
     "${fm_asr_args[@]}" \
+    "${pypar2_args[@]}" \
     ${linearized_args[@]+"${linearized_args[@]}"} \
     "${check_path_geometry_args[@]}" \
     ${geometry_args[@]+"${geometry_args[@]}"} \

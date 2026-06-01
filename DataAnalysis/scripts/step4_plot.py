@@ -28,18 +28,18 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from step1_index import VisualizationConfig, default_cache_dir, load_config
 
-pathcm = cmc.davos.resampled(6)
+pathcm = cmc.davos.resampled(7)
 COLORS = {
-    "fp": pathcm(0),
-    "lrp": pathcm(4), #"#FC1212",
-    "lrpFMM": pathcm(4),
-    "fpFMM": pathcm(3), #"#31830B",
-    "fpDijkstra": pathcm(3), #"#131EE2",
+    "fp": pathcm(1),
+    "lrp": pathcm(5), #"#FC1212",
+    "lrpFMM": pathcm(5),
+    "fpFMM": pathcm(4), #"#31830B",
+    "fpDijkstra": pathcm(4), #"#131EE2",
     "fpFSM": "#2CA02C",
-    "fpFmAsr": pathcm(2),
+    "fpFmAsr": pathcm(3),
     "fpFmAsrIso": "#17BECF",
     "fpFmAsrConic": "#9467BD",
-    "fpPypar2": pathcm(1),
+    "fpPypar2": pathcm(2),
 }
 
 LINESTYLES = {

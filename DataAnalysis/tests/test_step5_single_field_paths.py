@@ -26,12 +26,26 @@ def _mock_result() -> step5.PathSolveResult:
     vy = np.zeros((8, 8), dtype=float)
     source_xy = np.column_stack([np.zeros(6), np.arange(1, 7)])
     target_xy = np.column_stack([np.full(8, 7.0), np.arange(0, 8)])
+    fp_pypar2 = np.array([[0.0, 0.2], [2.0, 2.05], [4.0, 3.05]], dtype=float)
     return step5.PathSolveResult(
         fp=fp,
+        fp_arrival_time=4.0,
         fp_fmm=fp_fmm,
         lrp_fmm=lrp_fmm,
         t_min=t_min,
         t_min_lrp=t_min_lrp,
+        fp_fsm=None,
+        t_min_fsm=None,
+        fp_fm_asr=None,
+        fp_fm_asr_arrival_time=None,
+        t_min_fm_asr=None,
+        fm_asr_M=None,
+        fm_asr_beta=None,
+        fp_pypar2=fp_pypar2,
+        fp_pypar2_arrival_time=4.5,
+        fp_pypar2_error=None,
+        pypar2_replay_meta={"status": "accepted"},
+        pypar2_snapshots=None,
         linearized_fp_paths=linearized_fp_paths,
         linearized_fp_indices=[1, 2],
         linearized_fp_final=linearized_fp_paths[-1],
@@ -249,6 +263,70 @@ def test_parse_args_accepts_linearized_scheme(monkeypatch) -> None:
     assert args.linearized_scheme == "full_eikonal"
 
 
+
+
+def test_parse_args_enables_pypar2_by_default(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "step5_single_field_paths.py",
+            "--config",
+            "configs/visualization.default.yaml",
+            "--sweep",
+            "variance",
+            "--value",
+            "0.1",
+            "--field-size",
+            "200",
+            "--mc-index",
+            "0",
+        ],
+    )
+    args = step5.parse_args()
+    assert args.pypar2 is True
+
+
+def test_parse_args_accepts_pypar2_defaults_and_overrides(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "step5_single_field_paths.py",
+            "--config",
+            "configs/visualization.default.yaml",
+            "--sweep",
+            "variance",
+            "--value",
+            "0.1",
+            "--field-size",
+            "200",
+            "--mc-index",
+            "0",
+            "--pypar2",
+            "--pypar2-dt",
+            "0.02",
+            "--pypar2-steps",
+            "123",
+            "--pypar2-alpha-l",
+            "0.2",
+            "--pypar2-alpha-t",
+            "0.03",
+            "--pypar2-taichi-arch",
+            "cpu",
+            "--pypar2-num-particles",
+            "50",
+        ],
+    )
+    args = step5.parse_args()
+    assert args.pypar2 is True
+    assert args.pypar2_dt == 0.02
+    assert args.pypar2_steps == 123
+    assert args.pypar2_dm == 1e-9
+    assert args.pypar2_alpha_l == 0.2
+    assert args.pypar2_alpha_t == 0.03
+    assert args.pypar2_taichi_arch == "cpu"
+    assert args.pypar2_num_particles == 50
+
+
 def test_resolve_particle_count_prefers_exact_override() -> None:
     count = step5._resolve_particle_count(num_particles=1000, density_particle=20, y0=10, y1=50)
     assert count == 1000
@@ -295,9 +373,11 @@ def test_plot_paths_over_field_returns_figure() -> None:
     labels = ax.get_legend_handles_labels()[1]
     assert "Source" in labels
     assert "Target" in labels
-    assert "FP (Particle)" in labels
+    assert r"$\gamma^*_{\mathcal{S}}$" in labels
+    assert r"$\gamma^*_{\mathcal{E}}$" in labels
+    assert r"$\gamma^*_{\mathcal{R}}$" in labels
+    assert r"$\gamma^*_{\mathcal{P}}$" in labels
     assert "FP (Dijkstra)" not in labels
-    assert "LRP" not in labels
     plt.close(fig)
 
 
@@ -320,7 +400,26 @@ def test_dimensionless_velocity_and_stream_colorbar_label() -> None:
         i_y=1.0,
     )
     # colorbar axis is appended after main axis
-    assert fig.axes[1].get_ylabel() == r"$|v|/q_{\mathrm{ref}}$"
+    assert fig.axes[1].get_ylabel() == r"$\| \mathbf{v} \|/U$"
+    plt.close(fig)
+
+
+def test_plot_snapshot_density_contour_draws_contour() -> None:
+    fig, ax = plt.subplots()
+    rng = np.random.default_rng(0)
+    ok = step5._plot_snapshot_density_contour(
+        ax,
+        3.0 + 0.2 * rng.standard_normal(200),
+        4.0 + 0.2 * rng.standard_normal(200),
+        x_grid=np.arange(0, 8, 1.0),
+        y_grid=np.arange(0, 8, 1.0),
+        i_y=1.0,
+        color="red",
+        linestyle="-",
+        linewidth=1.0,
+    )
+    assert ok is True
+    assert ax.collections
     plt.close(fig)
 
 
@@ -359,12 +458,12 @@ def test_plot_linearized_fp_progression_returns_placeholder_for_empty_series() -
 def test_extract_linearized_path_from_t_field_descends_to_source() -> None:
     t_field = np.array(
         [
-            [5.2, 4.2, 3.2, 2.2, 1.2, 0.2],
-            [5.1, 4.1, 3.1, 2.1, 1.1, 0.1],
-            [5.0, 4.0, 3.0, 2.0, 1.0, 0.0],
-            [5.1, 4.1, 3.1, 2.1, 1.1, 0.1],
-            [5.2, 4.2, 3.2, 2.2, 1.2, 0.2],
-            [5.3, 4.3, 3.3, 2.3, 1.3, 0.3],
+            [0.2, 1.2, 2.2, 3.2, 4.2, 5.2],
+            [0.1, 1.1, 2.1, 3.1, 4.1, 5.1],
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            [0.1, 1.1, 2.1, 3.1, 4.1, 5.1],
+            [0.2, 1.2, 2.2, 3.2, 4.2, 5.2],
+            [0.3, 1.3, 2.3, 3.3, 4.3, 5.3],
         ],
         dtype=float,
     )
@@ -401,12 +500,12 @@ def test_extract_linearized_path_from_t_field_descends_to_source() -> None:
 def test_extract_linearized_path_from_t_field_skips_dead_end_target_minimum() -> None:
     t_field = np.array(
         [
-            [10.0, 9.0, 8.0, 7.0, 6.0, 5.0],
-            [10.0, 8.0, 7.0, 6.0, 5.0, 0.0],
-            [10.0, 7.0, 6.0, 5.0, 4.0, 4.0],
-            [10.0, 6.0, 5.0, 4.0, 3.0, 3.0],
-            [10.0, 7.0, 6.0, 5.0, 4.0, 6.0],
-            [10.0, 8.0, 7.0, 6.0, 5.0, 7.0],
+            [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+            [0.0, 2.0, 3.0, 4.0, 5.0, 10.0],
+            [0.0, 3.0, 4.0, 5.0, 5.0, 8.0],
+            [0.0, 4.0, 5.0, 6.0, 6.0, 7.0],
+            [0.0, 3.0, 4.0, 5.0, 6.0, 8.0],
+            [0.0, 2.0, 3.0, 4.0, 5.0, 9.0],
         ],
         dtype=float,
     )
@@ -414,7 +513,7 @@ def test_extract_linearized_path_from_t_field_skips_dead_end_target_minimum() ->
         field_size=6,
         source_x=0,
         target_x=5,
-        source_y_start=1,
+        source_y_start=0,
         source_y_end=4,
         target_y_start=1,
         target_y_end=4,
@@ -608,12 +707,12 @@ def test_compute_linearized_fp_series_keeps_partial_paths_when_late_iterate_fail
         np.zeros((6, 6), dtype=float),
         np.array(
             [
-                [5.2, 4.2, 3.2, 2.2, 1.2, 0.2],
-                [5.1, 4.1, 3.1, 2.1, 1.1, 0.1],
-                [5.0, 4.0, 3.0, 2.0, 1.0, 0.0],
-                [5.1, 4.1, 3.1, 2.1, 1.1, 0.1],
-                [5.2, 4.2, 3.2, 2.2, 1.2, 0.2],
-                [5.3, 4.3, 3.3, 2.3, 1.3, 0.3],
+                [0.2, 1.2, 2.2, 3.2, 4.2, 5.2],
+                [0.1, 1.1, 2.1, 3.1, 4.1, 5.1],
+                [0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+                [0.1, 1.1, 2.1, 3.1, 4.1, 5.1],
+                [0.2, 1.2, 2.2, 3.2, 4.2, 5.2],
+                [0.3, 1.3, 2.3, 3.3, 4.3, 5.3],
             ],
             dtype=float,
         ),
@@ -718,8 +817,9 @@ def test_compute_linearized_fp_series_full_eikonal_uses_fmm_extraction() -> None
     assert len(series.paths) == 3
     assert series.path_indices == [1, 2, 3]
     assert series.converged is True
-    assert np.allclose(fmm_calls[1], (2.0 / 3.0) * slowness_unperturbed + (1.0 / 3.0) * slowness_true)
-    assert np.allclose(fmm_calls[3], slowness_true)
+    expected_first = 1.0 / ((2.0 / 3.0) * slowness_unperturbed + (1.0 / 3.0) * slowness_true)
+    assert np.allclose(fmm_calls[1], expected_first)
+    assert np.allclose(fmm_calls[3], 1.0 / slowness_true)
 
 
 def test_run_step5_saves_progression_figure_when_no_linearized_paths_exist(
@@ -731,7 +831,7 @@ def test_run_step5_saves_progression_figure_when_no_linearized_paths_exist(
 
     monkeypatch.setattr(step5, "solve_single_field", lambda *args, **kwargs: _mock_result_no_linearized_paths())
 
-    _logk_path, _tmin_path, _stream_path, _balance_path, progression_path = step5.run_step5(
+    _logk_path, _tmin_path, _stream_path, _balance_path, progression_path, _isochrone_plume_path = step5.run_step5(
         cfg,
         sweep="variance",
         value=0.1,
@@ -834,3 +934,87 @@ def test_run_step5_prints_linearized_fp_extraction_summary(
     assert "Linearized FP^i extraction: 3 succeeded, 2 failed" in out
     assert "Successful FP^i iterations: [1, 2, 4]" in out
     assert "Failed FP^i iterations: [3, 5]" in out
+
+
+def test_run_pypar2_tracking_dispatch_payload() -> None:
+    captured = {}
+
+    class _FakeSimPt:
+        @staticmethod
+        def particle_tracking_summary(params):
+            captured.update(params)
+            return {
+                "fastest": {
+                    "x": np.array([0.0, 1.0, 2.0]),
+                    "y": np.array([0.5, 0.6, 0.7]),
+                    "travel_time": 3.25,
+                },
+                "replay": {"status": "accepted"},
+                "snapshots": {
+                    "snapshot_times": np.array([1.0, 2.0], dtype=float),
+                    "x": np.array([[0.1, 0.2], [1.1, 1.2]], dtype=float),
+                    "y": np.array([[0.3, 0.4], [1.3, 1.4]], dtype=float),
+                },
+            }
+
+    geometry = step5._resolve_geometry(
+        field_size=4,
+        source_x=0,
+        target_x=3,
+        source_y_start=1,
+        source_y_end=3,
+        target_y_start=0,
+        target_y_end=4,
+    )
+    path, travel_time, error, replay, snapshots = step5._run_pypar2_tracking(
+        sim_pt=_FakeSimPt(),
+        vx_face=np.ones((4, 5), dtype=float),
+        vy_face=np.zeros((5, 4), dtype=float),
+        x=geometry.x,
+        y=geometry.y,
+        geometry=geometry,
+        density_particle=2,
+        num_particles=None,
+        pypar2_num_particles=6,
+        pypar2_dt=0.02,
+        pypar2_steps=12,
+        pypar2_dm=1e-8,
+        pypar2_alpha_l=0.2,
+        pypar2_alpha_t=0.03,
+        pypar2_velocity_floor=1e-6,
+        pypar2_taichi_arch="cpu",
+        pypar2_max_points=100,
+        pypar2_trajectory_memory_limit=1000,
+        pypar2_replay_top_k=3,
+        pypar2_replay_particles_per_center=7,
+        pypar2_replay_radius_cells=0.25,
+        pypar2_replay_tolerance=1.01,
+        pypar2_replay_max_redos=2,
+        pypar2_seed=99,
+        snapshot_mode="physical",
+        snapshot_times=[1.0, 2.0],
+    )
+
+    assert error is None
+    assert travel_time == 3.25
+    assert replay == {"status": "accepted"}
+    assert snapshots is not None
+    np.testing.assert_allclose(snapshots.times, np.array([1.0, 2.0]))
+    np.testing.assert_allclose(path, np.array([[0.0, 0.5], [1.0, 0.6], [2.0, 0.7]]))
+    assert captured["method"] == "pypar2"
+    assert captured["backend"] == "cpu"
+    assert captured["dt"] == 0.02
+    assert captured["steps"] == 12
+    assert captured["molecular_diffusion"] == 1e-8
+    assert captured["alpha_l"] == 0.2
+    assert captured["alpha_t"] == 0.03
+    assert captured["longitudinal_dispersivity"] == 0.2
+    assert captured["transverse_dispersivity"] == 0.03
+    assert captured["velocity_floor"] == 1e-6
+    assert captured["replay_top_k"] == 3
+    assert captured["replay_particles_per_center"] == 7
+    assert captured["seed"] == 99
+    assert captured["snapshot_mode"] == "physical"
+    np.testing.assert_allclose(captured["snapshot_times"], np.array([1.0, 2.0]))
+    assert captured["seeds_x"].shape == (6,)
+    assert captured["seeds_y"].shape == (6,)

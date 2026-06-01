@@ -52,6 +52,7 @@ LINESTYLES = {
     "lrpFMM": "-.",
     "fpFSM": (0, (3, 1, 1, 1)),
     "fpFmAsr": (0, (5, 2)),
+    "fpPypar2": (0, (3, 1, 1, 1, 1, 1)),
 }
 
 LINEWIDTHS = 1.2
@@ -120,6 +121,11 @@ class PathSolveResult:
     t_min_fm_asr: np.ndarray | None
     fm_asr_M: np.ndarray | None
     fm_asr_beta: np.ndarray | None
+    fp_pypar2: np.ndarray | None
+    fp_pypar2_arrival_time: float | None
+    fp_pypar2_error: str | None
+    pypar2_replay_meta: dict[str, Any] | None
+    pypar2_snapshots: SnapshotData | None
     linearized_fp_paths: list[np.ndarray] | None
     linearized_fp_indices: list[int] | None
     linearized_fp_final: np.ndarray | None
@@ -1072,6 +1078,105 @@ def _run_particle_tracking(
     return fp, fp_arrival_time, np.asarray(vx, dtype=float), np.asarray(vy, dtype=float), snapshot_data
 
 
+def _run_pypar2_tracking(
+    *,
+    sim_pt: Any,
+    vx_face: np.ndarray,
+    vy_face: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    geometry: Step5Geometry,
+    density_particle: int,
+    num_particles: int | None,
+    pypar2_num_particles: int | None,
+    pypar2_dt: float,
+    pypar2_steps: int,
+    pypar2_dm: float,
+    pypar2_alpha_l: float,
+    pypar2_alpha_t: float,
+    pypar2_velocity_floor: float | None,
+    pypar2_taichi_arch: str,
+    pypar2_max_points: int,
+    pypar2_trajectory_memory_limit: int,
+    pypar2_replay_top_k: int,
+    pypar2_replay_particles_per_center: int,
+    pypar2_replay_radius_cells: float,
+    pypar2_replay_tolerance: float,
+    pypar2_replay_max_redos: int,
+    pypar2_seed: int,
+    snapshot_mode: str | None = None,
+    snapshot_times: Any = None,
+) -> tuple[np.ndarray | None, float | None, str | None, dict[str, Any], SnapshotData | None]:
+    n_particles = _resolve_particle_count(
+        num_particles=pypar2_num_particles if pypar2_num_particles is not None else num_particles,
+        density_particle=density_particle,
+        y0=geometry.source_y_start,
+        y1=geometry.source_y_end,
+    )
+    source_rows = geometry.source_rows
+    seeds_x = np.full(n_particles, geometry.source_x, dtype=np.float32)
+    seeds_y = np.linspace(float(source_rows[0]), float(source_rows[-1]), n_particles, endpoint=True).astype(np.float32)
+
+    params: dict[str, Any] = {
+        "method": "pypar2",
+        "backend": str(pypar2_taichi_arch),
+        "tracking_mode": "arrival",
+        "stop_mode": "first",
+        "save_trajectories": True,
+        "return_fastest": True,
+        "x_faces": build_face_coordinates_from_centers(x).astype(np.float32),
+        "y_faces": build_face_coordinates_from_centers(y).astype(np.float32),
+        "vx": np.asarray(vx_face, dtype=np.float32),
+        "vy": np.asarray(vy_face, dtype=np.float32),
+        "seeds_x": seeds_x,
+        "seeds_y": seeds_y,
+        "right_x": float(geometry.target_x),
+        "dt": float(pypar2_dt),
+        "steps": int(pypar2_steps),
+        "molecular_diffusion": float(pypar2_dm),
+        "alpha_l": float(pypar2_alpha_l),
+        "alpha_t": float(pypar2_alpha_t),
+        "longitudinal_dispersivity": float(pypar2_alpha_l),
+        "transverse_dispersivity": float(pypar2_alpha_t),
+        "max_points": int(pypar2_max_points),
+        "trajectory_memory_limit": int(pypar2_trajectory_memory_limit),
+        "replay_top_k": int(pypar2_replay_top_k),
+        "replay_particles_per_center": int(pypar2_replay_particles_per_center),
+        "replay_radius_cells": float(pypar2_replay_radius_cells),
+        "replay_tolerance": float(pypar2_replay_tolerance),
+        "replay_max_redos": int(pypar2_replay_max_redos),
+        "seed": int(pypar2_seed),
+    }
+    if snapshot_mode is not None and snapshot_times is not None:
+        params["snapshot_mode"] = snapshot_mode
+        params["snapshot_times"] = snapshot_times
+    if pypar2_velocity_floor is not None:
+        params["velocity_floor"] = float(pypar2_velocity_floor)
+
+    try:
+        summary = sim_pt.particle_tracking_summary(params)
+    except Exception as exc:
+        return None, None, f"PyPar2 dispatcher failed: {exc}", {}, None
+
+    replay_meta = summary.get("replay", {}) or {}
+    result = summary.get("fastest")
+    snap_raw = summary.get("snapshots")
+    snapshot_data: SnapshotData | None = None
+    if snap_raw is not None:
+        snapshot_data = SnapshotData(
+            times=np.asarray(snap_raw["snapshot_times"], dtype=float),
+            x=np.asarray(snap_raw["x"], dtype=float),
+            y=np.asarray(snap_raw["y"], dtype=float),
+        )
+
+    if result is None:
+        return None, None, "PyPar2: no particle reached right_x", replay_meta, snapshot_data
+
+    fp = np.vstack((np.asarray(result["x"], dtype=float), np.asarray(result["y"], dtype=float))).T
+    travel_time = _extract_particle_arrival_time(result, summary, snapshot_data)
+    return fp, float(travel_time), None, replay_meta, snapshot_data
+
+
 def _compute_linearized_fp_series(
     *,
     linear_solver: Any,
@@ -1081,7 +1186,7 @@ def _compute_linearized_fp_series(
     fast_marching_2d_regions: Any,
     extract_path_source_to_target: Any,
     extract_path_continuous: Any,
-    scheme: str,
+    scheme: str = "linearized",
     backtracking: str,
     continuous_step_size: float,
     outer_max: int,
@@ -1268,6 +1373,23 @@ def solve_single_field(
     fm_asr_back_factor: float = 2.0,
     fm_asr_min_speed: float = 1e-12,
     fm_asr_max_steps: int = 200_000,
+    pypar2_fp: bool = False,
+    pypar2_dt: float = 0.01,
+    pypar2_steps: int = 200_000,
+    pypar2_dm: float = 1e-9,
+    pypar2_alpha_l: float = 0.1,
+    pypar2_alpha_t: float = 0.01,
+    pypar2_velocity_floor: float | None = None,
+    pypar2_taichi_arch: str = "gpu",
+    pypar2_max_points: int = 2_000,
+    pypar2_num_particles: int | None = None,
+    pypar2_trajectory_memory_limit: int = 5_000_000,
+    pypar2_replay_top_k: int = 5,
+    pypar2_replay_particles_per_center: int = 40,
+    pypar2_replay_radius_cells: float = 0.5,
+    pypar2_replay_tolerance: float = 1.05,
+    pypar2_replay_max_redos: int = 3,
+    pypar2_seed: int = 0,
 ) -> PathSolveResult:
     modules = _import_solver_modules()
     linear_solver = _import_linear_eikonal_solver() if linearized_fp else None
@@ -1449,6 +1571,86 @@ def solve_single_field(
             fm_asr_M = None
             fm_asr_beta = None
 
+    fp_pypar2: np.ndarray | None = None
+    fp_pypar2_arrival_time: float | None = None
+    fp_pypar2_error: str | None = None
+    pypar2_replay_meta: dict[str, Any] | None = None
+    pypar2_snapshots: SnapshotData | None = None
+    if pypar2_fp:
+        try:
+            vx_face_pypar2, vy_face_pypar2 = sim_hyd.compute_velocity(
+                k_field,
+                x,
+                y,
+                h,
+                output_location="face",
+                align_with_modflow=align_with_modflow_velocity,
+                face_output="full",
+            )
+            (
+                fp_pypar2,
+                fp_pypar2_arrival_time,
+                fp_pypar2_error,
+                pypar2_replay_meta,
+                pypar2_snapshots,
+            ) = _run_pypar2_tracking(
+                sim_pt=sim_pt,
+                vx_face=vx_face_pypar2,
+                vy_face=vy_face_pypar2,
+                x=x,
+                y=y,
+                geometry=geometry,
+                density_particle=density_particle,
+                num_particles=num_particles,
+                pypar2_num_particles=pypar2_num_particles,
+                pypar2_dt=pypar2_dt,
+                pypar2_steps=pypar2_steps,
+                pypar2_dm=pypar2_dm,
+                pypar2_alpha_l=pypar2_alpha_l,
+                pypar2_alpha_t=pypar2_alpha_t,
+                pypar2_velocity_floor=pypar2_velocity_floor,
+                pypar2_taichi_arch=pypar2_taichi_arch,
+                pypar2_max_points=pypar2_max_points,
+                pypar2_trajectory_memory_limit=pypar2_trajectory_memory_limit,
+                pypar2_replay_top_k=pypar2_replay_top_k,
+                pypar2_replay_particles_per_center=pypar2_replay_particles_per_center,
+                pypar2_replay_radius_cells=pypar2_replay_radius_cells,
+                pypar2_replay_tolerance=pypar2_replay_tolerance,
+                pypar2_replay_max_redos=pypar2_replay_max_redos,
+                pypar2_seed=pypar2_seed,
+                snapshot_mode=snapshot_mode,
+                snapshot_times=snapshot_times,
+            )
+            if fp_pypar2 is not None:
+                fp_pypar2 = fp_pypar2[fp_pypar2[:, 0] <= geometry.target_x]
+                if check_path_geometry and (
+                    fp_pypar2.size == 0
+                    or not sim_path.is_path_valid(
+                        fp_pypar2,
+                        domain_box,
+                        len_min=abs(geometry.target_x - geometry.source_x),
+                    )
+                ):
+                    fp_pypar2_error = "Invalid FP (PyPar2) geometry."
+                    fp_pypar2 = None
+                    fp_pypar2_arrival_time = None
+            if fp_pypar2_error is not None:
+                print(f"Warning: PyPar2 FP solve failed; continuing without PyPar2 path: {fp_pypar2_error}")
+            elif fp_pypar2 is not None:
+                replay_status = "" if not pypar2_replay_meta else str(pypar2_replay_meta.get("status", ""))
+                print(
+                    "PyPar2 FP extraction: "
+                    f"{len(fp_pypar2)} points, arrival_time={fp_pypar2_arrival_time:.6g}, "
+                    f"replay_status={replay_status or 'n/a'}"
+                )
+        except Exception as exc:
+            fp_pypar2_error = str(exc)
+            pypar2_replay_meta = {}
+            print(f"Warning: PyPar2 FP solve failed; continuing without PyPar2 path: {exc}")
+            fp_pypar2 = None
+            fp_pypar2_arrival_time = None
+            pypar2_snapshots = None
+
     linearized_series: LinearizedFpSeries | None = None
     if linearized_fp:
         linearized_series = _compute_linearized_fp_series(
@@ -1533,6 +1735,11 @@ def solve_single_field(
         t_min_fm_asr=t_min_fm_asr,
         fm_asr_M=fm_asr_M,
         fm_asr_beta=fm_asr_beta,
+        fp_pypar2=fp_pypar2,
+        fp_pypar2_arrival_time=fp_pypar2_arrival_time,
+        fp_pypar2_error=fp_pypar2_error,
+        pypar2_replay_meta=pypar2_replay_meta,
+        pypar2_snapshots=pypar2_snapshots,
         linearized_fp_paths=None if linearized_series is None else linearized_series.paths,
         linearized_fp_indices=None if linearized_series is None else linearized_series.path_indices,
         linearized_fp_final=None if linearized_series is None or not linearized_series.paths else linearized_series.paths[-1],
@@ -1587,6 +1794,8 @@ def _plot_common_overlays(
     #     ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^*_{\mathcal{FSM}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
         ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^*_{\mathcal{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    if result.fp_pypar2 is not None and len(result.fp_pypar2) >= 2:
+        ax.plot(result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y, color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"], linewidth=lw, label=r"$\gamma^*_{\mathcal{P}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if fp_diag is not None:
     #     ax.plot(
     #         fp_diag.spline_points[:, 0] / i_y,
@@ -3104,10 +3313,11 @@ def plot_linearized_fp_progression(
         progression_cmap = plt.get_cmap("cividis")
         denom = max(1, len(result.linearized_fp_paths) - 1)
         path_indices = result.linearized_fp_indices or list(range(1, len(result.linearized_fp_paths) + 1))
+        label_step = max(1, len(result.linearized_fp_paths) // 10)
         for order_idx, (iter_idx, path) in enumerate(zip(path_indices, result.linearized_fp_paths), start=1):
             color = progression_cmap((order_idx - 1) / denom)
             # label = f"FP^{iter_idx}" if order_idx in {1, len(result.linearized_fp_paths)} else None
-            label = f"FP^{iter_idx}" if order_idx in range(1, len(result.linearized_fp_paths)+1, len(result.linearized_fp_paths)//10) else None
+            label = f"FP^{iter_idx}" if order_idx in range(1, len(result.linearized_fp_paths) + 1, label_step) else None
             ax.plot(path[:, 0] / i_y, path[:, 1] / i_y, color=color, linestyle="-", linewidth=1.8, alpha=0.95, label=label, zorder=5)
     else:
         ax.text(
@@ -3399,6 +3609,58 @@ def plot_curvature_balance(
     return fig
 
 
+
+
+def _plot_snapshot_density_contour(
+    ax: Any,
+    x_points: np.ndarray,
+    y_points: np.ndarray,
+    *,
+    x_grid: np.ndarray,
+    y_grid: np.ndarray,
+    i_y: float,
+    color: Any,
+    linestyle: Any,
+    linewidth: float,
+    quantile: float = 0.70,
+    smooth_sigma: float = 1.0,
+) -> bool:
+    mask = np.isfinite(x_points) & np.isfinite(y_points)
+    if int(np.count_nonzero(mask)) < 3:
+        return False
+
+    xg = np.asarray(x_grid, dtype=float)
+    yg = np.asarray(y_grid, dtype=float)
+    x_edges = build_face_coordinates_from_centers(xg)
+    y_edges = build_face_coordinates_from_centers(yg)
+    hist, _x_edges, _y_edges = np.histogram2d(
+        x_points[mask],
+        y_points[mask],
+        bins=[x_edges, y_edges],
+    )
+    density = hist.T.astype(float)
+    if smooth_sigma > 0.0:
+        density = gaussian_filter(density, sigma=float(smooth_sigma), mode="nearest")
+    positive = density[density > 0.0]
+    if positive.size == 0:
+        return False
+    level = float(np.quantile(positive, float(quantile)))
+    if not np.isfinite(level) or level <= 0.0 or float(np.nanmax(density)) <= level:
+        level = 0.5 * float(np.nanmax(density))
+    if not np.isfinite(level) or level <= 0.0:
+        return False
+
+    ax.contour(
+        xg / i_y,
+        yg / i_y,
+        density,
+        levels=[level],
+        linewidths=linewidth,
+        colors=[color],
+        linestyles=[linestyle],
+    )
+    return True
+
 def plot_isochrones_with_plume(
     logk_field: np.ndarray,
     t_min_dimless: np.ndarray,
@@ -3408,6 +3670,7 @@ def plot_isochrones_with_plume(
     result: PathSolveResult,
     i_y: float,
     fp_arrival_time_dimless: float | None = None,
+    pypar2_arrival_time_dimless: float | None = None,
     t_min_fsm_dimless: np.ndarray | None = None,
     t_min_fm_asr_dimless: np.ndarray | None = None,
 ) -> plt.Figure | None:
@@ -3447,11 +3710,12 @@ def plot_isochrones_with_plume(
 
     Returns None if result.snapshots is None or has no snapshots.
     """
-    if result.snapshots is None:
+    snaps = result.snapshots
+    pypar2_snaps = result.pypar2_snapshots
+    if snaps is None and pypar2_snaps is None:
         return None
 
-    snaps = result.snapshots
-    n_snaps = len(snaps.times)
+    n_snaps = len(snaps.times) if snaps is not None else len(pypar2_snaps.times)
     if n_snaps == 0:
         return None
 
@@ -3548,13 +3812,27 @@ def plot_isochrones_with_plume(
                 )
 
         # Particle plume scatter
-        x_j = snaps.x[:, j]
-        y_j = snaps.y[:, j]
-        mask = np.isfinite(x_j) & np.isfinite(y_j)
-        if np.any(mask):
-            ax.scatter(
-                x_j[mask] / i_y, y_j[mask] / i_y,
-                s=LINEWIDTHS, color=COLORS["fp"], linewidths=0, rasterized=True,
+        if snaps is not None and j < snaps.x.shape[1]:
+            x_j = snaps.x[:, j]
+            y_j = snaps.y[:, j]
+            mask = np.isfinite(x_j) & np.isfinite(y_j)
+            if np.any(mask):
+                ax.scatter(
+                    x_j[mask] / i_y, y_j[mask] / i_y,
+                    s=LINEWIDTHS, color=COLORS["fp"], linewidths=0, rasterized=True,
+                )
+
+        if pypar2_snaps is not None and j < pypar2_snaps.x.shape[1]:
+            _plot_snapshot_density_contour(
+                ax,
+                pypar2_snaps.x[:, j],
+                pypar2_snaps.y[:, j],
+                x_grid=result.x,
+                y_grid=result.y,
+                i_y=i_y,
+                color=COLORS["fpPypar2"],
+                linestyle=LINESTYLES["fpPypar2"],
+                linewidth=LINEWIDTHS,
             )
 
         # FP path
@@ -3606,6 +3884,16 @@ def plot_isochrones_with_plume(
             line.set_solid_capstyle("round")
             line.set_dash_capstyle("round")
 
+        if result.fp_pypar2 is not None and len(result.fp_pypar2) >= 2:
+            line, = ax.plot(
+                result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y,
+                color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"],
+                linewidth=LINEWIDTHS,
+            )
+            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            line.set_solid_capstyle("round")
+            line.set_dash_capstyle("round")
+
         # Source line
         ax.plot(
             result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y,
@@ -3644,6 +3932,12 @@ def plot_isochrones_with_plume(
             h_fm_asr.set_solid_capstyle("round")
             h_fm_asr.set_dash_capstyle("round")
 
+            h_pypar2 = Line2D([0], [0], color=COLORS["fpPypar2"], lw=LINEWIDTHS, ls=LINESTYLES["fpPypar2"],
+                              label=r"$\gamma^*_\mathcal{P}$")
+            h_pypar2.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
+            h_pypar2.set_solid_capstyle("round")
+            h_pypar2.set_dash_capstyle("round")
+
             handles = [
                 h_fp, h_fp_fmm, h_lrp_fmm,
                 Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
@@ -3655,6 +3949,10 @@ def plot_isochrones_with_plume(
                     h_fm_asr,
                     Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"], label=r"$\mathcal{T}^*_\mathcal{F}$ isochrone"),
                 ]
+            if result.fp_pypar2 is not None:
+                handles.append(h_pypar2)
+            if result.pypar2_snapshots is not None:
+                handles.append(Line2D([0], [0], color=COLORS["fpPypar2"], lw=LINEWIDTHS, ls=LINESTYLES["fpPypar2"], label=r"PyPar2 snapshot contour"))
             # if t_min_fsm_dimless is not None:
             #     h_fp_fsm = Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, ls=LINESTYLES["fpFSM"],
             #                       label=r"$\gamma^*_\mathcal{S}$")
@@ -3673,6 +3971,8 @@ def plot_isochrones_with_plume(
             ]
             if t_min_fm_asr_dimless is not None:
                 arrival_lines.append(rf"$t_{{\mathcal{{F}}}}^* = {t_fm_asr_arrival:.3g}$")
+            if pypar2_arrival_time_dimless is not None and np.isfinite(pypar2_arrival_time_dimless):
+                arrival_lines.append(rf"$t_{{\mathcal{{P}}}}^* = {pypar2_arrival_time_dimless:.3g}$")
             # if t_min_fsm_dimless is not None:
             #     arrival_lines.append(rf"$t_{{a,\mathcal{{S}}}}^* = {t_fsm_arrival:.3g}$")
             ax.text(
@@ -3803,6 +4103,23 @@ def run_step5(
     fm_asr_back_factor: float = 2.0,
     fm_asr_min_speed: float = 1e-12,
     fm_asr_max_steps: int = 200_000,
+    pypar2_fp: bool = False,
+    pypar2_dt: float = 0.01,
+    pypar2_steps: int = 200_000,
+    pypar2_dm: float = 1e-9,
+    pypar2_alpha_l: float = 0.1,
+    pypar2_alpha_t: float = 0.01,
+    pypar2_velocity_floor: float | None = None,
+    pypar2_taichi_arch: str = "gpu",
+    pypar2_max_points: int = 2_000,
+    pypar2_num_particles: int | None = None,
+    pypar2_trajectory_memory_limit: int = 5_000_000,
+    pypar2_replay_top_k: int = 5,
+    pypar2_replay_particles_per_center: int = 40,
+    pypar2_replay_radius_cells: float = 0.5,
+    pypar2_replay_tolerance: float = 1.05,
+    pypar2_replay_max_redos: int = 3,
+    pypar2_seed: int = 0,
 ) -> tuple[Path, Path, Path, Path, Path | None, Path | None]:
     selected: SelectedRun | None = None
     if logk_source == "dataset":
@@ -3902,6 +4219,23 @@ def run_step5(
         fm_asr_back_factor=fm_asr_back_factor,
         fm_asr_min_speed=fm_asr_min_speed,
         fm_asr_max_steps=fm_asr_max_steps,
+        pypar2_fp=pypar2_fp,
+        pypar2_dt=pypar2_dt,
+        pypar2_steps=pypar2_steps,
+        pypar2_dm=pypar2_dm,
+        pypar2_alpha_l=pypar2_alpha_l,
+        pypar2_alpha_t=pypar2_alpha_t,
+        pypar2_velocity_floor=pypar2_velocity_floor,
+        pypar2_taichi_arch=pypar2_taichi_arch,
+        pypar2_max_points=pypar2_max_points,
+        pypar2_num_particles=pypar2_num_particles,
+        pypar2_trajectory_memory_limit=pypar2_trajectory_memory_limit,
+        pypar2_replay_top_k=pypar2_replay_top_k,
+        pypar2_replay_particles_per_center=pypar2_replay_particles_per_center,
+        pypar2_replay_radius_cells=pypar2_replay_radius_cells,
+        pypar2_replay_tolerance=pypar2_replay_tolerance,
+        pypar2_replay_max_redos=pypar2_replay_max_redos,
+        pypar2_seed=pypar2_seed,
     )
     if linearized_fp:
         successful_indices = result.linearized_fp_indices or []
@@ -4017,7 +4351,7 @@ def run_step5(
         progression_path_out = progression_path
 
     isochrone_plume_path_out: Path | None = None
-    if result.snapshots is not None:
+    if result.snapshots is not None or result.pypar2_snapshots is not None:
         snap_fracs = np.asarray(snapshot_times, dtype=float)
         tmin_lrp_plot = np.where(np.isfinite(result.t_min_lrp), result.t_min_lrp / t_ref, np.nan)
         fp_arrival_time_dimless = (
@@ -4042,6 +4376,11 @@ def run_step5(
             result=result,
             i_y=i_y,
             fp_arrival_time_dimless=fp_arrival_time_dimless,
+            pypar2_arrival_time_dimless=(
+                float(result.fp_pypar2_arrival_time) / float(t_ref)
+                if result.fp_pypar2_arrival_time is not None and np.isfinite(result.fp_pypar2_arrival_time)
+                else None
+            ),
             t_min_fsm_dimless=tmin_fsm_plot,
             t_min_fm_asr_dimless=tmin_fm_asr_plot,
         )
@@ -4166,6 +4505,45 @@ def parse_args() -> argparse.Namespace:
         help="FM-ASR velocity magnitude floor.")
     parser.add_argument("--fm-asr-max-steps", type=int, default=200000,
         help="Maximum FM-ASR Hopf-Lax backtracking steps.")
+    parser.add_argument(
+        "--pypar2",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Enable the Taichi PAR2 random-walk particle-tracking comparison path.",
+    )
+    parser.add_argument("--pypar2-dt", "--pypar2_dt", dest="pypar2_dt", type=float, default=0.01,
+        help="PyPar2 time step.")
+    parser.add_argument("--pypar2-steps", "--pypar2_steps", dest="pypar2_steps", type=int, default=200_000,
+        help="PyPar2 max number of time steps.")
+    parser.add_argument("--pypar2-dm", "--pypar2_dm", "--pypar2-molecular-diffusion", "--pypar2_molecular_diffusion",
+        dest="pypar2_dm", type=float, default=1e-9,
+        help="PyPar2 molecular diffusion coefficient.")
+    parser.add_argument("--pypar2-alpha-l", "--pypar2_alpha_l", dest="pypar2_alpha_l", type=float, default=0.1,
+        help="PyPar2 longitudinal dispersivity.")
+    parser.add_argument("--pypar2-alpha-t", "--pypar2_alpha_t", dest="pypar2_alpha_t", type=float, default=0.01,
+        help="PyPar2 transverse dispersivity.")
+    parser.add_argument("--pypar2-velocity-floor", "--pypar2_velocity_floor", dest="pypar2_velocity_floor", type=float, default=None,
+        help="PyPar2 velocity-floor regularization. Defaults to dispatcher auto behavior.")
+    parser.add_argument("--pypar2-taichi-arch", "--pypar2_taichi_arch", dest="pypar2_taichi_arch", choices=["gpu", "cpu"], default="gpu",
+        help="Taichi backend forwarded to PyPar2.")
+    parser.add_argument("--pypar2-max-points", "--pypar2_max_points", dest="pypar2_max_points", type=int, default=2_000,
+        help="PyPar2 trajectory max stored points per particle.")
+    parser.add_argument("--pypar2-num-particles", "--pypar2_num_particles", dest="pypar2_num_particles", type=int, default=None,
+        help="PyPar2 pilot-pass particle count. Defaults to --num-particles or density-derived count.")
+    parser.add_argument("--pypar2-trajectory-memory-limit", "--pypar2_trajectory_memory_limit", dest="pypar2_trajectory_memory_limit", type=int, default=5_000_000,
+        help="PyPar2 trajectory_memory_limit forwarded to the dispatcher.")
+    parser.add_argument("--pypar2-replay-top-k", "--pypar2_replay_top_k", dest="pypar2_replay_top_k", type=int, default=5,
+        help="PyPar2 replay top-K fastest pilot particles.")
+    parser.add_argument("--pypar2-replay-particles-per-center", "--pypar2_replay_particles_per_center", dest="pypar2_replay_particles_per_center", type=int, default=40,
+        help="PyPar2 replay particles per top-K release point.")
+    parser.add_argument("--pypar2-replay-radius-cells", "--pypar2_replay_radius_cells", dest="pypar2_replay_radius_cells", type=float, default=0.5,
+        help="PyPar2 replay seeding radius in grid cells.")
+    parser.add_argument("--pypar2-replay-tolerance", "--pypar2_replay_tolerance", dest="pypar2_replay_tolerance", type=float, default=1.05,
+        help="PyPar2 replay acceptance tolerance relative to pilot best time.")
+    parser.add_argument("--pypar2-replay-max-redos", "--pypar2_replay_max_redos", dest="pypar2_replay_max_redos", type=int, default=3,
+        help="PyPar2 replay maximum additional retries.")
+    parser.add_argument("--pypar2-seed", "--pypar2_seed", dest="pypar2_seed", type=int, default=0,
+        help="Random seed forwarded to PyPar2.")
     parser.add_argument("--source-x", type=int, default=None)
     parser.add_argument("--target-x", type=int, default=None)
     parser.add_argument("--source-y-start", type=int, default=None)
@@ -4267,6 +4645,34 @@ def parse_args() -> argparse.Namespace:
         parser.error("--fm-asr-min-speed must be a positive finite number.")
     if args.fm_asr_max_steps < 1:
         parser.error("--fm-asr-max-steps must be a positive integer.")
+    if args.pypar2_dt <= 0.0 or not np.isfinite(args.pypar2_dt):
+        parser.error("--pypar2-dt must be a positive finite number.")
+    if args.pypar2_steps < 1:
+        parser.error("--pypar2-steps must be a positive integer.")
+    if args.pypar2_dm < 0.0 or not np.isfinite(args.pypar2_dm):
+        parser.error("--pypar2-dm must be a non-negative finite number.")
+    if args.pypar2_alpha_l < 0.0 or not np.isfinite(args.pypar2_alpha_l):
+        parser.error("--pypar2-alpha-l must be a non-negative finite number.")
+    if args.pypar2_alpha_t < 0.0 or not np.isfinite(args.pypar2_alpha_t):
+        parser.error("--pypar2-alpha-t must be a non-negative finite number.")
+    if args.pypar2_velocity_floor is not None and (args.pypar2_velocity_floor <= 0.0 or not np.isfinite(args.pypar2_velocity_floor)):
+        parser.error("--pypar2-velocity-floor must be a positive finite number when provided.")
+    if args.pypar2_max_points < 2:
+        parser.error("--pypar2-max-points must be at least 2.")
+    if args.pypar2_num_particles is not None and args.pypar2_num_particles < 2:
+        parser.error("--pypar2-num-particles must be at least 2 when provided.")
+    if args.pypar2_trajectory_memory_limit < 1:
+        parser.error("--pypar2-trajectory-memory-limit must be a positive integer.")
+    if args.pypar2_replay_top_k < 1:
+        parser.error("--pypar2-replay-top-k must be a positive integer.")
+    if args.pypar2_replay_particles_per_center < 1:
+        parser.error("--pypar2-replay-particles-per-center must be a positive integer.")
+    if args.pypar2_replay_radius_cells < 0.0 or not np.isfinite(args.pypar2_replay_radius_cells):
+        parser.error("--pypar2-replay-radius-cells must be a non-negative finite number.")
+    if args.pypar2_replay_tolerance <= 0.0 or not np.isfinite(args.pypar2_replay_tolerance):
+        parser.error("--pypar2-replay-tolerance must be a positive finite number.")
+    if args.pypar2_replay_max_redos < 0:
+        parser.error("--pypar2-replay-max-redos must be non-negative.")
     if args.snapshot_mode is not None and args.snapshot_times is None:
         parser.error("--snapshot-times is required when --snapshot-mode is specified.")
     if args.snapshot_times is not None and args.snapshot_mode is None:
@@ -4368,6 +4774,23 @@ def main() -> int:
         fm_asr_back_factor=args.fm_asr_back_factor,
         fm_asr_min_speed=args.fm_asr_min_speed,
         fm_asr_max_steps=args.fm_asr_max_steps,
+        pypar2_fp=args.pypar2,
+        pypar2_dt=args.pypar2_dt,
+        pypar2_steps=args.pypar2_steps,
+        pypar2_dm=args.pypar2_dm,
+        pypar2_alpha_l=args.pypar2_alpha_l,
+        pypar2_alpha_t=args.pypar2_alpha_t,
+        pypar2_velocity_floor=args.pypar2_velocity_floor,
+        pypar2_taichi_arch=args.pypar2_taichi_arch,
+        pypar2_max_points=args.pypar2_max_points,
+        pypar2_num_particles=args.pypar2_num_particles,
+        pypar2_trajectory_memory_limit=args.pypar2_trajectory_memory_limit,
+        pypar2_replay_top_k=args.pypar2_replay_top_k,
+        pypar2_replay_particles_per_center=args.pypar2_replay_particles_per_center,
+        pypar2_replay_radius_cells=args.pypar2_replay_radius_cells,
+        pypar2_replay_tolerance=args.pypar2_replay_tolerance,
+        pypar2_replay_max_redos=args.pypar2_replay_max_redos,
+        pypar2_seed=args.pypar2_seed,
     )
     print(f"Saved figure: {logk_path}")
     print(f"Saved figure: {tmin_path}")
