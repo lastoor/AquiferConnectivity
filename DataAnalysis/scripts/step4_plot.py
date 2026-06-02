@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from step1_index import VisualizationConfig, default_cache_dir, load_config
 
-pathcm = cmc.nuuk.resampled(7)
+pathcm = cmc.lapaz.resampled(7)
 COLORS = {
     "fp": pathcm(1),
     "lrp": pathcm(5), #"#FC1212",
@@ -55,7 +55,7 @@ LINESTYLES = {
     "fpPypar2": (0, (3, 1, 1, 1, 1, 1)),
 }
 
-LINEWIDTH = 1.2
+LINEWIDTH = 1.5
 
 
 def _apply_line_halo(
@@ -63,7 +63,7 @@ def _apply_line_halo(
     *,
     linewidth: float = LINEWIDTH,
     halo_scale: float = 1.5,
-    halo_foreground: str = "black",
+    halo_foreground: str = "white",
 ) -> None:
     line.set_path_effects([
         pe.Stroke(linewidth=halo_scale * linewidth, foreground=halo_foreground),
@@ -260,7 +260,7 @@ def plot_characteristic_time(
     stats_fpt_fm_asr_conic: np.ndarray | None = None,
     stats_fpt_pypar2: np.ndarray | None = None,
 ):
-    fig, ax = plt.subplots(figsize=[6, 4])
+    fig, ax = plt.subplots(figsize=[6, 3])
     # fig, ax = plt.subplots(figsize=[5, 4])
 
     # if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
@@ -268,8 +268,8 @@ def plot_characteristic_time(
     line, = ax.plot(var, stats_fpt[:, 0] / t_ref, color=COLORS["fp"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{S}}$ (Pollock)")
     _apply_line_halo(line)
     if analytical_tmin is not None:
-        line, = ax.plot(var[:5], analytical_tmin[:5], color=COLORS["fp"], linestyle=":", linewidth=LINEWIDTH, marker="o", markersize=6, markerfacecolor="None", label=analytical_label)
-        _apply_line_halo(line)
+        line, = ax.plot(var[:5], analytical_tmin[:5], color=COLORS["fp"], linestyle=":", linewidth=LINEWIDTH, label=analytical_label, marker="x", markersize=4)
+        _apply_line_halo(line, halo_foreground="white")
     if stats_fpt_pypar2 is not None and np.any(np.isfinite(stats_fpt_pypar2[:, 0])):
         container = ax.errorbar(
             var,
@@ -607,7 +607,7 @@ def plot_hausdorff_vs_variance(
     stats_hausdorff_fm_asr_conic: np.ndarray | None = None,
     stats_hausdorff_pypar2: np.ndarray | None = None,
 ):
-    fig, ax = plt.subplots(figsize=[6, 4])
+    fig, ax = plt.subplots(figsize=[6, 3])
     # fig, ax = plt.subplots(figsize=[5, 4])
 
     container = ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, label="FP (FMM)", linestyle="-", linewidth=LINEWIDTH, color=COLORS["fpFMM"])

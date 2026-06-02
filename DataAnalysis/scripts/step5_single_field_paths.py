@@ -55,7 +55,7 @@ LINESTYLES = {
     "fpPypar2": "-",
 }
 
-LINEWIDTHS = 0.8
+LINEWIDTHS = 1.2
 
 def configure_style():
     import glob
@@ -1809,8 +1809,8 @@ def _plot_common_overlays(
     lrp_spline_label = None if lrp_diag is None else (
         "LRP (FMM, spline interp)" if lrp_diag.curvature_spline_mode == "interpolation" else "LRP (FMM, spline approx)"
     )
-    ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="black"), pe.Normal()])
+    ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="black"), pe.Normal()])
     ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
@@ -3644,7 +3644,7 @@ def _plot_snapshot_particles_line(
     color: Any,
     linewidth: float,
     linestyle: str = "--",
-    halo_foreground: str = "white",
+    halo_foreground: str = "black",
     halo_scale: float = 1.5,
     zorder: int = 1,
 ) -> bool:
@@ -3787,7 +3787,7 @@ def _plot_isochrone_contour(
     color: Any,
     linewidth: float,
     linestyle: str | tuple = "-",
-    halo_foreground: str = "white",
+    halo_foreground: str = "black",
     halo_scale: float = 1.2,
     zorder: int = 1,
 ) -> None:
@@ -3925,7 +3925,7 @@ def plot_isochrones_with_plume(
             color=COLORS["fp"], linestyle=LINESTYLES["fp"],
             linewidth=LINEWIDTHS, zorder=15
         )
-        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="white"), pe.Normal()])
         line.set_solid_capstyle("round")
         line.set_dash_capstyle("round")
 
@@ -3935,7 +3935,7 @@ def plot_isochrones_with_plume(
             color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"],
             linewidth=LINEWIDTHS, zorder=14
         )
-        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="white"), pe.Normal()])
         line.set_solid_capstyle("round")
         line.set_dash_capstyle("round")
 
@@ -3945,7 +3945,7 @@ def plot_isochrones_with_plume(
             color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"],
             linewidth=LINEWIDTHS, zorder=13
         )
-        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
+        line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="white"), pe.Normal()])
         line.set_solid_capstyle("round")
         line.set_dash_capstyle("round")
 
@@ -3964,7 +3964,7 @@ def plot_isochrones_with_plume(
                 color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"],
                 linewidth=LINEWIDTHS, zorder=12
             )
-            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
+            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="white"), pe.Normal()])
             line.set_solid_capstyle("round")
             line.set_dash_capstyle("round")
 
@@ -3974,7 +3974,7 @@ def plot_isochrones_with_plume(
                 color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"],
                 linewidth=LINEWIDTHS, zorder=11
             )
-            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
+            line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="white"), pe.Normal()])
             line.set_solid_capstyle("round")
             line.set_dash_capstyle("round")
 
@@ -3990,11 +3990,12 @@ def plot_isochrones_with_plume(
             color="purple", linewidth=LINEWIDTHS, zorder=10
         )
 
-        # Background: logK field
-        im_ref = ax.imshow(
-            np.exp(logk_field), norm=LogNorm(), origin="lower", cmap=cmc.batlowW_r,
-            interpolation="nearest", extent=extent, alpha=0.7,
-        )
+        # Background: logK field on the first panel only.
+        if j == 0:
+            im_ref = ax.imshow(
+                np.exp(logk_field), norm=LogNorm(), origin="lower", cmap=cmc.batlowW_r,
+                interpolation="nearest", extent=extent, alpha=0.7,
+            )
 
         f = float(snap_fractions[j])
         t_level_fp = f * t_fp_arrival
