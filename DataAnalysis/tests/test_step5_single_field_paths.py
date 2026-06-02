@@ -404,7 +404,56 @@ def test_dimensionless_velocity_and_stream_colorbar_label() -> None:
     plt.close(fig)
 
 
-def test_plot_snapshot_density_contour_draws_contour() -> None:
+def test_plot_isochrone_contour_applies_white_halo() -> None:
+    fig, ax = plt.subplots()
+    x = np.linspace(0.0, 4.0, 20)
+    y = np.linspace(0.0, 4.0, 20)
+    xx, yy = np.meshgrid(x, y)
+    field = np.hypot(xx - 2.0, yy - 2.0)
+    step5._plot_isochrone_contour(
+        ax,
+        x,
+        y,
+        field,
+        1.0,
+        color="red",
+        linewidth=1.0,
+    )
+    assert ax.collections
+    effects = ax.collections[0].get_path_effects()
+    assert effects
+    stroke = effects[0]
+    assert stroke._gc.get("foreground") == "white"
+    plt.close(fig)
+
+
+def test_plot_snapshot_particles_line_draws_dashed_polyline() -> None:
+    fig, ax = plt.subplots()
+    rng = np.random.default_rng(0)
+    t = np.linspace(0.0, 2.0 * np.pi, 80)
+    x = 3.0 + t + 0.05 * rng.standard_normal(t.size)
+    y = 4.0 + 0.5 * np.sin(t) + 0.05 * rng.standard_normal(t.size)
+    ok = step5._plot_snapshot_particles_line(
+        ax,
+        x,
+        y,
+        i_y=1.0,
+        color="red",
+        linestyle="--",
+        linewidth=1.0,
+    )
+    assert ok is True
+    lines = ax.get_lines()
+    assert len(lines) == 1
+    assert lines[0].get_linestyle() == "--"
+    assert len(lines[0].get_xdata()) == t.size
+    effects = lines[0].get_path_effects()
+    assert effects
+    assert effects[0]._gc.get("foreground") == "white"
+    plt.close(fig)
+
+
+def test_plot_snapshot_density_contour_draws_plume() -> None:
     fig, ax = plt.subplots()
     rng = np.random.default_rng(0)
     ok = step5._plot_snapshot_density_contour(
@@ -420,6 +469,7 @@ def test_plot_snapshot_density_contour_draws_contour() -> None:
     )
     assert ok is True
     assert ax.collections
+    assert not ax.collections[0].get_edgecolors().size  # filled plume, not contour lines
     plt.close(fig)
 
 

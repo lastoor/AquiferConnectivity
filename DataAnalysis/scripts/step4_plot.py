@@ -28,7 +28,7 @@ except ImportError:  # pragma: no cover - optional dependency
 
 from step1_index import VisualizationConfig, default_cache_dir, load_config
 
-pathcm = cmc.davos.resampled(7)
+pathcm = cmc.nuuk.resampled(7)
 COLORS = {
     "fp": pathcm(1),
     "lrp": pathcm(5), #"#FC1212",
@@ -55,7 +55,28 @@ LINESTYLES = {
     "fpPypar2": (0, (3, 1, 1, 1, 1, 1)),
 }
 
-LINEWIDTH = 2
+LINEWIDTH = 1.2
+
+
+def _apply_line_halo(
+    line,
+    *,
+    linewidth: float = LINEWIDTH,
+    halo_scale: float = 1.5,
+    halo_foreground: str = "black",
+) -> None:
+    line.set_path_effects([
+        pe.Stroke(linewidth=halo_scale * linewidth, foreground=halo_foreground),
+        pe.Normal(),
+    ])
+    line.set_solid_capstyle("round")
+    line.set_dash_capstyle("round")
+
+
+def _apply_errorbar_line_halo(container, *, linewidth: float = LINEWIDTH) -> None:
+    if container.lines:
+        _apply_line_halo(container.lines[0], linewidth=linewidth)
+
 
 @dataclass(slots=True)
 class FigureArtifact:
@@ -244,27 +265,35 @@ def plot_characteristic_time(
 
     # if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
         # ax.errorbar(var, stats_fpt_fsm[:, 0] / t_ref, stats_fpt_fsm[:, 1] / t_ref, color=COLORS["fpFSM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FSM)")
-    ax.plot(var, stats_fpt[:, 0] / t_ref, color=COLORS["fp"], linestyle="-", label=r"$\gamma^{\!\star}_{\mathcal{S}}$ (Pollock)")
+    line, = ax.plot(var, stats_fpt[:, 0] / t_ref, color=COLORS["fp"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{S}}$ (Pollock)")
+    _apply_line_halo(line)
     if analytical_tmin is not None:
-        ax.plot(var[:5], analytical_tmin[:5], color=COLORS["fp"], linestyle=":", linewidth=1.8, marker="o", markersize=6, markerfacecolor="None", label=analytical_label)
+        line, = ax.plot(var[:5], analytical_tmin[:5], color=COLORS["fp"], linestyle=":", linewidth=LINEWIDTH, marker="o", markersize=6, markerfacecolor="None", label=analytical_label)
+        _apply_line_halo(line)
     if stats_fpt_pypar2 is not None and np.any(np.isfinite(stats_fpt_pypar2[:, 0])):
-        ax.errorbar(
+        container = ax.errorbar(
             var,
             stats_fpt_pypar2[:, 0] / t_ref,
             color=COLORS["fpPypar2"],
             linestyle="-",
+            linewidth=LINEWIDTH,
             label=r"$\gamma^{\!\star}_{\mathcal{D}}$ (PyPar2)",
         )
+        _apply_errorbar_line_halo(container)
     if stats_fpt_fm_asr is not None and np.any(np.isfinite(stats_fpt_fm_asr[:, 0])):
-        ax.errorbar(
+        container = ax.errorbar(
             var,
             stats_fpt_fm_asr[:, 0] / t_ref,
             color=COLORS["fpFmAsr"],
             linestyle="-",
+            linewidth=LINEWIDTH,
             label=r"$\gamma^{\!\star}_{\mathcal{F}}$ (FM-ASR)",
         )
-    ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], linestyle="-", label=r"$\gamma^{\!\star}_{\mathcal{E}}$ (FMM)")
-    ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], linestyle=":", label=r"$\gamma^{\!\star}_{\mathcal{E}}$ (Dijkstra)")
+        _apply_errorbar_line_halo(container)
+    container = ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{E}}$ (FMM)")
+    _apply_errorbar_line_halo(container)
+    container = ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], linestyle=":", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{E}}$ (Dijkstra)")
+    _apply_errorbar_line_halo(container)
     # if stats_fpt_fm_asr_iso is not None and np.any(np.isfinite(stats_fpt_fm_asr_iso[:, 0])):
         # ax.errorbar(
         #     var,
@@ -288,8 +317,10 @@ def plot_characteristic_time(
     #         label=r"FP (FM-ASR\, conic)",
     #     )
     
-    ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", label=r"$\gamma^{\!\star}_{\mathcal{R}}$ (FMM)")
-    ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], linestyle=":", label=r"$\gamma^{\!\star}_{\mathcal{R}}$ (Dijkstra)")
+    container = ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{R}}$ (FMM)")
+    _apply_errorbar_line_halo(container)
+    container = ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], linestyle=":", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{R}}$ (Dijkstra)")
+    _apply_errorbar_line_halo(container)
     # ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="FP")
     # ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), stats_mhr[:, 1] / (t_ref * dh), color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="LRP")
     # ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), stats_mhr_fmm[:, 1] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", marker="o", markerfacecolor="None", label="LRP (FMM)")
@@ -579,18 +610,24 @@ def plot_hausdorff_vs_variance(
     fig, ax = plt.subplots(figsize=[6, 4])
     # fig, ax = plt.subplots(figsize=[5, 4])
 
-    ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, label="FP (FMM)", linestyle="-", color=COLORS["fpFMM"])
-    ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, label="FP (Dijkstra)", linestyle=":", color=COLORS["fpDijkstra"])
-    ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, label="LRP (FMM)", linestyle="-", color=COLORS["lrpFMM"])
-    ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, label="LRP (Dijkstra)", linestyle=":", color=COLORS["lrp"])
+    container = ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, label="FP (FMM)", linestyle="-", linewidth=LINEWIDTH, color=COLORS["fpFMM"])
+    _apply_errorbar_line_halo(container)
+    container = ax.errorbar(var, stats_hausdorff_dijkstra[:, 0] / i_y, label="FP (Dijkstra)", linestyle=":", linewidth=LINEWIDTH, color=COLORS["fpDijkstra"])
+    _apply_errorbar_line_halo(container)
+    container = ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, label="LRP (FMM)", linestyle="-", linewidth=LINEWIDTH, color=COLORS["lrpFMM"])
+    _apply_errorbar_line_halo(container)
+    container = ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, label="LRP (Dijkstra)", linestyle=":", linewidth=LINEWIDTH, color=COLORS["lrp"])
+    _apply_errorbar_line_halo(container)
     if stats_hausdorff_fm_asr is not None and np.any(np.isfinite(stats_hausdorff_fm_asr[:, 0])):
-        ax.errorbar(
+        container = ax.errorbar(
             var,
             stats_hausdorff_fm_asr[:, 0] / i_y,
             label=r"FP (FM-ASR)",
             linestyle="-",
+            linewidth=LINEWIDTH,
             color=COLORS["fpFmAsr"],
         )
+        _apply_errorbar_line_halo(container)
     # if stats_hausdorff_fm_asr_iso is not None and np.any(np.isfinite(stats_hausdorff_fm_asr_iso[:, 0])):
         # ax.errorbar(
         #     var,
@@ -603,21 +640,25 @@ def plot_hausdorff_vs_variance(
         #     markerfacecolor="None",
         # )
     if stats_hausdorff_fm_asr_conic is not None and np.any(np.isfinite(stats_hausdorff_fm_asr_conic[:, 0])):
-        ax.errorbar(
+        container = ax.errorbar(
             var,
             stats_hausdorff_fm_asr_conic[:, 0] / i_y,
             label=r"FP (FM-ASR\, conic)",
             linestyle="-",
+            linewidth=LINEWIDTH,
             color=COLORS["fpFmAsrConic"],
         )
+        _apply_errorbar_line_halo(container)
     if stats_hausdorff_pypar2 is not None and np.any(np.isfinite(stats_hausdorff_pypar2[:, 0])):
-        ax.errorbar(
+        container = ax.errorbar(
             var,
             stats_hausdorff_pypar2[:, 0] / i_y,
             label="FP (PyPar2)",
             linestyle="-",
+            linewidth=LINEWIDTH,
             color=COLORS["fpPypar2"],
         )
+        _apply_errorbar_line_halo(container)
     # ax.errorbar(var, stats_hausdorff_lrp[:, 0] / i_y, yerr=stats_hausdorff_lrp[:, 1] / i_y, label="$d_H$[FP, LRP]", linestyle="-", color=COLORS["lrp"], marker="o", markerfacecolor="None")
     # ax.errorbar(var, stats_hausdorff_lrp_fmm[:, 0] / i_y, yerr=stats_hausdorff_lrp_fmm[:, 1] / i_y, label="$d_H$[FP, LRP(FMM)]", linestyle="-", color=COLORS["lrpFMM"], marker="o", markerfacecolor="None")
     # ax.errorbar(var, stats_hausdorff_fmm[:, 0] / i_y, yerr=stats_hausdorff_fmm[:, 1] / i_y, label="$d_H$[FP, FP(FMM)]", linestyle="-", color=COLORS["fpFMM"], marker="o", markerfacecolor="None")

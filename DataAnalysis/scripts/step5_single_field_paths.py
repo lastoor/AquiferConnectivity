@@ -15,7 +15,7 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import cmcrameri.cm as cmc
-from matplotlib.colors import to_rgba
+from matplotlib.colors import LinearSegmentedColormap, to_rgba
 import matplotlib.patheffects as pe
 from matplotlib.colors import LogNorm
 from matplotlib.ticker import LogFormatterMathtext, LogLocator
@@ -32,7 +32,7 @@ import step4_plot as step4
 
 _MC_PATTERN = re.compile(r"(?:_mc|_)(-?\d+)$")
 
-pathcm = cmc.davos.resampled(7)
+pathcm = cmc.lapaz.resampled(7)
 COLORS = {
     "fp": pathcm(1),
     "lrp": pathcm(5), #"#FC1212",
@@ -55,7 +55,7 @@ LINESTYLES = {
     "fpPypar2": "-",
 }
 
-LINEWIDTHS = 1.2
+LINEWIDTHS = 0.8
 
 def configure_style():
     import glob
@@ -3635,6 +3635,42 @@ def plot_curvature_balance(
 
 
 
+def _plot_snapshot_particles_line(
+    ax: Any,
+    x_points: np.ndarray,
+    y_points: np.ndarray,
+    *,
+    i_y: float,
+    color: Any,
+    linewidth: float,
+    linestyle: str = "--",
+    halo_foreground: str = "white",
+    halo_scale: float = 1.5,
+    zorder: int = 1,
+) -> bool:
+    mask = np.isfinite(x_points) & np.isfinite(y_points)
+    idx = np.flatnonzero(mask)
+    if idx.size < 2:
+        return False
+    x_line = np.asarray(x_points[idx], dtype=float)
+    y_line = np.asarray(y_points[idx], dtype=float)
+    line, = ax.plot(
+        x_line / i_y,
+        y_line / i_y,
+        color=color,
+        linestyle=linestyle,
+        linewidth=linewidth,
+        zorder=zorder,
+    )
+    line.set_path_effects([
+        pe.Stroke(linewidth=halo_scale * linewidth, foreground=halo_foreground),
+        pe.Normal(),
+    ])
+    line.set_solid_capstyle("round")
+    line.set_dash_capstyle("round")
+    return True
+
+
 def _plot_snapshot_density_contour(
     ax: Any,
     x_points: np.ndarray,
@@ -3648,18 +3684,31 @@ def _plot_snapshot_density_contour(
     linewidth: float,
     quantile: float = 0.70,
     smooth_sigma: float = 1.0,
+    alpha_max: float = 0.01,
+    zorder: int = 1,
 ) -> bool:
-    mask = np.isfinite(x_points) & np.isfinite(y_points)
-    if int(np.count_nonzero(mask)) < 3:
-        return False
-
+    del linestyle, linewidth
     xg = np.asarray(x_grid, dtype=float)
     yg = np.asarray(y_grid, dtype=float)
     x_edges = build_face_coordinates_from_centers(xg)
     y_edges = build_face_coordinates_from_centers(yg)
+
+    x_arr = np.asarray(x_points, dtype=float)
+    y_arr = np.asarray(y_points, dtype=float)
+    finite = np.isfinite(x_arr) & np.isfinite(y_arr)
+    in_domain = (
+        finite
+        & (x_arr >= x_edges[0])
+        & (x_arr <= x_edges[-1])
+        & (y_arr >= y_edges[0])
+        & (y_arr <= y_edges[-1])
+    )
+    if int(np.count_nonzero(in_domain)) < 1:
+        return False
+
     hist, _x_edges, _y_edges = np.histogram2d(
-        x_points[mask],
-        y_points[mask],
+        x_arr[in_domain],
+        y_arr[in_domain],
         bins=[x_edges, y_edges],
     )
     density = hist.T.astype(float)
@@ -3668,22 +3717,100 @@ def _plot_snapshot_density_contour(
     positive = density[density > 0.0]
     if positive.size == 0:
         return False
-    level = float(np.quantile(positive, float(quantile)))
-    if not np.isfinite(level) or level <= 0.0 or float(np.nanmax(density)) <= level:
-        level = 0.5 * float(np.nanmax(density))
-    if not np.isfinite(level) or level <= 0.0:
+
+    density_max = float(np.nanmax(density))
+    if not np.isfinite(density_max) or density_max <= 0.0:
+        return False
+    floor = float(np.quantile(positive, float(quantile)))
+    if not np.isfinite(floor) or floor <= 0.0 or floor >= density_max:
+        floor = 0.0
+    density_plot = np.clip(
+        (density - floor) / max(density_max - floor, np.finfo(float).eps),
+        0.0,
+        1.0,
+    )
+    if not np.any(density_plot > 0.0):
+        density_plot = np.where(density > 0.0, density / density_max, 0.0)
+    if not np.any(density_plot > 0.0):
         return False
 
-    ax.contour(
-        xg / i_y,
-        yg / i_y,
-        density,
+    rgba = to_rgba(color)
+    plume_alpha = float(alpha_max) * (rgba[3] if rgba[3] < 1.0 else 1.0)
+    plume_cmap = LinearSegmentedColormap.from_list(
+        "snapshot_plume",
+        [(rgba[0], rgba[1], rgba[2], 0.0), (rgba[0], rgba[1], rgba[2], plume_alpha)],
+        N=256,
+    )
+    ax.pcolormesh(
+        x_edges / i_y,
+        y_edges / i_y,
+        density_plot,
+        cmap=plume_cmap,
+        shading="flat",
+        rasterized=True,
+        zorder=zorder,
+    )
+    x_centers = 0.5 * (x_edges[:-1] + x_edges[1:]) / i_y
+    y_centers = 0.5 * (y_edges[:-1] + y_edges[1:]) / i_y
+    contour_level = min(0.35, 0.5 * float(np.nanmax(density_plot)))
+    if contour_level > 0.0 and np.nanmax(density_plot) > contour_level:
+        ax.contour(
+            x_centers,
+            y_centers,
+            density_plot,
+            levels=[contour_level],
+            colors=[color],
+            linewidths=max(1.0, float(LINEWIDTHS)),
+            linestyles=["-"],
+            zorder=zorder,
+        )
+    ax.scatter(
+        x_arr[in_domain] / i_y,
+        y_arr[in_domain] / i_y,
+        s=8.0,
+        color=color,
+        alpha=min(0.65, max(0.25, plume_alpha)),
+        linewidths=0,
+        rasterized=True,
+        zorder=zorder,
+    )
+    return True
+
+
+def _plot_isochrone_contour(
+    ax: Any,
+    x: np.ndarray,
+    y: np.ndarray,
+    field: np.ndarray,
+    level: float,
+    *,
+    color: Any,
+    linewidth: float,
+    linestyle: str | tuple = "-",
+    halo_foreground: str = "white",
+    halo_scale: float = 1.2,
+    zorder: int = 1,
+) -> None:
+    cs = ax.contour(
+        x,
+        y,
+        field,
         levels=[level],
         linewidths=linewidth,
         colors=[color],
         linestyles=[linestyle],
+        zorder=zorder,
     )
-    return True
+    effect = [
+        pe.Stroke(linewidth=halo_scale * linewidth, foreground=halo_foreground),
+        pe.Normal(),
+    ]
+    if hasattr(cs, "collections"):
+        for collection in cs.collections:
+            collection.set_path_effects(effect)
+    else:
+        cs.set_path_effects(effect)
+
 
 def plot_isochrones_with_plume(
     logk_field: np.ndarray,
@@ -3706,7 +3833,7 @@ def plot_isochrones_with_plume(
     - LRP isochrone contour at fraction f of its own first arrival time
     - FSM isochrone contour at fraction f of its own first arrival time (when available)
     - FM-ASR isochrone contour at fraction f of its own first arrival time (when available)
-    - Particle plume scatter (all particle positions at that snapshot time)
+    - FP particle snapshot as dashed polyline (raw seed-ordered positions, white halo)
     - FP (FMM), LRP (FMM), FSM, and FM-ASR paths as thin overlays
     - Source line
 
@@ -3745,7 +3872,7 @@ def plot_isochrones_with_plume(
 
     ncols = min(4, n_snaps)
     nrows = int(np.ceil(n_snaps / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.5 * ncols, 4.0 * nrows), squeeze=False)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(5 * ncols, 4.5 * nrows), squeeze=False)
     axes_flat = axes.flatten()
 
     extent = _normalized_extent(result.x, result.y, i_y)
@@ -3787,83 +3914,16 @@ def plot_isochrones_with_plume(
         t_fm_asr_arrival = t_fm_asr_min = t_fm_asr_max = 0.0
 
     from matplotlib.lines import Line2D
-
+    
     im_ref = None
     for j in range(n_snaps):
         ax = axes_flat[j]
-
-        # Background: logK field
-        im_ref = ax.imshow(
-            np.exp(logk_field), norm=LogNorm(), origin="lower", cmap=cmc.batlowW_r,
-            interpolation="nearest", extent=extent, alpha=0.7,
-        )
-
-        f = float(snap_fractions[j])
-        t_level_fp = f * t_fp_arrival
-        t_level_lrp = f * t_lrp_arrival
-
-        # Particle plume scatter
-        if snaps is not None and j < snaps.x.shape[1]:
-            x_j = snaps.x[:, j]
-            y_j = snaps.y[:, j]
-            mask = np.isfinite(x_j) & np.isfinite(y_j)
-            if np.any(mask):
-                ax.scatter(
-                    x_j[mask] / i_y, y_j[mask] / i_y,
-                    s=LINEWIDTHS, color=COLORS["fp"], linewidths=0, rasterized=True,
-                )
-
-        if pypar2_snaps is not None and j < pypar2_snaps.x.shape[1]:
-            _plot_snapshot_density_contour(
-                ax,
-                pypar2_snaps.x[:, j],
-                pypar2_snaps.y[:, j],
-                x_grid=result.x,
-                y_grid=result.y,
-                i_y=i_y,
-                color=COLORS["fpPypar2"],
-                linestyle=LINESTYLES["fpPypar2"],
-                linewidth=LINEWIDTHS,
-            )
-
-        if t_min_fm_asr_dimless is not None:
-            t_level_fm_asr = f * t_fm_asr_arrival
-            if t_fm_asr_min <= t_level_fm_asr <= t_fm_asr_max:
-                ax.contour(
-                    x_norm, y_norm, t_min_fm_asr_dimless,
-                    levels=[t_level_fm_asr], linewidths=LINEWIDTHS, colors=COLORS["fpFmAsr"],
-                    linestyles=[LINESTYLES["fpFmAsr"]],
-                )
-            
-        # FP (FMM) isochrone contour (white) — relative to FP first arrival
-        if t_min_val <= t_level_fp <= t_max_val:
-            ax.contour(
-                x_norm, y_norm, t_min_dimless,
-                levels=[t_level_fp], linewidths=LINEWIDTHS, colors=COLORS["fpFMM"],
-            )
-
-        # LRP isochrone contour (lrpFMM color, dashed) — relative to LRP first arrival
-        if t_lrp_min <= t_level_lrp <= t_lrp_max:
-            ax.contour(
-                x_norm, y_norm, t_min_lrp_dimless,
-                levels=[t_level_lrp], linewidths=LINEWIDTHS, colors=COLORS["lrpFMM"],
-            )
-
-        # # FSM isochrone contour — relative to FSM first arrival
-        # if t_min_fsm_dimless is not None:
-        #     t_level_fsm = f * t_fsm_arrival
-        #     if t_fsm_min <= t_level_fsm <= t_fsm_max:
-        #         ax.contour(
-        #             x_norm, y_norm, t_min_fsm_dimless,
-        #             levels=[t_level_fsm], linewidths=LINEWIDTHS, colors=COLORS["fpFSM"],
-        #             linestyles=["-"],
-        #         )
 
         # FP path
         line, = ax.plot(
             result.fp[:, 0] / i_y, result.fp[:, 1] / i_y,
             color=COLORS["fp"], linestyle=LINESTYLES["fp"],
-            linewidth=LINEWIDTHS,
+            linewidth=LINEWIDTHS, zorder=15
         )
         line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
         line.set_solid_capstyle("round")
@@ -3873,7 +3933,7 @@ def plot_isochrones_with_plume(
         line, = ax.plot(
             result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y,
             color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"],
-            linewidth=LINEWIDTHS,
+            linewidth=LINEWIDTHS, zorder=14
         )
         line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
         line.set_solid_capstyle("round")
@@ -3883,7 +3943,7 @@ def plot_isochrones_with_plume(
         line, = ax.plot(
             result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y,
             color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"],
-            linewidth=LINEWIDTHS,
+            linewidth=LINEWIDTHS, zorder=13
         )
         line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
         line.set_solid_capstyle("round")
@@ -3902,7 +3962,7 @@ def plot_isochrones_with_plume(
             line, = ax.plot(
                 result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y,
                 color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"],
-                linewidth=LINEWIDTHS,
+                linewidth=LINEWIDTHS, zorder=12
             )
             line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
             line.set_solid_capstyle("round")
@@ -3912,7 +3972,7 @@ def plot_isochrones_with_plume(
             line, = ax.plot(
                 result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y,
                 color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"],
-                linewidth=LINEWIDTHS,
+                linewidth=LINEWIDTHS, zorder=11
             )
             line.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 1, foreground="black"), pe.Normal()])
             line.set_solid_capstyle("round")
@@ -3921,14 +3981,95 @@ def plot_isochrones_with_plume(
         # Source line
         ax.plot(
             result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y,
-            color="purple", linewidth=LINEWIDTHS,
+            color="purple", linewidth=LINEWIDTHS, zorder=10
         )
 
         # Target line
         ax.plot(
             result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y,
-            color="purple", linewidth=LINEWIDTHS,
+            color="purple", linewidth=LINEWIDTHS, zorder=10
         )
+
+        # Background: logK field
+        im_ref = ax.imshow(
+            np.exp(logk_field), norm=LogNorm(), origin="lower", cmap=cmc.batlowW_r,
+            interpolation="nearest", extent=extent, alpha=0.7,
+        )
+
+        f = float(snap_fractions[j])
+        t_level_fp = f * t_fp_arrival
+        t_level_lrp = f * t_lrp_arrival
+
+        # FP particle snapshot plume (dashed polyline in seed order)
+        if snaps is not None and j < snaps.x.shape[1]:
+            _plot_snapshot_particles_line(
+                ax,
+                snaps.x[:, j],
+                snaps.y[:, j],
+                i_y=i_y,
+                color=COLORS["fp"],
+                linestyle="-",
+                linewidth=LINEWIDTHS,
+                zorder=3,
+            )
+
+        if pypar2_snaps is not None and j < pypar2_snaps.x.shape[1]:
+            plume_drawn = _plot_snapshot_density_contour(
+                ax,
+                pypar2_snaps.x[:, j],
+                pypar2_snaps.y[:, j],
+                x_grid=result.x,
+                y_grid=result.y,
+                i_y=i_y,
+                color=COLORS["fpPypar2"],
+                linestyle=LINESTYLES["fpPypar2"],
+                linewidth=LINEWIDTHS,
+                zorder=1,
+            )
+            if not plume_drawn:
+                finite_count = int(np.count_nonzero(np.isfinite(pypar2_snaps.x[:, j]) & np.isfinite(pypar2_snaps.y[:, j])))
+                print(f"Warning: skipped PyPar2 snapshot plume {j}; no drawable in-domain density from {finite_count} finite points.")
+
+        if t_min_fm_asr_dimless is not None:
+            t_level_fm_asr = f * t_fm_asr_arrival
+            if t_fm_asr_min <= t_level_fm_asr <= t_fm_asr_max:
+                _plot_isochrone_contour(
+                    ax, x_norm, y_norm, t_min_fm_asr_dimless, t_level_fm_asr,
+                    color=COLORS["fpFmAsr"],
+                    linewidth=LINEWIDTHS,
+                    linestyle="-",
+                    zorder=4,
+                )
+
+        # FP (FMM) isochrone — relative to FP first arrival
+        if t_min_val <= t_level_fp <= t_max_val:
+            _plot_isochrone_contour(
+                ax, x_norm, y_norm, t_min_dimless, t_level_fp,
+                color=COLORS["fpFMM"],
+                linewidth=LINEWIDTHS,
+                linestyle="-",
+                zorder=5,
+            )
+
+        # LRP isochrone — relative to LRP first arrival
+        if t_lrp_min <= t_level_lrp <= t_lrp_max:
+            _plot_isochrone_contour(
+                ax, x_norm, y_norm, t_min_lrp_dimless, t_level_lrp,
+                color=COLORS["lrpFMM"],
+                linewidth=LINEWIDTHS,
+                linestyle="-",
+                zorder=6,
+            )
+
+        # # FSM isochrone — relative to FSM first arrival
+        # if t_min_fsm_dimless is not None:
+        #     t_level_fsm = f * t_fsm_arrival
+        #     if t_fsm_min <= t_level_fsm <= t_fsm_max:
+        #         _plot_isochrone_contour(
+        #             ax, x_norm, y_norm, t_min_fsm_dimless, t_level_fsm,
+        #             color=COLORS["fpFSM"],
+        #             linewidth=LINEWIDTHS,
+        #         )
 
         # # Legend on first panel only
         # if j == 0:
@@ -3997,16 +4138,17 @@ def plot_isochrones_with_plume(
             arrival_lines.append(rf"$t_{{\mathcal{{R}}}}^{{\!\star}} U/I_Y = {t_lrp_arrival:.3g}$")
             # if t_min_fsm_dimless is not None:
             #     arrival_lines.append(rf"$t_{{a,\mathcal{{S}}}}^* = {t_fsm_arrival:.3g}$")
-            ax.text(
-                0.98,
-                0.02,
-                "\n".join(arrival_lines),
-                transform=ax.transAxes,
-                ha="right",
-                va="bottom",
-                fontsize=7,
-                bbox={"boxstyle": "round", "facecolor": "white", "edgecolor": "0.2", "alpha": 0.8},
-            )
+            # ax.text(
+            #     0.98,
+            #     0.02,
+            #     "\n".join(arrival_lines),
+            #     transform=ax.transAxes,
+            #     ha="right",
+            #     va="bottom",
+            #     fontsize=7,
+            #     bbox={"boxstyle": "round", "facecolor": "white", "edgecolor": "0.2", "alpha": 0.8},
+            #     zorder=15
+            # )
 
         ax.set_title(r"$f = {:.2f}$".format(f), fontsize=9)
         ax.set_aspect("equal", adjustable="box")
