@@ -62,7 +62,7 @@ FIGURE_DIR=outputs/run16p1_pypar2-al0p1-at0p01_asr-ratio0p05-factor10
 PYTHONPATH=./scripts python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" 
 PYTHONPATH=./scripts python scripts/step3_stats.py   --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
-PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR" --plot-variances 0.1 --scatter-mode mean,all_points --hausdorff-cdf --entropy-hausdorff
+PYTHONPATH=./scripts python scripts/step4_plot.py    --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" --output-dir "$FIGURE_DIR" --plot-variances 0.1,1,5 --scatter-mode mean,all_points --hausdorff-cdf --entropy-hausdorff
 ```
 
 `configs/visualization.default.yaml` no longer specifies `output_dir`.  
@@ -291,15 +291,28 @@ Outputs:
 Reload a saved Step 6 NPZ artifact and regenerate the comparison figure without rerunning GRF/flow/particle tracking:
 
 ```bash
+FIGURE_DIR=/project2/fbarros_324/binhaoli/FMM_FastestPath/outputs/visualization/cdf_travel_time/cdf_fp_lrp/var_1.0_size500_seed0_mc100
 PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
-  --load-npz "$FIGURE_DIR/run3_singlefield_std1_var1_size200_seed0_mc10_arrival_times.npz"
+  --load-npz "$FIGURE_DIR/runrun8_pollock_gpu_1e6_singlefield_std1_var1_size500_seed0_mc100_arrival_times.npz"
+```
+
+Or use the Step 6 launcher in local reload mode (no Slurm/GPU solve):
+
+```bash
+./submit_step6_gpu.sh reload \
+  "$FIGURE_DIR/runrun8_pollock_gpu_1e6_singlefield_std1_var1_size500_seed0_mc100_arrival_times.npz"
 ```
 
 Optionally choose a different output directory or DPI for the regenerated figure:
 
 ```bash
+./submit_step6_gpu.sh reload \
+  "$FIGURE_DIR/runrun8_pollock_gpu_1e6_singlefield_std1_var1_size500_seed0_mc100_arrival_times.npz" \
+  "$FIGURE_DIR/reloaded"
+
+# Equivalent direct Python invocation:
 PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
-  --load-npz "$FIGURE_DIR/run3_singlefield_std1_var1_size200_seed0_mc10_arrival_times.npz" \
+  --load-npz "$FIGURE_DIR/runrun8_pollock_gpu_1e6_singlefield_std1_var1_size500_seed0_mc100_arrival_times.npz" \
   --refine-tau-grid \
   --tau-split 10 \
   --tau-grid-fine 1024 \
@@ -310,6 +323,12 @@ PYTHONPATH=./scripts python scripts/step6_single_field_arrival_hist.py \
   --output-dir "$FIGURE_DIR/reloaded" \
   --figure-dpi 200
 ```
+
+`submit_step6_gpu.sh` reload-mode overrides:
+- `STEP6_LOAD_NPZ=/path/to/file.npz` forces reload mode without positional args
+- `STEP6_RELOAD_OUTPUT_DIR=/path/to/out` sets the reload output directory
+- `STEP6_PYTHON=/path/to/python` chooses the interpreter
+- `STEP6_PYTHONPATH=/path/to/DataAnalysis/scripts` overrides `PYTHONPATH`
 
 Notes:
 

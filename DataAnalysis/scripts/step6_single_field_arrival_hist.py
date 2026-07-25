@@ -886,44 +886,44 @@ def plot_arrival_cdf_comparison(
     ax.step(tau_emp, ecdf, where="post", color="black", linewidth=2.0, label="Empirical CDF")
     ax.plot(tau_grid, cdf_analytical, color="#C46552", linewidth=2.0, linestyle="--", label=r"Analytical $G_{\tau}$")
     ax.axhline(y=0.01, color="#C46552", linewidth=1.0, linestyle=":", label="1% quantile")
-    if cdf_lognormal is not None:
-        ax.plot(tau_grid, cdf_lognormal, color="#2A9D8F", linewidth=1.8, linestyle="-.", label="Lognormal CDF")
-    if tau_pt_first_arrival_emp is not None and ecdf_pt_first_arrival is not None and tau_pt_first_arrival_emp.size > 0:
-        ax.step(
-            tau_pt_first_arrival_emp,
-            ecdf_pt_first_arrival,
-            where="post",
-            color="#7A3E9D",
-            linewidth=1.8,
-            linestyle="-",
-            label="PT first-arrival CDF",
-        )
-    if tau_fmm_fp_emp is not None and ecdf_fmm_fp is not None and tau_fmm_fp_emp.size > 0:
-        ax.step(tau_fmm_fp_emp, ecdf_fmm_fp, where="post", color="#3F73B8", linewidth=1.8, linestyle="--",
-                label=r"FMM FP CDF $\gamma^*_{\mathcal{E}}$")
-    if tau_fmm_lrp_emp is not None and ecdf_fmm_lrp is not None and tau_fmm_lrp_emp.size > 0:
-        ax.step(tau_fmm_lrp_emp, ecdf_fmm_lrp, where="post", color="#F9B43F", linewidth=1.8, linestyle="-.",
-                label=r"FMM LRP CDF $\gamma^*_{\mathcal{R}}$")
-    if tau_fmm_fp_target_emp is not None and ecdf_fmm_fp_target is not None and tau_fmm_fp_target_emp.size > 0:
-        ax.step(
-            tau_fmm_fp_target_emp,
-            ecdf_fmm_fp_target,
-            where="post",
-            color="#0F6D8C",
-            linewidth=1.6,
-            linestyle=":",
-            label="FMM FP target-line CDF",
-        )
-    if tau_fmm_lrp_target_emp is not None and ecdf_fmm_lrp_target is not None and tau_fmm_lrp_target_emp.size > 0:
-        ax.step(
-            tau_fmm_lrp_target_emp,
-            ecdf_fmm_lrp_target,
-            where="post",
-            color="#C77D2B",
-            linewidth=1.6,
-            linestyle=(0, (5, 2)),
-            label="FMM LRP target-line CDF",
-        )
+    # if cdf_lognormal is not None:
+    #     ax.plot(tau_grid, cdf_lognormal, color="#2A9D8F", linewidth=1.8, linestyle="-.", label="Lognormal CDF")
+    # if tau_pt_first_arrival_emp is not None and ecdf_pt_first_arrival is not None and tau_pt_first_arrival_emp.size > 0:
+    #     ax.step(
+    #         tau_pt_first_arrival_emp,
+    #         ecdf_pt_first_arrival,
+    #         where="post",
+    #         color="#7A3E9D",
+    #         linewidth=1.8,
+    #         linestyle="-",
+    #         label="PT first-arrival CDF",
+    #     )
+    # if tau_fmm_fp_emp is not None and ecdf_fmm_fp is not None and tau_fmm_fp_emp.size > 0:
+    #     ax.step(tau_fmm_fp_emp, ecdf_fmm_fp, where="post", color="#3F73B8", linewidth=1.8, linestyle="--",
+    #             label=r"FMM FP CDF $\gamma^*_{\mathcal{E}}$")
+    # if tau_fmm_lrp_emp is not None and ecdf_fmm_lrp is not None and tau_fmm_lrp_emp.size > 0:
+    #     ax.step(tau_fmm_lrp_emp, ecdf_fmm_lrp, where="post", color="#F9B43F", linewidth=1.8, linestyle="-.",
+    #             label=r"FMM LRP CDF $\gamma^*_{\mathcal{R}}$")
+    # if tau_fmm_fp_target_emp is not None and ecdf_fmm_fp_target is not None and tau_fmm_fp_target_emp.size > 0:
+    #     ax.step(
+    #         tau_fmm_fp_target_emp,
+    #         ecdf_fmm_fp_target,
+    #         where="post",
+    #         color="#0F6D8C",
+    #         linewidth=1.6,
+    #         linestyle=":",
+    #         label="FMM FP target-line CDF",
+    #     )
+    # if tau_fmm_lrp_target_emp is not None and ecdf_fmm_lrp_target is not None and tau_fmm_lrp_target_emp.size > 0:
+    #     ax.step(
+    #         tau_fmm_lrp_target_emp,
+    #         ecdf_fmm_lrp_target,
+    #         where="post",
+    #         color="#C77D2B",
+    #         linewidth=1.6,
+    #         linestyle=(0, (5, 2)),
+    #         label="FMM LRP target-line CDF",
+    #     )
     ax.set_xlabel(r"$tU/I_Y$")
     ax.set_ylabel("CDF")
     ax.set_xscale("log")
