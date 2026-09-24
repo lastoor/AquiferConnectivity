@@ -24,7 +24,7 @@ run_tag="${RUN_TAG:-mac_m4_step5}"
 num_particles="${NUM_PARTICLES:-1000000}"
 dh="${DH:-}"
 
-fsm_fp="${FSM_FP:-true}"
+fsm_fp="${FSM_FP:-false}"
 fsm_max_sweeps="${FSM_MAX_SWEEPS:-100000}"
 fsm_tol="${FSM_TOL:-1e-8}"
 fsm_mse_tol="${FSM_MSE_TOL:-}"
@@ -36,13 +36,13 @@ fsm_solver="${FSM_SOLVER:-fd}" # Options: sweep, fipy, legacy, new, fd
 fsm_dt="${FSM_DT:-0.5}"
 fsm_max_steps="${FSM_MAX_STEPS:-1000000}"
 
-fm_asr_fp="${FM_ASR_FP:-true}"
+fm_asr_fp="${FM_ASR_FP:-false}"
 fm_asr_perp_ratio="${FM_ASR_PERP_RATIO:-0.1}"
 fm_asr_back_factor="${FM_ASR_BACK_FACTOR:-10.0}"
 fm_asr_min_speed="${FM_ASR_MIN_SPEED:-1e-12}"
 fm_asr_max_steps="${FM_ASR_MAX_STEPS:-200000}"
 
-pypar2="${PYPAR2:-true}"
+pypar2="${PYPAR2:-false}"
 pypar2_dt="${PYPAR2_DT:-0.01}"
 pypar2_steps="${PYPAR2_STEPS:-200000}"
 pypar2_dm="${PYPAR2_DM:-1e-9}"
@@ -89,7 +89,7 @@ curvature_field_smooth_sigma="${CURVATURE_FIELD_SMOOTH_SIGMA:-2.0}"
 curvature_circle_window="${CURVATURE_CIRCLE_WINDOW:-20}"
 curvature_savgol_window="${CURVATURE_SAVGOL_WINDOW:-3}"
 curvature_savgol_poly="${CURVATURE_SAVGOL_POLY:-2}"
-normal_deriv_method="${NORMAL_DERIV_METHOD:-hessian_T}" # Options: direct, savgol2d, spline2d, mls_frenet, hessian_T
+normal_deriv_method="${NORMAL_DERIV_METHOD:-direct}" # Options: direct, savgol2d, spline2d, mls_frenet, hessian_T
 normal_deriv_spline2d_smooth="${NORMAL_DERIV_SPLINE2D_SMOOTH:-1.0}"
 normal_deriv_mls_ns="${NORMAL_DERIV_MLS_NS:-2}"
 normal_deriv_mls_nn="${NORMAL_DERIV_MLS_NN:-2}"

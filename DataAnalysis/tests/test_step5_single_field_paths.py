@@ -688,6 +688,29 @@ def test_savgol_gradient_2d_on_linear_field() -> None:
     np.testing.assert_allclose(result, expected, rtol=1e-4)
 
 
+def test_sample_directional_curvature_on_circular_velocity_field() -> None:
+    """(v_hat·grad)v_hat has unit inward curvature on the unit circle."""
+    x = np.linspace(-2.0, 2.0, 101)
+    y = np.linspace(-2.0, 2.0, 101)
+    xx, yy = np.meshgrid(x, y)
+    vx = -yy
+    vy = xx
+
+    theta = np.linspace(0.0, 2.0 * np.pi, 80, endpoint=False)
+    points = np.column_stack([np.cos(theta), np.sin(theta)])
+    inward_normal = -points
+    curvature = step5._sample_directional_curvature(
+        vx,
+        vy,
+        x,
+        y,
+        points,
+        inward_normal,
+    )
+
+    np.testing.assert_allclose(curvature, 1.0, atol=3e-3)
+
+
 def test_spline2d_normal_derivative_on_linear_field() -> None:
     """_spline2d_normal_derivative should be exact for a linear field f(x,y) = ax + by."""
     x = np.linspace(0.0, 10.0, 50)

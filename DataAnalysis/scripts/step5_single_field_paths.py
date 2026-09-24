@@ -185,6 +185,8 @@ class PathBalanceDiagnostics:
     dloggradh_dn: np.ndarray
     dlogv_dn: np.ndarray
     residual: np.ndarray
+    directional_curvature: np.ndarray | None = None
+    travel_time_curvature: np.ndarray | None = None
     hamilton_curvature: np.ndarray | None = None
     hamilton_curvature_magnitude: np.ndarray | None = None
     hamilton_curvature_smoothed: np.ndarray | None = None
@@ -1812,14 +1814,15 @@ def _plot_common_overlays(
     ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="black"), pe.Normal()])
     ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="black"), pe.Normal()])
     ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    if result.fp_pypar2 is not None and len(result.fp_pypar2) >= 2:
+            ax.plot(result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y, color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{D}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
+        ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
     #     ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{FSM}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
-        ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    if result.fp_pypar2 is not None and len(result.fp_pypar2) >= 2:
-        ax.plot(result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y, color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{D}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+
     # if fp_diag is not None:
     #     ax.plot(
     #         fp_diag.spline_points[:, 0] / i_y,
@@ -1900,6 +1903,37 @@ def _smooth_scalar_field(field: np.ndarray, *, method: str, sigma: float) -> np.
 def _compute_centered_gradient(field: np.ndarray, x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     grad_y, grad_x = np.gradient(np.asarray(field, dtype=float), np.asarray(y, dtype=float), np.asarray(x, dtype=float), edge_order=2)
     return np.asarray(grad_x, dtype=float), np.asarray(grad_y, dtype=float)
+
+
+def _sample_directional_curvature(
+    vx: np.ndarray,
+    vy: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+    points: np.ndarray,
+    normal: np.ndarray,
+) -> np.ndarray:
+    """Sample signed ``(v_hat · grad)v_hat`` curvature along a path."""
+    vx_arr = np.asarray(vx, dtype=float)
+    vy_arr = np.asarray(vy, dtype=float)
+    speed = np.hypot(vx_arr, vy_arr)
+    speed_floor = max(float(np.nanmax(speed)) * 1e-12, 1e-15)
+    reliable = np.isfinite(speed) & (speed > speed_floor)
+    tau_x = np.divide(vx_arr, speed, out=np.zeros_like(vx_arr), where=reliable)
+    tau_y = np.divide(vy_arr, speed, out=np.zeros_like(vy_arr), where=reliable)
+
+    dtau_x_dx, dtau_x_dy = _compute_centered_gradient(tau_x, x, y)
+    dtau_y_dx, dtau_y_dy = _compute_centered_gradient(tau_y, x, y)
+    kappa_x = tau_x * dtau_x_dx + tau_y * dtau_x_dy
+    kappa_y = tau_x * dtau_y_dx + tau_y * dtau_y_dy
+    kappa_x = np.where(reliable, kappa_x, np.nan)
+    kappa_y = np.where(reliable, kappa_y, np.nan)
+
+    sampled = np.column_stack([
+        _bilinear_sample(kappa_x, x, y, points),
+        _bilinear_sample(kappa_y, x, y, points),
+    ])
+    return np.einsum("ij,ij->i", sampled, np.asarray(normal, dtype=float))
 
 
 def _bilinear_sample(field: np.ndarray, x: np.ndarray, y: np.ndarray, points: np.ndarray) -> np.ndarray:
@@ -2988,6 +3022,20 @@ def _build_path_balance_diagnostics(
     if length <= 0.0:
         raise ValueError(f"{label} path has zero arclength.")
 
+    travel_time_curvature = (
+        _hessian_T_speed_normal_derivative(
+            t_field,
+            x,
+            y,
+            spline_points,
+            pre_smooth_sigma=normal_deriv_hessian_smooth,
+            stencil_window=normal_deriv_hessian_window,
+            stencil_poly=normal_deriv_hessian_poly,
+        )
+        if t_field is not None
+        else None
+    )
+
     if normal_deriv_method == "mls_frenet":
         dlogk_dn = _mls_frenet_normal_derivative(logk_field, x, y, spline_points, tangent, normal, ns=normal_deriv_mls_ns, nn=normal_deriv_mls_nn)
         dloggradh_dn = _mls_frenet_normal_derivative(log_grad_h_field, x, y, spline_points, tangent, normal, ns=normal_deriv_mls_ns, nn=normal_deriv_mls_nn)
@@ -3013,17 +3061,12 @@ def _build_path_balance_diagnostics(
             _bilinear_sample(grad_logv_y, x, y, spline_points),
         ]), normal)
     elif normal_deriv_method == "hessian_T":
-        # κ = T_nt/s  ⟹  ∂(ln s)/∂n = -∂(ln c)/∂n = kappa_T
-        # Replace only the "primary" combined term for this path's eikonal field;
-        # use the direct method for the individually decomposed components.
+        # Backward-compatible mode: use the T-Hessian estimate for the primary
+        # field-side term.  The independent T-Hessian curvature is retained in
+        # ``travel_time_curvature`` regardless of this RHS estimator choice.
         kappa_T = (
-            _hessian_T_speed_normal_derivative(
-                t_field, x, y, spline_points,
-                pre_smooth_sigma=normal_deriv_hessian_smooth,
-                stencil_window=normal_deriv_hessian_window,
-                stencil_poly=normal_deriv_hessian_poly,
-            )
-            if t_field is not None
+            travel_time_curvature
+            if travel_time_curvature is not None
             else np.full(len(spline_points), np.nan)
         )
         dlogk_dn_d    = _normal_derivative_direct(logk_field,       x, y, spline_points, normal)
@@ -3071,6 +3114,7 @@ def _build_path_balance_diagnostics(
         dloggradh_dn=dloggradh_dn,
         dlogv_dn=dlogv_dn,
         residual=curvature + residual_term,
+        travel_time_curvature=travel_time_curvature,
     )
 
 
@@ -3107,25 +3151,18 @@ def compute_balance_diagnostics(
         method=curvature_field_smooth_method,
         sigma=curvature_field_smooth_sigma,
     )
-    k_field = np.exp(logk)
-
     grad_h_x, grad_h_y = _compute_centered_gradient(h, x, y)
     grad_h_mag = np.hypot(grad_h_x, grad_h_y)
-    v_mag = k_field * grad_h_mag
 
     grad_h_mag_smoothed = _smooth_scalar_field(
         grad_h_mag,
         method=curvature_field_smooth_method,
         sigma=curvature_field_smooth_sigma,
     )
-    v_mag_smoothed = _smooth_scalar_field(
-        v_mag,
-        method=curvature_field_smooth_method,
-        sigma=curvature_field_smooth_sigma,
-    )
-
     log_grad_h = _safe_log(grad_h_mag_smoothed)
-    log_v = _safe_log(v_mag_smoothed)
+    # Preserve the exact operator identity
+    # ln(K |grad h|) = ln K + ln|grad h| after any optional field smoothing.
+    log_v = logk_smoothed + log_grad_h
 
     fp_diag = _build_path_balance_diagnostics(
         result.fp_fmm,
@@ -3248,6 +3285,15 @@ def compute_balance_diagnostics(
                 savgol_poly=curvature_savgol_poly,
                 normal_deriv_method="direct",
                 ds=ds,
+            )
+            vx_center, vy_center = _coerce_velocity_for_streamplot(result)
+            streamline_diag.directional_curvature = _sample_directional_curvature(
+                vx_center,
+                vy_center,
+                x,
+                y,
+                streamline_diag.spline_points,
+                streamline_diag.normal,
             )
         except Exception as exc:
             print(f"Warning: Streamline FP curvature failed; omitting streamline curvature overlay: {exc}")
@@ -3372,262 +3418,190 @@ def plot_curvature_balance(
     streamline_diag: PathBalanceDiagnostics | None = None,
     i_y: float = 1.0,
 ) -> Any:
-    has_fm_asr_path = (
-        fm_asr_diag is not None
-        and np.any(np.isfinite(fm_asr_diag.curvature))
-    )
-    has_fm_asr_hamiltonian = (
-        fm_asr_diag is not None
-        and fm_asr_diag.hamilton_curvature is not None
-        and np.any(np.isfinite(fm_asr_diag.hamilton_curvature))
-    )
-    nrows = 4 if has_fm_asr_path else 3
-    fig, axes = plt.subplots(nrows, 1, figsize=(6, 2.0 * nrows), sharex=True)
-    lw = 1#LINEWIDTHS
-    alpha = 0.5
+    # The three left-hand-side comparison curvatures are field-derived:
+    # S uses (v_hat · grad)v_hat, while E^circ and E use Hessians of their
+    # respective travel-time fields.  The dlog*_dn arrays are independently
+    # evaluated physical-field terms projected onto the same path normal.
+    # fm_asr_diag is retained in the signature for API compatibility, but this
+    # diagnostic intentionally contains only S, E^circ, and E comparisons.
+    del fm_asr_diag
 
-    def _pearson_r(a, b):
-        a = np.asarray(a, dtype=float)
-        b = np.asarray(b, dtype=float)
-        mask = np.isfinite(a) & np.isfinite(b)
-        if mask.sum() < 2:
+    fig, axes = plt.subplots(4, 1, figsize=(7, 12), sharex=True)
+    lw = 1.2
+    rhs_alpha = 0.65
+
+    def _pearson_r(a: np.ndarray, b: np.ndarray) -> float:
+        aa = np.asarray(a, dtype=float)
+        bb = np.asarray(b, dtype=float)
+        mask = np.isfinite(aa) & np.isfinite(bb)
+        if mask.sum() < 2 or np.std(aa[mask]) <= 0.0 or np.std(bb[mask]) <= 0.0:
             return float("nan")
-        return float(np.corrcoef(a[mask], b[mask])[0, 1])
+        return float(np.corrcoef(aa[mask], bb[mask])[0, 1])
 
-    def _pearson_r_on_s(sa, a, sb, b):
-        sa = np.asarray(sa, dtype=float)
-        sb = np.asarray(sb, dtype=float)
-        a = np.asarray(a, dtype=float)
-        b = np.asarray(b, dtype=float)
-        mask_a = np.isfinite(sa) & np.isfinite(a)
-        mask_b = np.isfinite(sb) & np.isfinite(b)
-        if mask_a.sum() < 2 or mask_b.sum() < 2:
-            return float("nan")
-        lo = max(float(np.nanmin(sa[mask_a])), float(np.nanmin(sb[mask_b])))
-        hi = min(float(np.nanmax(sa[mask_a])), float(np.nanmax(sb[mask_b])))
-        if not np.isfinite(lo) or not np.isfinite(hi) or hi <= lo:
-            return float("nan")
-        n = int(min(mask_a.sum(), mask_b.sum()))
-        if n < 2:
-            return float("nan")
-        grid = np.linspace(lo, hi, n)
-        a_i = np.interp(grid, sa[mask_a], a[mask_a])
-        b_i = np.interp(grid, sb[mask_b], b[mask_b])
-        return _pearson_r(a_i, b_i)
+    def _interpolate_on_normalized_arclength(
+        source_s: np.ndarray,
+        source_values: np.ndarray,
+        target_s: np.ndarray,
+    ) -> np.ndarray:
+        ss = np.asarray(source_s, dtype=float)
+        vv = np.asarray(source_values, dtype=float)
+        target = np.asarray(target_s, dtype=float)
+        finite = np.isfinite(ss) & np.isfinite(vv)
+        if finite.sum() < 2:
+            return np.full_like(target, np.nan, dtype=float)
+        order = np.argsort(ss[finite])
+        return np.interp(target, ss[finite][order], vv[finite][order], left=np.nan, right=np.nan)
 
-    r_fp    = _pearson_r(fp_diag.curvature,  -fp_diag.dlogv_dn)
-    r_lrp_k = _pearson_r(lrp_diag.curvature, -lrp_diag.dlogk_dn)
-    r_lrp_v = _pearson_r(lrp_diag.curvature, -lrp_diag.dlogv_dn)
-    r_fm_asr = (
-        _pearson_r(fm_asr_diag.curvature, fm_asr_diag.hamilton_curvature_smoothed)
-        if has_fm_asr_hamiltonian and fm_asr_diag is not None and fm_asr_diag.hamilton_curvature_smoothed is not None
-        else float("nan")
-    )
-    r_fm_stream = (
-        _pearson_r_on_s(
-            fm_asr_diag.s_norm,
-            fm_asr_diag.curvature,
-            streamline_diag.s_norm,
-            streamline_diag.curvature,
-        )
-        if has_fm_asr_path and fm_asr_diag is not None and streamline_diag is not None
-        else float("nan")
-    )
-
-    axes[0].plot(
-        fp_diag.s_norm,
-        fp_diag.curvature * i_y,
-        color=COLORS["fpFMM"],
-        linewidth=lw,
-        label=r"$\kappa^*_{\mathcal{E}}$",
-    )
-    axes[0].plot(
-        fp_diag.s_norm,
-        -fp_diag.dlogv_dn * i_y,
-        color=COLORS["fpFMM"],
-        alpha=alpha,
-        linewidth=lw,
-        label=r"$-\partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^{\!\star}_{\mathcal{E}}$",
-    )
-    axes[0].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[0].set_ylabel(r"FP $[\times I_Y]$")
-    axes[0].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
-    axes[0].text(
-        0.97, 0.97,
-        rf"$r = {r_fp:.2f}$",
-        transform=axes[0].transAxes,
-        ha="right", va="top", fontsize=8,
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=1.0),
-    )
-
-    # axes[1].plot(
-    #     fp_diag.s_norm,
-    #     fp_diag.curvature_circle * i_y,
-    #     color=COLORS["fpFMM"],
-    #     linewidth=lw,
-    #     label=r"$\kappa_{\mathrm{circle}}$ FP (FMM)",
-    # )
-    # axes[1].plot(
-    #     fp_diag.s_norm,
-    #     -fp_diag.dlogv_dn * i_y,
-    #     color=COLORS["fpFMM"],
-    #     alpha=alpha,
-    #     linewidth=lw,
-    #     label=r"$-\partial_N \ln |v|$ on FP (FMM)",
-    # )
-    # axes[1].axhline(0.0, color="0.7", linewidth=1.0)
-    # axes[1].set_ylabel("FP Circle")
-    # axes[1].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
-
-    axes[1].plot(
-        lrp_diag.s_norm,
-        lrp_diag.curvature * i_y,
-        color=COLORS["lrpFMM"],
-        linewidth=lw,
-        label=r"$\kappa^*_{\mathcal{R}}$",
-    )
-    axes[1].plot(
-        lrp_diag.s_norm,
-        -lrp_diag.dlogk_dn * i_y,
-        color=COLORS["lrpFMM"],
-        alpha=alpha,
-        linewidth=lw,
-        label=r"$-\partial_{\mathbf{n}} \ln K$ along $\gamma^{\!\star}_{\mathcal{R}}$",
-    )
-    axes[1].plot(
-        lrp_diag.s_norm,
-        (- lrp_diag.dlogk_dn - lrp_diag.dloggradh_dn) * i_y,
-        color=COLORS["lrpFMM"],
-        linestyle=":",
-        linewidth=lw,
-        label=r"$- \partial_{\mathbf{n}} \ln K -\partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^{\!\star}_{\mathcal{R}}$",
-    )
-    axes[1].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[1].set_ylabel(r"LRP $[\times I_Y]$")
-    axes[1].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
-    axes[1].text(
-        0.98, 0.97,
-        rf"$r(\kappa,\,-\partial_n\ln K) = {r_lrp_k:.2f}$" + "\n" +
-        rf"$r(\kappa,\,-\partial_n\ln v) = {r_lrp_v:.2f}$",
-        transform=axes[1].transAxes,
-        ha="right", va="top", fontsize=8,
-        bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=1.0),
-    )
-
-    # axes[3].plot(
-    #     lrp_diag.s_norm,
-    #     lrp_diag.curvature_circle * i_y,
-    #     color=COLORS["lrpFMM"],
-    #     linewidth=lw,
-    #     label=r"$\kappa_{\mathrm{circle}}$ LRP (FMM)",
-    # )
-    # axes[3].plot(
-    #     lrp_diag.s_norm,
-    #     -lrp_diag.dlogk_dn * i_y,
-    #     color=COLORS["lrpFMM"],
-    #     alpha=alpha,
-    #     linewidth=lw,
-    #     label=r"$-\partial_N \ln K$ on LRP (FMM)",
-    # )
-    # axes[3].axhline(0.0, color="0.7", linewidth=1.0)
-    # axes[3].set_ylabel("LRP Circle")
-    # axes[3].legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
-
-    axes[2].plot(
-        fp_diag.s_norm,
-        fp_diag.residual * i_y,
-        color=COLORS["fpFMM"],
-        linewidth=lw,
-        label=r"$\kappa^*_{\mathcal{E}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^{\!\star}_{\mathcal{E}}$",
-    )
-    axes[2].plot(
-        lrp_diag.s_norm,
-        lrp_diag.residual * i_y,
-        color=COLORS["lrpFMM"],
-        alpha=alpha,
-        linewidth=lw,
-        label=r"$\kappa^*_{\mathcal{R}} + \partial_{\mathbf{n}} \ln K$ along $\gamma^{\!\star}_{\mathcal{R}}$",
-    )
-    # axes[2].plot(
-    #     lrp_diag.s_norm,
-    #     (lrp_diag.curvature + lrp_diag.dlogv_dn) * i_y,
-    #     color=COLORS["lrpFMM"],
-    #     linestyle="--",
-    #     linewidth=lw,
-    #     label=r"$R_{\mathrm{LRP},v}=\kappa + \partial_N \ln |v|$",
-    # )
-    axes[2].plot(
-        lrp_diag.s_norm,
-        (lrp_diag.curvature + lrp_diag.dlogk_dn + lrp_diag.dloggradh_dn) * i_y,
-        color=COLORS["lrpFMM"],
-        linestyle=":",
-        linewidth=lw,
-        label=r"$\kappa^*_{\mathcal{R}} + \partial_{\mathbf{n}} \ln K + \partial_{\mathbf{n}} \ln \| \nabla{h} \|$ along $\gamma^{\!\star}_{\mathcal{R}}$",
-    )
-    axes[2].axhline(0.0, color="0.7", linewidth=1.0)
-    axes[2].set_xlabel(r"Normalized arclength $\ell/L$")
-    axes[2].set_ylabel(r"Residual $[\times I_Y]$")
-    axes[2].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
-
-    if has_fm_asr_path and fm_asr_diag is not None:
-        axes[3].plot(
-            fm_asr_diag.s_norm,
-            fm_asr_diag.curvature * i_y,
-            color=COLORS["fpFmAsr"],
+    def _draw_comparison(
+        ax: Any,
+        diag: PathBalanceDiagnostics,
+        lhs: np.ndarray,
+        rhs: np.ndarray,
+        *,
+        lhs_label: str,
+        rhs_label: str,
+        ylabel: str,
+        color: Any,
+    ) -> None:
+        r_value = _pearson_r(lhs, rhs)
+        ax.plot(diag.s_norm, lhs * i_y, color=color, linewidth=lw, label=lhs_label)
+        ax.plot(
+            diag.s_norm,
+            rhs * i_y,
+            color=color,
+            alpha=rhs_alpha,
+            linestyle="--",
             linewidth=lw,
-            label=r"$\kappa^*_{\mathcal{F}}$",
+            label=rhs_label,
         )
-        if streamline_diag is not None:
-            axes[3].plot(
-                streamline_diag.s_norm,
-                streamline_diag.curvature * i_y,
-                color=COLORS["fp"],
-                alpha=0.85,
-                linestyle=LINESTYLES["fp"],
-                linewidth=lw,
-                label=r"$\kappa^*_{\mathcal{S}}$",
-            )
-        if has_fm_asr_hamiltonian and fm_asr_diag.hamilton_curvature is not None:
-            axes[3].plot(
-                fm_asr_diag.s_norm,
-                fm_asr_diag.hamilton_curvature * i_y,
-                color=COLORS["fpFmAsr"],
-                alpha=0.25,
-                linestyle=LINESTYLES["fpFmAsr"],
-                linewidth=lw,
-                label=r"$\kappa_{\mathcal{F},H}$ raw",
-            )
-        if has_fm_asr_hamiltonian and fm_asr_diag.hamilton_curvature_smoothed is not None:
-            axes[3].plot(
-                fm_asr_diag.s_norm,
-                fm_asr_diag.hamilton_curvature_smoothed * i_y,
-                color=COLORS["fpFmAsr"],
-                alpha=alpha,
-                linestyle=LINESTYLES["fpFmAsr"],
-                linewidth=lw,
-                label=r"$\kappa_{\mathcal{F},H}$ smoothed",
-            )
-        axes[3].axhline(0.0, color="0.7", linewidth=1.0)
-        axes[3].set_xlabel(r"Normalized arclength $\ell/L$")
-        axes[3].set_ylabel(r"FM-ASR $[\times I_Y]$")
-        axes[3].legend(fontsize="8", loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
-        axes[3].text(
-            0.97, 0.97,
-            rf"$r(\kappa_\mathcal{{F}}^*,\kappa_{{\mathcal{{F}},H}}) = {r_fm_asr:.2f}$" + "\n" +
-            rf"$r(\kappa_\mathcal{{F}}^*,\kappa_\mathcal{{S}}^*) = {r_fm_stream:.2f}$",
-            transform=axes[3].transAxes,
-            ha="right", va="top", fontsize=8,
+        ax.axhline(0.0, color="0.7", linewidth=1.0)
+        ax.set_ylabel(ylabel)
+        ax.legend(fontsize=8, loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
+        ax.text(
+            0.98,
+            0.96,
+            rf"$r={r_value:.2f}$",
+            transform=ax.transAxes,
+            ha="right",
+            va="top",
+            fontsize=8,
             bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=1.0),
         )
 
+    if streamline_diag is not None:
+        kappa_streamline = (
+            streamline_diag.directional_curvature
+            if streamline_diag.directional_curvature is not None
+            else streamline_diag.curvature
+        )
+        _draw_comparison(
+            axes[0],
+            streamline_diag,
+            kappa_streamline,
+            streamline_diag.dloggradh_dn,
+            lhs_label=(
+                r"$\kappa_{\mathsf{S}}="
+                r"\mathbf{n}_{\mathsf{S}}\!\cdot"
+                r"[(\widehat{\mathbf{v}}\!\cdot\nabla)\widehat{\mathbf{v}}]$"
+            ),
+            rhs_label=(
+                r"$\mathbf{n}_{\mathsf{S}}\!\cdot\mathscr{K}_{\mathsf{S}}"
+                r"(\gamma_{\mathsf{S}}^{\star},\dot{\gamma}_{\mathsf{S}}^{\star})"
+                r"=\partial_{\mathbf{n}_{\mathsf{S}}}\ln\|\nabla h\|$"
+            ),
+            ylabel=r"$\mathsf{S}\ [\times I_Y]$",
+            color=COLORS["fp"],
+        )
+    else:
+        axes[0].text(0.5, 0.5, r"$\gamma_{\mathsf{S}}^{\star}$ unavailable", ha="center", va="center", transform=axes[0].transAxes)
+        axes[0].set_ylabel(r"$\mathsf{S}\ [\times I_Y]$")
+
+    _draw_comparison(
+        axes[1],
+        lrp_diag,
+        (
+            lrp_diag.travel_time_curvature
+            if lrp_diag.travel_time_curvature is not None
+            else np.full_like(lrp_diag.s_norm, np.nan)
+        ),
+        -lrp_diag.dlogk_dn,
+        lhs_label=r"$\kappa_{\mathsf{E}^{\circ}}$ (from $\nabla^2T_{\mathsf{E}^{\circ}}$)",
+        rhs_label=(
+            r"$\mathbf{n}_{\mathsf{E}^{\circ}}\!\cdot\mathscr{K}_{\mathsf{E}^{\circ}}"
+            r"(\gamma_{\mathsf{E}^{\circ}}^{\star},\dot{\gamma}_{\mathsf{E}^{\circ}}^{\star})"
+            r"=-\partial_{\mathbf{n}_{\mathsf{E}^{\circ}}}\ln K$"
+        ),
+        ylabel=r"$\mathsf{E}^{\circ}\ [\times I_Y]$",
+        color=COLORS["lrpFMM"],
+    )
+
+    _draw_comparison(
+        axes[2],
+        fp_diag,
+        (
+            fp_diag.travel_time_curvature
+            if fp_diag.travel_time_curvature is not None
+            else np.full_like(fp_diag.s_norm, np.nan)
+        ),
+        -fp_diag.dlogv_dn,
+        lhs_label=r"$\kappa_{\mathsf{E}}$ (from $\nabla^2T_{\mathsf{E}}$)",
+        rhs_label=(
+            r"$\mathbf{n}_{\mathsf{E}}\!\cdot\mathscr{K}_{\mathsf{E}}"
+            r"(\gamma_{\mathsf{E}}^{\star},\dot{\gamma}_{\mathsf{E}}^{\star})"
+            r"=-\partial_{\mathbf{n}_{\mathsf{E}}}\ln(K\|\nabla h\|)$"
+        ),
+        ylabel=r"$\mathsf{E}\ [\times I_Y]$",
+        color=COLORS["fpFMM"],
+    )
+
+    if streamline_diag is not None:
+        kappa_s = (
+            streamline_diag.directional_curvature
+            if streamline_diag.directional_curvature is not None
+            else np.full_like(streamline_diag.s_norm, np.nan)
+        )
+        kappa_s_on_ecirc_s = _interpolate_on_normalized_arclength(
+            streamline_diag.s_norm,
+            kappa_s,
+            lrp_diag.s_norm,
+        )
+        kappa_ecirc = (
+            lrp_diag.travel_time_curvature
+            if lrp_diag.travel_time_curvature is not None
+            else np.full_like(lrp_diag.s_norm, np.nan)
+        )
+        _draw_comparison(
+            axes[3],
+            lrp_diag,
+            lrp_diag.dlogv_dn,
+            kappa_s_on_ecirc_s - kappa_ecirc,
+            lhs_label=(
+                r"$-\mathbf{n}_{\mathsf{E}^{\circ}}\!\cdot\mathscr{K}_{\mathsf{E}}"
+                r"(\gamma_{\mathsf{E}^{\circ}}^{\star},\dot{\gamma}_{\mathsf{E}^{\circ}}^{\star})"
+                r"=\partial_{\mathbf{n}_{\mathsf{E}^{\circ}}}\ln(K\|\nabla h\|)$"
+            ),
+            rhs_label=(
+                r"$\kappa_{\mathsf{S}}(\gamma_{\mathsf{S}}^{\star})"
+                r"-\kappa_{\mathsf{E}^{\circ}}(\gamma_{\mathsf{E}^{\circ}}^{\star})$"
+            ),
+            ylabel=r"Comparison $[\times I_Y]$",
+            color=COLORS["lrpFMM"],
+        )
+    else:
+        axes[3].text(0.5, 0.5, r"$\kappa_{\mathsf{S}}$ unavailable", ha="center", va="center", transform=axes[3].transAxes)
+        axes[3].set_ylabel(r"Comparison $[\times I_Y]$")
+
+    axes[3].set_xlabel(r"Normalized arclength $\ell/L$")
     for ax in axes:
         ax.set_xlim(0.0, 1.0)
         ax.grid(True, color="0.9", linewidth=0.8)
-    
-    ymin = min(ax.get_ylim()[0] for ax in axes.flat)
-    ymax = max(ax.get_ylim()[1] for ax in axes.flat)
-    for ax in axes.flat:
-        ax.set_ylim(ymin, ymax)
+
+    finite_limits = [ax.get_ylim() for ax in axes if len(ax.lines) > 1]
+    if finite_limits:
+        ymin = min(limits[0] for limits in finite_limits)
+        ymax = max(limits[1] for limits in finite_limits)
+        for ax in axes:
+            ax.set_ylim(ymin, ymax)
 
     fig.tight_layout()
     return fig
@@ -4106,14 +4080,14 @@ def plot_isochrones_with_plume(
 
         #     handles = [
         #         h_fp, h_fp_fmm, h_lrp_fmm,
-        #         Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
-        #         Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{E}$ isochrone"),
-        #         Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{R}$ isochrone"),
+        #         Line2D([0], [0], color=COLORS["fp"], lw=LINEWIDTHS, label=r"$\mathcal{T}^{\!\star}_\mathcal{S}$ isochrone"),
+        #         Line2D([0], [0], color=COLORS["fpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^{\!\star}_\mathcal{E}$ isochrone"),
+        #         Line2D([0], [0], color=COLORS["lrpFMM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^{\!\star}_\mathcal{R}$ isochrone"),
         #     ]
         #     if result.fp_fm_asr is not None and t_min_fm_asr_dimless is not None:
         #         handles += [
         #             h_fm_asr,
-        #             Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"], label=r"$\mathcal{T}^*_\mathcal{F}$ isochrone"),
+        #             Line2D([0], [0], color=COLORS["fpFmAsr"], lw=LINEWIDTHS, ls=LINESTYLES["fpFmAsr"], label=r"$\mathcal{T}^{\!\star}_\mathcal{F}$ isochrone"),
         #         ]
         #     if result.fp_pypar2 is not None:
         #         handles.append(h_pypar2)
@@ -4125,7 +4099,7 @@ def plot_isochrones_with_plume(
         #     #     h_fp_fsm.set_path_effects([pe.Stroke(linewidth=LINEWIDTHS + 2, foreground="black"), pe.Normal()])
         #     #     handles += [
         #     #         h_fp_fsm,
-        #     #         Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^*_\mathcal{S}$ isochrone"),
+        #     #         Line2D([0], [0], color=COLORS["fpFSM"], lw=LINEWIDTHS, label=r"$\mathcal{T}^{\!\star}_\mathcal{S}$ isochrone"),
         #     #     ]
         #     ax.legend(handles=handles, fontsize=6, loc="upper left", framealpha=0.5)
 
@@ -4138,7 +4112,7 @@ def plot_isochrones_with_plume(
             arrival_lines.append(rf"$t_{{\mathcal{{E}}}}^{{\!\star}} U/I_Y = {t_fp_arrival:.3g}$")
             arrival_lines.append(rf"$t_{{\mathcal{{R}}}}^{{\!\star}} U/I_Y = {t_lrp_arrival:.3g}$")
             # if t_min_fsm_dimless is not None:
-            #     arrival_lines.append(rf"$t_{{a,\mathcal{{S}}}}^* = {t_fsm_arrival:.3g}$")
+            #     arrival_lines.append(rf"$t_{{a,\mathcal{{S}}}}^{\!\star} = {t_fsm_arrival:.3g}$")
             # ax.text(
             #     0.98,
             #     0.02,
@@ -4468,7 +4442,7 @@ def run_step5(
     fig_tmin = plot_paths_over_field(
         tmin_plot,
         cmap=cmc.batlowW_r,
-        colorbar_label=r"$\mathcal{T}^* U/I_Y$",
+        colorbar_label=r"$\mathcal{T}^{\,\star} U/I_Y$",
         result=result,
         i_y=i_y,
         fp_diag=fp_diag,

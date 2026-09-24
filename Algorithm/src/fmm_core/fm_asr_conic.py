@@ -514,6 +514,110 @@ def dispersion_tensor_field_from_velocity(
     return D
 
 
+def _finite_difference_axis(field: np.ndarray, spacing: float, axis: int) -> np.ndarray:
+    if field.shape[axis] <= 1:
+        return np.zeros_like(field, dtype=float)
+    return np.gradient(field, spacing, axis=axis)
+
+
+def dispersion_tensor_divergence(
+    D_field: np.ndarray,
+    *,
+    grid_spacing: float = 1.0,
+) -> np.ndarray:
+    """Return the cellwise Ito drift correction ``div(D)`` for a 2D tensor field.
+
+    For ``D[j, i] = [[D_xx, D_xy], [D_yx, D_yy]]`` with axis 1 as ``x`` and
+    axis 0 as ``y``, this computes
+
+        div(D) = (d_x D_xx + d_y D_xy, d_x D_yx + d_y D_yy).
+
+    Boundary values use NumPy's one-sided finite differences.  Degenerate
+    single-row or single-column directions contribute zero derivative.
+    """
+    D = np.asarray(D_field, dtype=float)
+    if D.ndim != 4 or D.shape[-2:] != (2, 2):
+        raise ValueError("D_field must have shape (ny, nx, 2, 2)")
+    if not np.all(np.isfinite(D)):
+        raise ValueError("D_field must contain only finite values")
+    h = float(grid_spacing)
+    if h <= 0.0 or not math.isfinite(h):
+        raise ValueError("grid_spacing must be positive and finite")
+
+    div = np.zeros(D.shape[:2] + (2,), dtype=float)
+    div[..., 0] = _finite_difference_axis(D[..., 0, 0], h, axis=1) + _finite_difference_axis(
+        D[..., 0, 1], h, axis=0
+    )
+    div[..., 1] = _finite_difference_axis(D[..., 1, 0], h, axis=1) + _finite_difference_axis(
+        D[..., 1, 1], h, axis=0
+    )
+    return div
+
+
+def build_dispersion_corrected_zermelo_fields(
+    W_flow: np.ndarray,
+    *,
+    grid_spacing: float = 1.0,
+    molecular_diffusion: float = 1e-9,
+    alpha_l: float = 0.1,
+    alpha_t: float = 0.01,
+    velocity_floor: Optional[float] = None,
+    dispersion_c: float = 1.0,
+    dispersion_tau: float = 1.0,
+    eigenvalue_floor: float = 1e-12,
+    velocity_multiplier: float = 1.0,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Build ``(W_wind, G_field, D_field, ito_drift)`` for conic Zermelo.
+
+    The effective advection is the Ito drift velocity
+
+        ``v_a = W_flow + div(D)``,
+
+    where ``W_flow`` is the deterministic Darcy/advection velocity and ``D`` is
+    the PyPar2-style dispersion tensor derived from ``W_flow``.  The returned
+    wind field is ``velocity_multiplier * v_a``.  The returned metric has
+    eigenvalues ``tau / (C^2 * lambda_i(D))``, so the dispersion velocity
+    ellipse semi-axes are ``C * sqrt(lambda_i(D) / tau)``.
+    """
+    W = np.asarray(W_flow, dtype=float)
+    if W.ndim != 3 or W.shape[-1] != 2:
+        raise ValueError("W_flow must have shape (ny, nx, 2)")
+    if not np.all(np.isfinite(W)):
+        raise ValueError("W_flow must contain only finite values")
+    c = float(dispersion_c)
+    tau = float(dispersion_tau)
+    eig_floor = float(eigenvalue_floor)
+    if c <= 0.0 or not math.isfinite(c):
+        raise ValueError("dispersion_c must be positive and finite")
+    if tau <= 0.0 or not math.isfinite(tau):
+        raise ValueError("dispersion_tau must be positive and finite")
+    if eig_floor <= 0.0 or not math.isfinite(eig_floor):
+        raise ValueError("eigenvalue_floor must be positive and finite")
+    multiplier = float(velocity_multiplier)
+    if not math.isfinite(multiplier):
+        raise ValueError("velocity_multiplier must be finite")
+
+    D = dispersion_tensor_field_from_velocity(
+        W,
+        molecular_diffusion=molecular_diffusion,
+        alpha_l=alpha_l,
+        alpha_t=alpha_t,
+        velocity_floor=velocity_floor,
+    )
+    ito_drift = dispersion_tensor_divergence(D, grid_spacing=grid_spacing)
+    W_wind = multiplier * (W + ito_drift)
+
+    ny, nx = D.shape[:2]
+    G = np.zeros_like(D)
+    scale = tau / (c * c)
+    for j in range(ny):
+        for i in range(nx):
+            eigvals, eigvecs = np.linalg.eigh(D[j, i])
+            eigvals = np.maximum(eigvals, eig_floor)
+            G[j, i] = eigvecs @ np.diag(scale / eigvals) @ eigvecs.T
+    return W_wind, G, D, ito_drift
+
+
 def self_metric_from_dispersion_velocity(
     W_field: np.ndarray,
     *,

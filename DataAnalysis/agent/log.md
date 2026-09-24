@@ -679,3 +679,153 @@
 - Limitations/follow-up:
   - This required a follow-up API patch in `Algorithm/src/fmm_core/fsm.py` because `compute_fsm_path()` did not yet expose `use_inlet_cut`.
   - The full Step 5 run was not re-executed in this session.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Replaced the Step 5 curvature-balance plot with four requested comparisons: streamline curvature computed explicitly as `(v_hat·grad)v_hat` versus the projected `grad(log|grad h|)` term, `K`-only Eikonal geometric curvature versus projected `grad(log K)`, full Eikonal geometric curvature versus the existing signed projected `grad(log(K|grad h|))` term, and `-K_E` versus `K_S-K_E°`, with all field terms evaluated using the normal of the path shown in that panel. Updated mathematical legends and correlation annotations accordingly.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `python -c "import ast, pathlib; ast.parse(pathlib.Path('DataAnalysis/scripts/step5_single_field_paths.py').read_text()); print('AST OK')"`
+  - Rendered the four-panel figure with the Agg backend in the `pde_env` Conda environment.
+  - Focused tests for the circular velocity-direction curvature estimator and three Step 5 figure-generation paths: `4 passed`.
+  - Full `test_step5_single_field_paths.py`: `32 passed, 3 failed`; all three failures are pre-existing expectations unrelated to this task (legacy path-label spelling and white versus black plot halos).
+- Limitations/follow-up:
+  - The active base environment lacks pytest and Matplotlib; validation used `/Users/binhaoli/.conda/envs/pde_env/bin/python`.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Recorded the user's environment policy prohibiting creation of Python environments without explicit consent, and removed the user-requested `pde_env` Conda environment. Confirmed the Apple Silicon launcher uses the existing `taichi` Conda environment and changed its normal-derivative default to `direct`, ensuring the requested curvature right-hand sides come from the `h` and `K` fields instead of a travel-time Hessian.
+- Files changed:
+  - `AGENT.md`
+  - `submit_step5_mac_m4.sh`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `bash -n DataAnalysis/submit_step5_mac_m4.sh`
+  - Confirmed `pde_env` is absent from `conda env list`.
+  - Confirmed the existing `taichi` environment imports NumPy, SciPy, Matplotlib, cmcrameri, and Taichi.
+  - Confirmed Taichi 1.7.4 initializes the Apple Metal GPU backend.
+- Limitations/follow-up:
+  - The launcher retains its computationally heavy defaults (one million particles plus optional FSM, FM-ASR, and PyPar2) unless overridden at invocation time.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Separated left-hand-side curvature estimators from the `NORMAL_DERIV_METHOD` right-hand-side derivative setting. The four-panel comparison now uses `(v_hat·grad)v_hat` for `kappa_S` and the corresponding travel-time Hessians for `kappa_E°` and `kappa_E`; it no longer plots coordinate-differentiated curve curvature as any of these three left-hand sides. Physical-field RHS terms remain independently evaluated from `h` and `K` when `NORMAL_DERIV_METHOD=direct`.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 figure tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - Coordinate-derived curvature is retained in `PathBalanceDiagnostics.curvature` for other diagnostics, but is not used by the four-panel comparison.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Corrected the definition of `K_E` in the E and identity panels from `grad(log(K|grad h|))` to `grad(log(K/|grad h|))`. The final panel now compares an independently differentiated `-grad(log(K/|grad h|))` against `grad(log|grad h|)-grad(log K)`, so the two curves express the requested identity and should agree up to numerical error.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - The two sides use the same path normal and linear differentiation pipeline, so a material discrepancy now indicates a numerical implementation issue rather than the previous algebraic sign error.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Corrected the preceding interpretation after the user clarified the operator definitions: `K_S=P grad(log|grad h|)`, `K_E°=-P grad(log K)`, and `K_E=-P grad(log(K|grad h|))`. Removed the erroneous ratio field. The E° and E panels now use the required negative signs, while the final panel compares `-K_E=grad(log(K|grad h|))` with `K_S-K_E°=grad(log|grad h|)+grad(log K)`. Constructed the effective log-product as `log K + log|grad h|` so optional field smoothing cannot violate the identity through separately smoothing the product before taking its logarithm.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - The previous log entry documents the superseded ratio interpretation; this entry records the corrected definitions.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Replaced the fourth curvature panel's two-curve streamline identity comparison with a single `K_E=-P grad(log(K|grad h|))` curve evaluated along `gamma_E°*`, using the E° path's points, tangent, normal, and normalized arclength.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 figure tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - The fourth panel intentionally has no correlation annotation because it contains only one curve.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Updated the fourth curvature panel to plot `-K_E` rather than `K_E` along `gamma_E°*`, and restored the requested comparison with `K_S-K_E°`. Both sides are evaluated using the E° path frame and normalized arclength, and the panel again reports their Pearson correlation.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 figure tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - The previous log entry records the superseded single-curve fourth panel.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Changed the fourth-panel comparison term from the field operators `K_S-K_E°` evaluated in one frame to the previously computed curvatures `kappa_S(gamma_S*)-kappa_E°(gamma_E°*)`. Interpolated velocity-derived `kappa_S` from its streamline normalized-arclength grid onto the E° normalized-arclength grid before subtracting the E° travel-time-Hessian curvature. Retained `-K_E` evaluated along `gamma_E°*` as the other curve.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 figure tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - Equal normalized arclength is a parameter-space comparison, not a spatial point-to-point correspondence between the two different paths.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Added two requested curves to the fourth curvature panel: `[-K_S](gamma_S*)-[-K_E°](gamma_E°*)` and `[-K_E](gamma_S*)`. The mixed-path operator difference interpolates the streamline term onto the E° normalized-arclength grid; the standalone `-K_E` streamline term is plotted on its native normalized-arclength grid.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 figure tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - Equal normalized arclength between `gamma_S*` and `gamma_E°*` is not a spatial point correspondence.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Reduced the fourth curvature panel to exactly two curves: `-K_E` evaluated along `gamma_E°*` and `[K_S](gamma_S*)-[K_E°](gamma_E°*)`. Removed the curvature-difference and additional negative-operator curves, and corrected the retained operator-difference signs. The `K_S` term is interpolated onto the E° normalized-arclength grid.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 figure tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - Equal normalized arclength between two different paths is not a spatial point correspondence.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Finalized the fourth panel with exactly two requested curves: `-K_E` evaluated along `gamma_E°*` and the previously computed curvature difference `kappa_S(gamma_S*)-kappa_E°(gamma_E°*)`. Replaced the operator-difference curve with the velocity-derived and travel-time-Hessian curvatures, interpolating `kappa_S` onto the E° normalized-arclength grid.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 figure tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - Equal normalized arclength between the two paths is not a spatial point correspondence.

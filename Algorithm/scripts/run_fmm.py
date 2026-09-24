@@ -22,8 +22,8 @@ if str(SRC_ROOT) not in os.sys.path:
 from fmm_core import (
     FMASR2D,
     MixedFMASR2D,
+    build_dispersion_corrected_zermelo_fields,
     compute_fmm_path,
-    dispersion_tensor_field_from_velocity,
     extract_fm_asr_path,
     extract_mixed_fm_asr_path,
 )
@@ -771,31 +771,22 @@ def compute_fm_asr_conic_path_velocity(
     """Compute a mixed Randers/conic FM-ASR fastest path from face velocity."""
     vx_cell, vy_cell = _face_to_cell_speed_full(vx_face, vy_face, return_vector=True)
     W_flow = np.stack((vx_cell, vy_cell), axis=2)
-    W_wind = float(velocity_multiplier) * W_flow
 
     if self_velocity == "dispersion":
-        if dispersion_c <= 0.0 or not np.isfinite(dispersion_c):
-            raise ValueError("fm_asr_conic dispersion_c must be positive and finite")
-        if dispersion_tau <= 0.0 or not np.isfinite(dispersion_tau):
-            raise ValueError("fm_asr_conic dispersion_tau must be positive and finite")
-        if dispersion_eigenvalue_floor <= 0.0 or not np.isfinite(dispersion_eigenvalue_floor):
-            raise ValueError("fm_asr_conic dispersion_eigenvalue_floor must be positive and finite")
-        D_field = dispersion_tensor_field_from_velocity(
+        W_wind, G_field, _D_field, _ito_drift = build_dispersion_corrected_zermelo_fields(
             W_flow,
+            grid_spacing=grid_spacing,
             molecular_diffusion=dispersion_molecular_diffusion,
             alpha_l=dispersion_alpha_l,
             alpha_t=dispersion_alpha_t,
             velocity_floor=dispersion_velocity_floor,
+            dispersion_c=dispersion_c,
+            dispersion_tau=dispersion_tau,
+            eigenvalue_floor=dispersion_eigenvalue_floor,
+            velocity_multiplier=velocity_multiplier,
         )
-        ny, nx = D_field.shape[:2]
-        G_field = np.zeros_like(D_field)
-        scale = float(dispersion_tau) / (float(dispersion_c) * float(dispersion_c))
-        for j in range(ny):
-            for i in range(nx):
-                eigvals, eigvecs = np.linalg.eigh(D_field[j, i])
-                eigvals = np.maximum(eigvals, dispersion_eigenvalue_floor)
-                G_field[j, i] = eigvecs @ np.diag(scale / eigvals) @ eigvecs.T
     elif self_velocity == "unit":
+        W_wind = float(velocity_multiplier) * W_flow
         G_field = None
     else:
         raise ValueError(f"Unsupported fm_asr_conic self_velocity: {self_velocity!r}")

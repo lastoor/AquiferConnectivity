@@ -128,7 +128,7 @@ Notes:
 - The GPU worker uses a single dedicated GPU process, compact `seed_spec` payloads, shared-memory transfer for `vx` / `vy` / face arrays, and exact winner replay in arrival mode.
 - `scripts/run_fmm_gpu_worker.py` is compatible with newer FlowSimulation Pollock GPU trackers that return extra snapshot arrays from `tracker.run()`; the worker uses the first two outputs (`travel_times`, `status`) and ignores additional values in the summary path.
 - FM-ASR comparison paths are non-fatal diagnostics. If an FM-ASR solve fails, the MC trial can still succeed and the FM-ASR fields are saved as `NaN` with an error string in the per-MC consolidated output.
-- `fp_fm_asr_conic` uses the same full face Darcy velocity as wind after face-to-cell conversion. With `--fm_asr_conic_self_velocity dispersion`, the local dispersion tensor `D(x)` is built from the PyPar2 parameters (`Dm`, `alpha_l`, `alpha_t`, and optional velocity floor), but the deterministic self-velocity scale is calibrated by global `C` and `tau`:
+- `fp_fm_asr_conic` uses the full face Darcy velocity after face-to-cell conversion as the deterministic flow used to build dispersion. With `--fm_asr_conic_self_velocity dispersion`, the local dispersion tensor `D(x)` is built from the PyPar2 parameters (`Dm`, `alpha_l`, `alpha_t`, and optional velocity floor), and the Zermelo advection wind is Ito-corrected as `v_a = v_Darcy + div(D)` before applying `--fm_asr_conic_velocity_multiplier`. The deterministic self-velocity scale is calibrated by global `C` and `tau`:
   `v_i(x) = C * sqrt(lambda_i(D(x)) / tau)`.
   Equivalently, the metric tensor eigenvalues are `tau / (C^2 * lambda_i(D(x)))`. PyPar2 `dt` is not used in this deterministic scale.
 
@@ -231,7 +231,7 @@ T = solver.solve(source)
 path, travel_time, chosen_target = extract_mixed_fm_asr_path(solver, T, source, target)
 ```
 
-In the Monte Carlo runners, `fp_fm_asr_conic` uses `MixedFMASR2D` with flow velocity as wind. When `self_velocity=dispersion`, local anisotropy and ellipse orientation come from the PyPar2 dispersion tensor `D(x)`, while `--fm_asr_conic_dispersion_c` and `--fm_asr_conic_dispersion_tau` set one global speed scale for the whole run.
+In the Monte Carlo runners, `fp_fm_asr_conic` uses `MixedFMASR2D` with the Ito-corrected advection wind `v_Darcy + div(D)` when `self_velocity=dispersion`. Local anisotropy and ellipse orientation come from the PyPar2 dispersion tensor `D(x)`, while `--fm_asr_conic_dispersion_c` and `--fm_asr_conic_dispersion_tau` set one global speed scale for the whole run.
 
 ## FMM Velocity Options
 

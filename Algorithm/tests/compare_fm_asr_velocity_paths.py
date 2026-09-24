@@ -39,7 +39,7 @@ from fmm_core.fm_asr import (
 from fmm_core.fm_asr_conic import (
     MixedFMASR2D,
     StrongWindZermeloNorm,
-    dispersion_tensor_field_from_velocity,
+    build_dispersion_corrected_zermelo_fields,
     extract_mixed_fm_asr_path,
     randers_from_zermelo,
 )
@@ -312,39 +312,35 @@ def solve_asr_path(
 def build_conic_asr_fields(
     W_cell: np.ndarray,
     args: argparse.Namespace,
-) -> tuple[np.ndarray, np.ndarray | None]:
-    """Return the wind and optional self-metric field used by MixedFMASR2D."""
+    *,
+    h: float,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray, np.ndarray]:
+    """Return conic wind/metric plus Darcy and Ito-drift display components."""
     W_flow = np.asarray(W_cell, dtype=float)
-    W_wind = W_flow * float(args.conic_asr_velocity_multiplier)
-    G_field = None
+    velocity_multiplier = float(args.conic_asr_velocity_multiplier)
     if str(args.conic_asr_self_velocity) == "dispersion":
-        dispersion_c = float(args.conic_asr_dispersion_c)
-        dispersion_tau = float(args.conic_asr_dispersion_tau)
-        eigenvalue_floor = float(args.conic_asr_dispersion_eigenvalue_floor)
-        if dispersion_c <= 0.0 or not np.isfinite(dispersion_c):
-            raise ValueError("--conic-asr-dispersion-c must be positive and finite")
-        if dispersion_tau <= 0.0 or not np.isfinite(dispersion_tau):
-            raise ValueError("--conic-asr-dispersion-tau must be positive and finite")
-        if eigenvalue_floor <= 0.0 or not np.isfinite(eigenvalue_floor):
-            raise ValueError("--conic-asr-dispersion-eigenvalue-floor must be positive and finite")
-
-        D_field = dispersion_tensor_field_from_velocity(
+        W_wind, G_field, _D_field, ito_drift = build_dispersion_corrected_zermelo_fields(
             W_flow,
+            grid_spacing=h,
             molecular_diffusion=float(args.pypar2_dm),
             alpha_l=float(args.pypar2_alpha_l),
             alpha_t=float(args.pypar2_alpha_t),
             velocity_floor=args.pypar2_velocity_floor,
+            dispersion_c=float(args.conic_asr_dispersion_c),
+            dispersion_tau=float(args.conic_asr_dispersion_tau),
+            eigenvalue_floor=float(args.conic_asr_dispersion_eigenvalue_floor),
+            velocity_multiplier=velocity_multiplier,
         )
-        G_field = np.zeros_like(D_field)
-        scale = dispersion_tau / (dispersion_c * dispersion_c)
-        for j in range(D_field.shape[0]):
-            for i in range(D_field.shape[1]):
-                eigvals, eigvecs = np.linalg.eigh(D_field[j, i])
-                eigvals = np.maximum(eigvals, eigenvalue_floor)
-                G_field[j, i] = eigvecs @ np.diag(scale / eigvals) @ eigvecs.T
-    elif str(args.conic_asr_self_velocity) != "unit":
+        W_darcy_display = velocity_multiplier * W_flow
+        ito_drift_display = velocity_multiplier * ito_drift
+    elif str(args.conic_asr_self_velocity) == "unit":
+        W_wind = W_flow * velocity_multiplier
+        G_field = None
+        W_darcy_display = W_wind
+        ito_drift_display = np.zeros_like(W_wind)
+    else:
         raise ValueError(f"Unsupported conic ASR self velocity: {args.conic_asr_self_velocity!r}")
-    return W_wind, G_field
+    return W_wind, G_field, W_darcy_display, ito_drift_display
 
 
 def solve_conic_asr_path(
@@ -355,7 +351,7 @@ def solve_conic_asr_path(
     h: float,
     args: argparse.Namespace,
 ) -> tuple[np.ndarray, np.ndarray, float, tuple[int, int]]:
-    W_wind, G_field = build_conic_asr_fields(W_cell, args)
+    W_wind, G_field, _W_darcy_display, _ito_drift_display = build_conic_asr_fields(W_cell, args, h=h)
     solver = MixedFMASR2D.from_velocity_field(
         W_wind,
         h=h,
@@ -733,7 +729,7 @@ def visualize_conic_asr_indicatrix_field(
     matplotlib.use("Agg")
     import matplotlib.pyplot as local_plt
 
-    W_wind, G_field = build_conic_asr_fields(W_cell, args)
+    W_wind, G_field, W_darcy_display, ito_drift_display = build_conic_asr_fields(W_cell, args, h=h)
     ny, nx = W_wind.shape[:2]
     lambda_threshold = float(args.conic_asr_lambda_threshold)
 
@@ -753,7 +749,9 @@ def visualize_conic_asr_indicatrix_field(
     sample_js = np.arange(0, ny, stride, dtype=int)
     sample_is = np.arange(0, nx, stride, dtype=int)
 
-    glyphs: list[tuple[float, float, np.ndarray, np.ndarray, np.ndarray]] = []
+    glyphs: list[
+        tuple[float, float, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
+    ] = []
     finite_radii: list[float] = []
     for j in sample_js:
         for i in sample_is:
@@ -775,7 +773,9 @@ def visualize_conic_asr_indicatrix_field(
             if finite.size == 0:
                 continue
             finite_radii.extend(finite.tolist())
-            glyphs.append((x0, y0, conic_points, ellipse_points, wind))
+            darcy = np.asarray(W_darcy_display[j, i], dtype=float)
+            ito_drift = np.asarray(ito_drift_display[j, i], dtype=float)
+            glyphs.append((x0, y0, conic_points, ellipse_points, wind, darcy, ito_drift))
 
     if not glyphs or not finite_radii:
         raise RuntimeError("No finite FM-ASR-conic indicatrix points were available to plot")
@@ -784,6 +784,29 @@ def visualize_conic_asr_indicatrix_field(
     if not np.isfinite(max_radius) or max_radius <= 0.0:
         max_radius = 1.0
     plot_scale = float(args.conic_indicatrix_glyph_scale) * stride * h / max_radius
+    darcy_norms = np.asarray(
+        [np.linalg.norm(darcy) for *_unused, darcy, _ito_drift in glyphs],
+        dtype=float,
+    )
+    drift_norms = np.asarray(
+        [np.linalg.norm(ito_drift) for *_unused, _darcy, ito_drift in glyphs],
+        dtype=float,
+    )
+    ratio = np.full_like(drift_norms, np.nan, dtype=float)
+    ratio_mask = darcy_norms > 0.0
+    ratio[ratio_mask] = drift_norms[ratio_mask] / darcy_norms[ratio_mask]
+    finite_ratio = ratio[np.isfinite(ratio)]
+    ratio_text = "No finite |div(D)|/|Darcy| ratios"
+    if finite_ratio.size:
+        ratio_text = (
+            f"|div(D)|/|Darcy| on plotted glyphs: "
+            f"mean={float(np.mean(finite_ratio)):.3g}, "
+            f"median={float(np.median(finite_ratio)):.3g}, "
+            f"min={float(np.min(finite_ratio)):.3g}, "
+            f"max={float(np.max(finite_ratio)):.3g}, "
+            f"n={int(finite_ratio.size)}"
+        )
+    print(ratio_text)
 
     fig, ax = local_plt.subplots(figsize=(8.5, 8.0), constrained_layout=True)
     if K_field is not None:
@@ -799,9 +822,15 @@ def visualize_conic_asr_indicatrix_field(
 
     centers_x: list[float] = []
     centers_y: list[float] = []
-    quiver_u: list[float] = []
-    quiver_v: list[float] = []
-    for x0, y0, conic_points, ellipse_points, wind in glyphs:
+    darcy_u: list[float] = []
+    darcy_v: list[float] = []
+    drift_start_x: list[float] = []
+    drift_start_y: list[float] = []
+    drift_u: list[float] = []
+    drift_v: list[float] = []
+    endpoint_x: list[float] = []
+    endpoint_y: list[float] = []
+    for x0, y0, conic_points, ellipse_points, _wind, darcy, ito_drift in glyphs:
         ax.plot(
             x0 + plot_scale * ellipse_points[:, 0],
             y0 + plot_scale * ellipse_points[:, 1],
@@ -821,14 +850,24 @@ def visualize_conic_asr_indicatrix_field(
         )
         centers_x.append(x0)
         centers_y.append(y0)
-        quiver_u.append(plot_scale * wind[0])
-        quiver_v.append(plot_scale * wind[1])
+        darcy_dx = plot_scale * darcy[0]
+        darcy_dy = plot_scale * darcy[1]
+        drift_dx = plot_scale * ito_drift[0]
+        drift_dy = plot_scale * ito_drift[1]
+        darcy_u.append(darcy_dx)
+        darcy_v.append(darcy_dy)
+        drift_start_x.append(x0 + darcy_dx)
+        drift_start_y.append(y0 + darcy_dy)
+        drift_u.append(drift_dx)
+        drift_v.append(drift_dy)
+        endpoint_x.append(x0 + darcy_dx + drift_dx)
+        endpoint_y.append(y0 + darcy_dy + drift_dy)
 
     ax.quiver(
         centers_x,
         centers_y,
-        quiver_u,
-        quiver_v,
+        darcy_u,
+        darcy_v,
         angles="xy",
         scale_units="xy",
         scale=1.0,
@@ -840,6 +879,49 @@ def visualize_conic_asr_indicatrix_field(
         alpha=0.95,
         zorder=5,
     )
+    ax.quiver(
+        drift_start_x,
+        drift_start_y,
+        drift_u,
+        drift_v,
+        angles="xy",
+        scale_units="xy",
+        scale=1.0,
+        color="tab:orange",
+        width=0.0026,
+        headwidth=3.8,
+        headlength=4.6,
+        headaxislength=4.0,
+        alpha=0.95,
+        zorder=6,
+    )
+    ax.scatter(
+        endpoint_x,
+        endpoint_y,
+        s=8,
+        color="tab:orange",
+        edgecolors="white",
+        linewidths=0.25,
+        alpha=0.95,
+        zorder=7,
+    )
+    ax.text(
+        0.02,
+        0.02,
+        ratio_text,
+        transform=ax.transAxes,
+        ha="left",
+        va="bottom",
+        fontsize=8,
+        color="white",
+        bbox={
+            "boxstyle": "round,pad=0.28",
+            "facecolor": "black",
+            "edgecolor": "white",
+            "alpha": 0.65,
+        },
+        zorder=8,
+    )
     ax.set_title("FM-ASR-conic indicatrix")
     ax.set_xlabel("x")
     ax.set_ylabel("y")
@@ -849,7 +931,18 @@ def visualize_conic_asr_indicatrix_field(
         handles=[
             Line2D([0], [0], color="cyan", linestyle=(0, (3, 2)), linewidth=1.3, label="W + dispersion ellipse"),
             Line2D([0], [0], color="black", linewidth=1.3, label="conic FM-ASR branch"),
-            Line2D([0], [0], color="white", linewidth=2.0, label="advection W"),
+            Line2D([0], [0], color="white", linewidth=2.0, label="Darcy velocity"),
+            Line2D([0], [0], color="tab:orange", linewidth=2.0, label="Ito drift div(D)"),
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="none",
+                markerfacecolor="tab:orange",
+                markeredgecolor="white",
+                markersize=4,
+                label="v_a endpoint",
+            ),
         ],
         loc="upper right",
         frameon=True,

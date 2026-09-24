@@ -168,7 +168,7 @@ Notes:
   - `savgol2d`: separable 2D Savitzky-Golay gradient on the full field grid, then dot with path normal (window controlled by `--curvature-savgol-window`/`--curvature-savgol-poly`).
   - `spline2d`: `RectBivariateSpline` fitted to the field with analytic ∂/∂n at path points — no finite-difference offset needed (smoothing controlled by `--normal-deriv-spline2d-smooth`; `s=0` is interpolating, `s>0` smoothing).
   - `mls_frenet`: Moving Least Squares quadratic polynomial `f(s,n) ≈ c₁s²+c₂n²+c₃sn+c₄s+c₅n+c₆` fitted in the Frenet-Serret frame at each path point — the `c₅` coefficient gives ∂f/∂n directly. Patch half-widths controlled by `--normal-deriv-mls-ns` (tangent direction) and `--normal-deriv-mls-nn` (normal direction).
-- Step 5 now evaluates curvature, normals, and normal-derivative terms on the same spline curve, and the residual panel includes FP `\kappa+\partial_N \ln|v|` together with multiple LRP comparisons (`\kappa+\partial_N \ln K`, `\kappa+\partial_N \ln|v|`, and `\kappa+\partial_N \ln K+\partial_N \ln|\nabla h|`).
+- Step 5 evaluates curvature, normals, and normal-derivative terms on the same resampled curve. The curvature-balance figure uses `K_S=P grad(log|grad h|)`, `K_E°=-P grad(log K)`, and `K_E=-P grad(log(K|grad h|))`. Its first three panels compare velocity-direction curvature against `K_S` on the particle-tracked streamline and travel-time-Hessian curvatures against `K_E°` and `K_E` on their respective Eikonal paths. The fourth panel contains only `-K_E` evaluated along `gamma_E°*` and `kappa_S(gamma_S*)-kappa_E°(gamma_E°*)`; `kappa_S` is interpolated from its own normalized-arclength grid onto the `gamma_E°*` grid before subtraction. Coordinate-differentiated curve curvature remains available in diagnostics but is not used as the left-hand side in these panels.
 - The local linearized-FP backtracking now ranks neighbors by travel-time drop per unit step length, reducing diagonal bias in the discrete descent path.
 - Spatial axes are normalized as `x/I_Y` and `y/I_Y`.
 - Arrival-time background is normalized as `T_min/t_ref`, with `t_ref = I_Y / (k_g * dh)`.
@@ -196,6 +196,7 @@ Notes:
   - `STEP5_PYTHON=/path/to/python` chooses the interpreter
   - `STEP5_PYTHONPATH=/path/to/DataAnalysis/scripts` overrides the Step 5 `PYTHONPATH`
   - `STEP5_LOCAL_BACKEND=gpu|cpu` overrides the local backend preference
+- On Apple Silicon, `submit_step5_mac_m4.sh` uses the existing `taichi` Conda environment by default and uses `NORMAL_DERIV_METHOD=direct` so curvature right-hand sides are evaluated from the `h` and `K` fields. This setting does not select the left-hand-side curvature estimator: `S` uses velocity-direction derivatives, while `E°` and `E` use their travel-time Hessians. Override settings through environment variables; no additional environment is required.
   - `FLOWSIM_PATH=/path/to/FlowSimulation` overrides the sibling checkout path
 - When local execution resolves to CPU, the launcher disables snapshot capture automatically because Step 5 snapshots currently require `--solver pollock --backend gpu`.
 - Step 5 FMM backtracking still defaults to `--fmm-backtracking discrete`.
