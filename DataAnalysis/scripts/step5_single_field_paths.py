@@ -79,7 +79,7 @@ def configure_style():
     plt.rcParams["axes.titlesize"] = 16
     plt.rcParams["xtick.labelsize"] = 13
     plt.rcParams["ytick.labelsize"] = 13
-    plt.rcParams["legend.fontsize"] = 12
+    plt.rcParams["legend.fontsize"] = 8
 
 @dataclass(slots=True)
 class SelectedRun:
@@ -1813,15 +1813,15 @@ def _plot_common_overlays(
     )
     ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="black"), pe.Normal()])
     ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="black"), pe.Normal()])
-    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_pypar2 is not None and len(result.fp_pypar2) >= 2:
-            ax.plot(result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y, color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{D}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+            ax.plot(result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y, color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{D}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
-        ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{R}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+        ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{E}^\circ}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
-    #     ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathcal{FSM}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    #     ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{FSM}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
 
     # if fp_diag is not None:
     #     ax.plot(
@@ -1855,7 +1855,7 @@ def _plot_common_overlays(
     ax.set_xlabel(r"$x/I_Y$")
     ax.set_ylabel(r"$y/I_Y$")
     ax.set_aspect("equal", adjustable="box")
-    ax.legend(fontsize="8", loc="best", facecolor="white", edgecolor="black", framealpha=1.0)
+    ax.legend(fontsize="8", loc="upper left", bbox_to_anchor=(0.05, 1.0), facecolor="white", edgecolor="black", framealpha=1.0)
 
 
 def _coerce_velocity_for_streamplot(result: PathSolveResult) -> tuple[np.ndarray, np.ndarray]:
@@ -3426,7 +3426,7 @@ def plot_curvature_balance(
     # diagnostic intentionally contains only S, E^circ, and E comparisons.
     del fm_asr_diag
 
-    fig, axes = plt.subplots(4, 1, figsize=(7, 12), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(4, 7), sharex=True)
     lw = 1.2
     rhs_alpha = 0.65
 
@@ -3476,17 +3476,17 @@ def plot_curvature_balance(
         )
         ax.axhline(0.0, color="0.7", linewidth=1.0)
         ax.set_ylabel(ylabel)
-        ax.legend(fontsize=8, loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
-        ax.text(
-            0.98,
-            0.96,
-            rf"$r={r_value:.2f}$",
-            transform=ax.transAxes,
-            ha="right",
-            va="top",
-            fontsize=8,
-            bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=1.0),
-        )
+        ax.legend(loc="upper left", facecolor="white", edgecolor="black", framealpha=1.0)
+        # ax.text(
+        #     0.98,
+        #     0.96,
+        #     rf"$r={r_value:.2f}$",
+        #     transform=ax.transAxes,
+        #     ha="right",
+        #     va="top",
+        #     fontsize=8,
+        #     bbox=dict(boxstyle="round,pad=0.3", facecolor="white", edgecolor="black", alpha=1.0),
+        # )
 
     if streamline_diag is not None:
         kappa_streamline = (
@@ -3500,14 +3500,11 @@ def plot_curvature_balance(
             kappa_streamline,
             streamline_diag.dloggradh_dn,
             lhs_label=(
-                r"$\kappa_{\mathsf{S}}="
-                r"\mathbf{n}_{\mathsf{S}}\!\cdot"
-                r"[(\widehat{\mathbf{v}}\!\cdot\nabla)\widehat{\mathbf{v}}]$"
+                r"$\kappa_{\mathsf{S}}^{\star}$"
             ),
             rhs_label=(
-                r"$\mathbf{n}_{\mathsf{S}}\!\cdot\mathscr{K}_{\mathsf{S}}"
-                r"(\gamma_{\mathsf{S}}^{\star},\dot{\gamma}_{\mathsf{S}}^{\star})"
-                r"=\partial_{\mathbf{n}_{\mathsf{S}}}\ln\|\nabla h\|$"
+                r"${\varkappa}_{\mathsf{S}}"
+                r"(\gamma_{\mathsf{S}}^{\star},\dot{\gamma}_{\mathsf{S}}^{\star})$"
             ),
             ylabel=r"$\mathsf{S}\ [\times I_Y]$",
             color=COLORS["fp"],
@@ -3525,11 +3522,10 @@ def plot_curvature_balance(
             else np.full_like(lrp_diag.s_norm, np.nan)
         ),
         -lrp_diag.dlogk_dn,
-        lhs_label=r"$\kappa_{\mathsf{E}^{\circ}}$ (from $\nabla^2T_{\mathsf{E}^{\circ}}$)",
+        lhs_label=r"$\kappa_{\mathsf{E}^{\circ}}^{\star}$",
         rhs_label=(
-            r"$\mathbf{n}_{\mathsf{E}^{\circ}}\!\cdot\mathscr{K}_{\mathsf{E}^{\circ}}"
-            r"(\gamma_{\mathsf{E}^{\circ}}^{\star},\dot{\gamma}_{\mathsf{E}^{\circ}}^{\star})"
-            r"=-\partial_{\mathbf{n}_{\mathsf{E}^{\circ}}}\ln K$"
+            r"${\varkappa}_{\mathsf{E}^{\circ}}"
+            r"(\gamma_{\mathsf{E}^{\circ}}^{\star},\dot{\gamma}_{\mathsf{E}^{\circ}}^{\star})$"
         ),
         ylabel=r"$\mathsf{E}^{\circ}\ [\times I_Y]$",
         color=COLORS["lrpFMM"],
@@ -3544,11 +3540,10 @@ def plot_curvature_balance(
             else np.full_like(fp_diag.s_norm, np.nan)
         ),
         -fp_diag.dlogv_dn,
-        lhs_label=r"$\kappa_{\mathsf{E}}$ (from $\nabla^2T_{\mathsf{E}}$)",
+        lhs_label=r"$\kappa_{\mathsf{E}}^{\star}$",
         rhs_label=(
-            r"$\mathbf{n}_{\mathsf{E}}\!\cdot\mathscr{K}_{\mathsf{E}}"
-            r"(\gamma_{\mathsf{E}}^{\star},\dot{\gamma}_{\mathsf{E}}^{\star})"
-            r"=-\partial_{\mathbf{n}_{\mathsf{E}}}\ln(K\|\nabla h\|)$"
+            r"${\varkappa}_{\mathsf{E}}"
+            r"(\gamma_{\mathsf{E}}^{\star},\dot{\gamma}_{\mathsf{E}}^{\star})$"
         ),
         ylabel=r"$\mathsf{E}\ [\times I_Y]$",
         color=COLORS["fpFMM"],
@@ -3573,28 +3568,29 @@ def plot_curvature_balance(
         _draw_comparison(
             axes[3],
             lrp_diag,
-            lrp_diag.dlogv_dn,
-            kappa_s_on_ecirc_s - kappa_ecirc,
+            lhs=kappa_s_on_ecirc_s - kappa_ecirc,
+            rhs=lrp_diag.dlogv_dn,
             lhs_label=(
-                r"$-\mathbf{n}_{\mathsf{E}^{\circ}}\!\cdot\mathscr{K}_{\mathsf{E}}"
-                r"(\gamma_{\mathsf{E}^{\circ}}^{\star},\dot{\gamma}_{\mathsf{E}^{\circ}}^{\star})"
-                r"=\partial_{\mathbf{n}_{\mathsf{E}^{\circ}}}\ln(K\|\nabla h\|)$"
+                r"$\kappa_{\mathsf{S}}^{\star}"
+                r"-\kappa_{\mathsf{E}^{\circ}}^{\star}$"
             ),
             rhs_label=(
-                r"$\kappa_{\mathsf{S}}(\gamma_{\mathsf{S}}^{\star})"
-                r"-\kappa_{\mathsf{E}^{\circ}}(\gamma_{\mathsf{E}^{\circ}}^{\star})$"
+                r"$-{\varkappa}_{\mathsf{E}}"
+                r"(\gamma_{\mathsf{E}^{\circ}}^{\star},\dot{\gamma}_{\mathsf{E}^{\circ}}^{\star})$"
             ),
             ylabel=r"Comparison $[\times I_Y]$",
             color=COLORS["lrpFMM"],
         )
     else:
-        axes[3].text(0.5, 0.5, r"$\kappa_{\mathsf{S}}$ unavailable", ha="center", va="center", transform=axes[3].transAxes)
+        axes[3].text(0.5, 0.5, r"$\kappa_{\mathsf{S}}^{\star}$ unavailable", ha="center", va="center", transform=axes[3].transAxes)
         axes[3].set_ylabel(r"Comparison $[\times I_Y]$")
 
-    axes[3].set_xlabel(r"Normalized arclength $\ell/L$")
+    axes[3].set_xlabel(r"Normalized Arclength")
     for ax in axes:
+        ax.set_ylabel("")
         ax.set_xlim(0.0, 1.0)
         ax.grid(True, color="0.9", linewidth=0.8)
+    fig.supylabel("Normalized Curvature")
 
     finite_limits = [ax.get_ylim() for ax in axes if len(ax.lines) > 1]
     if finite_limits:

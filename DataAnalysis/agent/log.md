@@ -829,3 +829,39 @@
   - Focused Step 5 figure tests in the existing `taichi` environment.
 - Limitations/follow-up:
   - Equal normalized arclength between the two paths is not a spatial point correspondence.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Replaced the four individual y-axis labels in the Step 5 curvature-balance figure with one shared figure-level label, `Normalized curvature`.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - Focused Step 5 figure tests in the existing `taichi` environment.
+- Limitations/follow-up:
+  - None.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Removed the local `fontsize=8` override from the four curvature-panel legends so they inherit the configured global legend font size of 12 points.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+- Limitations/follow-up:
+  - None.
+
+## 2026-09-23
+- Agent/tool: Codex (GPT-5)
+- Summary: Increased the curvature-panel correlation text-box font size to 12 points to match the enlarged legends.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - None.
