@@ -138,6 +138,8 @@ PYTHONPATH=./scripts python scripts/step5_single_field_paths.py \
 Outputs:
 
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_logk_paths.png`
+- `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_grad_h_paths.pdf` (linear color scale for $\|\nabla h\|$)
+- `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_K_grad_h_speed_vertical.pdf` (vertical $K$, $\|\nabla h\|$, and $\|\mathbf{v}\|/U$ comparison with a shared x-axis)
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_arrival_paths.png`
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_speed_streamlines.png`
 - `<output_dir>/run<id>_var<value>_size<size>_mc<idx>_curvature_balance.png`
@@ -188,6 +190,22 @@ Notes:
   - `--fsm-max-steps`: maximum accepted backtracking points
 - `submit_step5_gpu.sh` now passes the FSM convergence options through to `step5_single_field_paths.py`, so batch runs can use the same update/MSE stopping controls as interactive runs.
 - The current `submit_step5_gpu.sh` defaults are slightly stricter than the interactive CLI defaults: it sets `fsm_tol="1e-8"` while leaving residual-MSE checking optional unless `fsm_mse_tol` is set explicitly.
+
+## Seeded-GRF Indicatrix Figures
+
+Use `visualize_indicatrix_paths.py` to generate one reproducible log-Gaussian conductivity field and save four separate, shared-scale indicatrix/path figures:
+
+```bash
+PYTHONPATH=./scripts python scripts/visualize_indicatrix_paths.py \
+  --config configs/visualization.default.yaml \
+  --field-size 200 \
+  --grf-std 1.0 \
+  --grf-length-scale 0.05 \
+  --grf-seed 0 \
+  --output-dir "$FIGURE_DIR"
+```
+
+The generated `logK` field is converted to `K = exp(logK)`. The outputs are named with the field size, GRF standard deviation, correlation length, and seed, and end in `_indicatrix_speed.png`, `_indicatrix_conductivity.png`, `_indicatrix_streamline.png`, and `_indicatrix_finsler.png`. By default, a combined 1×4 PDF with one shared `$K$` colorbar is also saved as `_indicatrix_combined.pdf`; its panel order is streamline, Finslerian, isotropic dynamic, and isotropic structural. Use `--no-merge-pdf` to disable it. The isotropic FMM paths use continuous (smooth) backtracking. Glyph samples default to `--indicatrix-stride 16` and can be made sparser or denser explicitly. All sampled glyph centers are marked with the same point marker; `--sample-point-stride` controls marker density independently and defaults to `--indicatrix-stride`. `--indicatrix-size` controls the common glyph-size multiplier (default `1.5`). The Finsler/Randers shape can be controlled with `--fm-asr-perp-ratio`/`--finsler-perp-ratio`, `--fm-asr-back-factor`/`--finsler-back-factor`, and `--fm-asr-min-speed`/`--finsler-min-speed`. Source/target geometry can be overridden with the same `--source-*` and `--target-*` flags as Step 5.
 - `submit_step5_gpu.sh` is now a dual-mode launcher:
   - on macOS it runs `step5_single_field_paths.py` locally, prefers `--backend gpu`, and falls back to `--backend cpu` if Taichi GPU init fails
   - on Linux with `sbatch` available it keeps the existing Slurm submission flow

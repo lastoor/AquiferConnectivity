@@ -161,6 +161,8 @@ class PathSolveResult:
     y: np.ndarray
     vx: np.ndarray
     vy: np.ndarray
+    vx_cell: np.ndarray
+    vy_cell: np.ndarray
     source_xy: np.ndarray
     target_xy: np.ndarray
     snapshots: SnapshotData | None = None
@@ -524,7 +526,12 @@ def _import_solver_modules() -> dict[str, Any]:
 
     try:
         from fmm_core.fmm import extract_path_continuous, extract_path_source_to_target, fast_marching_2d_regions
-        from fmm_core.fm_asr import FMASR2D, build_randers_from_W, extract_fm_asr_path
+        from fmm_core.fm_asr import (
+            FMASR2D,
+            build_randers_from_W,
+            extract_fm_asr_path,
+            randers_indicatrix_points,
+        )
         from fmm_core.fsm import compute_fsm_path as shared_compute_fsm_path
         from simulation import hydraulic as sim_hyd
         from simulation import particle_tracking as sim_pt
@@ -542,6 +549,7 @@ def _import_solver_modules() -> dict[str, Any]:
         "FMASR2D": FMASR2D,
         "build_randers_from_W": build_randers_from_W,
         "extract_fm_asr_path": extract_fm_asr_path,
+        "randers_indicatrix_points": randers_indicatrix_points,
         "compute_fsm_path": shared_compute_fsm_path,
         "sim_hyd": sim_hyd,
         "sim_pt": sim_pt,
@@ -1777,6 +1785,8 @@ def solve_single_field(
         y=np.asarray(y, dtype=float),
         vx=vx_pt,
         vy=vy_pt,
+        vx_cell=np.asarray(vx_cell, dtype=float),
+        vy_cell=np.asarray(vy_cell, dtype=float),
         source_xy=geometry.source_xy,
         target_xy=geometry.target_xy,
         snapshots=snapshot_data,
@@ -1813,13 +1823,13 @@ def _plot_common_overlays(
     )
     ax.plot(result.source_xy[:, 0] / i_y, result.source_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Source", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="black"), pe.Normal()])
     ax.plot(result.target_xy[:, 0] / i_y, result.target_xy[:, 1] / i_y, color="purple", linewidth=lw, linestyle='-', label="Target", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="black"), pe.Normal()])
-    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp[:, 0] / i_y, result.fp[:, 1] / i_y, color=COLORS["fp"], linestyle=LINESTYLES["fp"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{S}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_pypar2 is not None and len(result.fp_pypar2) >= 2:
             ax.plot(result.fp_pypar2[:, 0] / i_y, result.fp_pypar2[:, 1] / i_y, color=COLORS["fpPypar2"], linestyle=LINESTYLES["fpPypar2"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{D}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     if result.fp_fm_asr is not None and len(result.fp_fm_asr) >= 2:
         ax.plot(result.fp_fm_asr[:, 0] / i_y, result.fp_fm_asr[:, 1] / i_y, color=COLORS["fpFmAsr"], linestyle=LINESTYLES["fpFmAsr"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{F}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{E}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
-    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{E}^\circ}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.fp_fmm[:, 0] / i_y, result.fp_fmm[:, 1] / i_y, color=COLORS["fpFMM"], linestyle=LINESTYLES["fpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{I}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
+    ax.plot(result.lrp_fmm[:, 0] / i_y, result.lrp_fmm[:, 1] / i_y, color=COLORS["lrpFMM"], linestyle=LINESTYLES["lrpFMM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathfrak{s} \mid \mathsf{I}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
     # if result.fp_fsm is not None and len(result.fp_fsm) >= 2:
     #     ax.plot(result.fp_fsm[:, 0] / i_y, result.fp_fsm[:, 1] / i_y, color=COLORS["fpFSM"], linestyle=LINESTYLES["fpFSM"], linewidth=lw, label=r"$\gamma^{\!\star}_{\mathsf{FSM}}$", path_effects=[pe.Stroke(linewidth=1.5*lw, foreground="white"), pe.Normal()])
 
@@ -3315,6 +3325,7 @@ def plot_paths_over_field(
     norm = LogNorm() if log_scale else None
     fig, ax = plt.subplots(figsize=[5, 4])
     im = ax.imshow(field, origin="lower", norm=norm, cmap=cmap, interpolation="nearest", extent=_normalized_extent(result.x, result.y, i_y))
+    ax.set_aspect("equal", adjustable="box")
     _plot_common_overlays(ax, result, i_y, fp_diag=fp_diag, lrp_diag=lrp_diag)
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     if isinstance(im.norm, LogNorm):
@@ -3345,6 +3356,7 @@ def plot_paths_over_speed_with_streamlines(
         interpolation="nearest",
         extent=_normalized_extent(result.x, result.y, i_y),
     )
+    ax.set_aspect("equal", adjustable="box")
     x_norm = result.x / i_y
     y_norm = result.y / i_y
     ax.streamplot(
@@ -3359,6 +3371,64 @@ def plot_paths_over_speed_with_streamlines(
     _plot_common_overlays(ax, result, i_y, fp_diag=fp_diag, lrp_diag=lrp_diag)
     cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
     cbar.set_label(colorbar_label)
+    fig.tight_layout()
+    return fig
+
+
+def plot_field_comparison_vertical(
+    k_field: np.ndarray,
+    grad_h_field: np.ndarray,
+    speed_field: np.ndarray,
+    *,
+    result: PathSolveResult,
+    i_y: float,
+    fp_diag: PathBalanceDiagnostics | None = None,
+    lrp_diag: PathBalanceDiagnostics | None = None,
+):
+    """Plot K, |grad h|, and |v|/U in a shared-x three-panel figure."""
+    fig, axes = plt.subplots(3, 1, figsize=(5, 12), sharex=True)
+    fields = (k_field, grad_h_field, speed_field)
+    labels = (r"$K$", r"$\|\nabla h\|$", r"$\|\mathbf{v}\|/U$")
+    norms = (LogNorm(), None, None)
+    extent = _normalized_extent(result.x, result.y, i_y)
+
+    for index, (ax, field, label, norm) in enumerate(zip(axes, fields, labels, norms)):
+        im = ax.imshow(
+            field,
+            origin="lower",
+            norm=norm,
+            cmap=cmc.batlowW_r,
+            interpolation="nearest",
+            extent=extent,
+        )
+        ax.set_aspect("equal", adjustable="box")
+        _plot_common_overlays(ax, result, i_y, fp_diag=fp_diag, lrp_diag=lrp_diag)
+        ax.set_ylabel(r"$y/I_Y$")
+        if ax.get_legend() is not None:
+            ax.get_legend().remove()
+        if index < len(axes) - 1:
+            ax.set_xlabel("")
+        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        cbar.set_label(label)
+        if isinstance(im.norm, LogNorm):
+            cbar.locator = LogLocator(base=10)
+            cbar.formatter = LogFormatterMathtext(base=10)
+            cbar.update_ticks()
+        if index < len(axes) - 1:
+            ax.tick_params(labelbottom=False)
+
+    handles, legend_labels = axes[0].get_legend_handles_labels()
+    axes[0].legend(
+        handles,
+        legend_labels,
+        loc="upper left",
+        bbox_to_anchor=(0.02, 0.98),
+        ncol=1,
+        facecolor="white",
+        edgecolor="black",
+        framealpha=1.0,
+    )
+    axes[-1].set_xlabel(r"$x/I_Y$")
     fig.tight_layout()
     return fig
 
@@ -3426,7 +3496,7 @@ def plot_curvature_balance(
     # diagnostic intentionally contains only S, E^circ, and E comparisons.
     del fm_asr_diag
 
-    fig, axes = plt.subplots(4, 1, figsize=(4, 7), sharex=True)
+    fig, axes = plt.subplots(4, 1, figsize=(5, 10), sharex=True)
     lw = 1.2
     rhs_alpha = 0.65
 
@@ -3500,11 +3570,10 @@ def plot_curvature_balance(
             kappa_streamline,
             streamline_diag.dloggradh_dn,
             lhs_label=(
-                r"$\kappa_{\mathsf{S}}^{\star}$"
+                r"$\kappa_{\mathfrak{d} \mid \mathsf{S}}^{\star}$"
             ),
             rhs_label=(
-                r"${\varkappa}_{\mathsf{S}}"
-                r"(\gamma_{\mathsf{S}}^{\star},\dot{\gamma}_{\mathsf{S}}^{\star})$"
+                r"${\varkappa}_{\mathfrak{d} \mid \mathsf{S}}^{\star}$"
             ),
             ylabel=r"$\mathsf{S}\ [\times I_Y]$",
             color=COLORS["fp"],
@@ -3522,12 +3591,11 @@ def plot_curvature_balance(
             else np.full_like(lrp_diag.s_norm, np.nan)
         ),
         -lrp_diag.dlogk_dn,
-        lhs_label=r"$\kappa_{\mathsf{E}^{\circ}}^{\star}$",
+        lhs_label=r"$\kappa_{\mathfrak{s} \mid \mathsf{I}}^{\star}$",
         rhs_label=(
-            r"${\varkappa}_{\mathsf{E}^{\circ}}"
-            r"(\gamma_{\mathsf{E}^{\circ}}^{\star},\dot{\gamma}_{\mathsf{E}^{\circ}}^{\star})$"
+            r"${\varkappa}_{\mathfrak{s} \mid \mathsf{I}}^{\star}$"
         ),
-        ylabel=r"$\mathsf{E}^{\circ}\ [\times I_Y]$",
+        ylabel=r"$\mathsf{I}^{\circ}\ [\times I_Y]$",
         color=COLORS["lrpFMM"],
     )
 
@@ -3540,12 +3608,11 @@ def plot_curvature_balance(
             else np.full_like(fp_diag.s_norm, np.nan)
         ),
         -fp_diag.dlogv_dn,
-        lhs_label=r"$\kappa_{\mathsf{E}}^{\star}$",
+        lhs_label=r"$\kappa_{\mathfrak{d} \mid \mathsf{I}}^{\star}$",
         rhs_label=(
-            r"${\varkappa}_{\mathsf{E}}"
-            r"(\gamma_{\mathsf{E}}^{\star},\dot{\gamma}_{\mathsf{E}}^{\star})$"
+            r"${\varkappa}_{\mathfrak{d} \mid \mathsf{I}}^{\star}$"
         ),
-        ylabel=r"$\mathsf{E}\ [\times I_Y]$",
+        ylabel=r"$\mathsf{I}\ [\times I_Y]$",
         color=COLORS["fpFMM"],
     )
 
@@ -3571,12 +3638,12 @@ def plot_curvature_balance(
             lhs=kappa_s_on_ecirc_s - kappa_ecirc,
             rhs=lrp_diag.dlogv_dn,
             lhs_label=(
-                r"$\kappa_{\mathsf{S}}^{\star}"
-                r"-\kappa_{\mathsf{E}^{\circ}}^{\star}$"
+                r"$\kappa_{\mathfrak{d} \mid \mathsf{S}}^{\star}"
+                r"-\kappa_{\mathfrak{s} \mid \mathsf{I}}^{\star}$"
             ),
             rhs_label=(
-                r"$-{\varkappa}_{\mathsf{E}}"
-                r"(\gamma_{\mathsf{E}^{\circ}}^{\star},\dot{\gamma}_{\mathsf{E}^{\circ}}^{\star})$"
+                r"$-{\varkappa}_{\mathfrak{d} \mid \mathsf{I}}$"
+                r" along $\gamma_{\mathfrak{s} \mid \mathsf{I}}^{\star}$"
             ),
             ylabel=r"Comparison $[\times I_Y]$",
             color=COLORS["lrpFMM"],
@@ -4391,11 +4458,13 @@ def run_step5(
     if not np.isfinite(q_ref) or q_ref <= 0.0:
         raise ValueError(f"Invalid reference velocity q_ref={q_ref}; check k_g and dh.")
 
-    logk_path = out_dir / f"{stem}_logk_paths.png"
-    tmin_path = out_dir / f"{stem}_arrival_paths.png"
-    stream_path = out_dir / f"{stem}_speed_streamlines.png"
-    balance_path = out_dir / f"{stem}_curvature_balance.png"
-    progression_path = out_dir / f"{stem}_linearized_fp_progression.png"
+    logk_path = out_dir / f"{stem}_logk_paths.pdf"
+    grad_h_path = out_dir / f"{stem}_grad_h_paths.pdf"
+    fields_path = out_dir / f"{stem}_K_grad_h_speed_vertical.pdf"
+    tmin_path = out_dir / f"{stem}_arrival_paths.pdf"
+    stream_path = out_dir / f"{stem}_speed_streamlines.pdf"
+    balance_path = out_dir / f"{stem}_curvature_balance.pdf"
+    progression_path = out_dir / f"{stem}_linearized_fp_progression.pdf"
 
     fp_diag, lrp_diag, fm_asr_diag, streamline_diag = compute_balance_diagnostics(
         logk_field=logk_field,
@@ -4431,8 +4500,24 @@ def run_step5(
         lrp_diag=lrp_diag,
         log_scale=True,
     )
-    fig_logk.savefig(logk_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+    fig_logk.savefig(logk_path, format="pdf", bbox_inches="tight")
     plt.close(fig_logk)
+
+    grad_h_x, grad_h_y = _compute_centered_gradient(result.h, result.x, result.y)
+    grad_h_mag = np.hypot(grad_h_x, grad_h_y)
+    fig_grad_h = plot_paths_over_field(
+        grad_h_mag,
+        cmap=cmc.batlowW_r,
+        colorbar_label=r"$\|\nabla h\|$",
+        result=result,
+        i_y=i_y,
+        fp_diag=fp_diag,
+        lrp_diag=lrp_diag,
+        log_scale=False,
+    )
+    fig_grad_h.savefig(grad_h_path, format="pdf", bbox_inches="tight")
+    plt.close(fig_grad_h)
+    print(f"Saved figure: {grad_h_path}")
 
     tmin_plot = np.where(np.isfinite(result.t_min), result.t_min / t_ref, np.nan)
     fig_tmin = plot_paths_over_field(
@@ -4445,7 +4530,7 @@ def run_step5(
         lrp_diag=lrp_diag,
         log_scale=True,
     )
-    fig_tmin.savefig(tmin_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+    fig_tmin.savefig(tmin_path, format="pdf", bbox_inches="tight")
     plt.close(fig_tmin)
 
     vx_plot, vy_plot = _coerce_velocity_for_streamplot(result)
@@ -4460,8 +4545,21 @@ def run_step5(
         fp_diag=fp_diag,
         lrp_diag=lrp_diag,
     )
-    fig_stream.savefig(stream_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+    fig_stream.savefig(stream_path, format="pdf", bbox_inches="tight")
     plt.close(fig_stream)
+
+    fig_fields = plot_field_comparison_vertical(
+        np.exp(logk_field),
+        grad_h_mag,
+        speed_field,
+        result=result,
+        i_y=i_y,
+        fp_diag=fp_diag,
+        lrp_diag=lrp_diag,
+    )
+    fig_fields.savefig(fields_path, format="pdf", bbox_inches="tight")
+    plt.close(fig_fields)
+    print(f"Saved figure: {fields_path}")
 
     fig_balance = plot_curvature_balance(
         fp_diag,
@@ -4470,7 +4568,7 @@ def run_step5(
         streamline_diag=streamline_diag,
         i_y=i_y,
     )
-    fig_balance.savefig(balance_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+    fig_balance.savefig(balance_path, format="pdf", bbox_inches="tight")
     plt.close(fig_balance)
     progression_path_out: Path | None = None
     if linearized_fp:
@@ -4481,7 +4579,7 @@ def run_step5(
             result=result,
             i_y=i_y,
         )
-        fig_progression.savefig(progression_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+        fig_progression.savefig(progression_path, format="pdf", bbox_inches="tight")
         plt.close(fig_progression)
         progression_path_out = progression_path
 
@@ -4502,7 +4600,7 @@ def run_step5(
             np.where(np.isfinite(result.t_min_fm_asr), result.t_min_fm_asr / t_ref, np.nan)
             if result.t_min_fm_asr is not None else None
         )
-        isochrone_plume_path = out_dir / f"{stem}_isochrone_plume.png"
+        isochrone_plume_path = out_dir / f"{stem}_isochrone_plume.pdf"
         fig_plume = plot_isochrones_with_plume(
             logk_field,
             tmin_plot,
@@ -4520,7 +4618,7 @@ def run_step5(
             t_min_fm_asr_dimless=tmin_fm_asr_plot,
         )
         if fig_plume is not None:
-            fig_plume.savefig(isochrone_plume_path, dpi=cfg.figure_dpi, bbox_inches="tight")
+            fig_plume.savefig(isochrone_plume_path, format="pdf", bbox_inches="tight")
             plt.close(fig_plume)
             isochrone_plume_path_out = isochrone_plume_path
 

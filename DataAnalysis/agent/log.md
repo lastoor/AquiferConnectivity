@@ -843,6 +843,108 @@
 - Limitations/follow-up:
   - None.
 
+## 2026-10-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Moved the vertical legend to the upper-left inside the first stacked-field panel and replaced the detached figure-level x label with a bottom-axis label.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - Regenerated the synthetic Step 5 PDFs with `submit_step5_mac_m4.sh` in the existing `taichi` environment.
+  - Rendered `synthetic_size200_amp6_fx2_fy0p5_offsetm3_K_grad_h_speed_vertical.pdf` with `pdftoppm` and visually verified legend placement, the single x label, margins, and colorbars.
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - The upper-left legend partially overlaps the source boundary line, as accepted in the layout plan, but it does not cover the central path bundle.
+
+## 2026-10-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Narrowed the vertical field-comparison PDF to 5 inches wide and moved its single legend inside the first panel as a vertical one-column legend.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - None.
+
+## 2026-10-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Visually verified the enlarged three-panel PDF after moving the single legend above the plots and removing duplicate panel x-axis labels.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - Rendered the generated PDF with `pdftoppm` and inspected the PNG output.
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+  - Focused legacy test reaches figure generation but fails on its pre-existing expectation that output filenames end in `.png`; current Step 5 outputs `.pdf`.
+- Limitations/follow-up:
+  - None.
+
+## 2026-10-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Enlarged the vertical field-comparison PDF, moved its single path legend above the panels to avoid covering paths, and removed the duplicate abnormal shared x-axis label.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - None.
+
+## 2026-10-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Added a vertical three-panel PDF comparing $K$, $\|\nabla h\|$, and $\|\mathbf{v}\|/U$, with a shared x-axis label and one shared path legend in the top panel.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - None.
+
+## 2026-10-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Set equal data-unit aspect ratios for field-overlay plots so x- and y-axis tick spacing is visually consistent.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - None.
+
+## 2026-10-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Added a PDF path-overlay figure for the hydraulic-gradient magnitude $\|\nabla h\|$ using a linear color scale and linear colorbar ticks.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - The existing six-item `run_step5` return tuple was preserved; the new path is printed by the CLI and saved beside the other figures.
+
+## 2026-10-12
+- Agent/tool: Codex (GPT-5)
+- Summary: Fixed CLI reporting for the new gradient-magnitude PDF; the path is now printed inside `run_step5` where it is defined, avoiding a `NameError` in `main()`.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - None.
+
 ## 2026-09-23
 - Agent/tool: Codex (GPT-5)
 - Summary: Removed the local `fontsize=8` override from the four curvature-panel legends so they inherit the configured global legend font size of 12 points.

@@ -57,6 +57,8 @@ def _mock_result() -> step5.PathSolveResult:
         y=y,
         vx=vx,
         vy=vy,
+        vx_cell=vx,
+        vy_cell=vy,
         source_xy=source_xy,
         target_xy=target_xy,
         snapshots=None,
