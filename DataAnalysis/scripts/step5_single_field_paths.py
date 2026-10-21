@@ -4216,6 +4216,27 @@ def _value_slug(value: float) -> str:
     return str(f"{float(value):g}").replace("-", "m").replace(".", "p")
 
 
+def _curvature_normalization_length(
+    *,
+    logk_source: str,
+    domain_length: float,
+    field_size: int,
+    synthetic_frequency_x: float,
+) -> float:
+    """Return the length used to nondimensionalize curvature diagnostics."""
+    if logk_source != "synthetic":
+        return float(domain_length)
+    frequency_x = abs(float(synthetic_frequency_x))
+    if not np.isfinite(frequency_x) or frequency_x <= 0.0:
+        raise ValueError(
+            "Synthetic curvature normalization requires a nonzero finite "
+            "synthetic_frequency_x."
+        )
+    # The synthetic field is parameterized on x/N_x, so measure its wavelength
+    # in grid-index units: lambda_x/2 = N_x/(2*|f_x|).
+    return float(field_size) / (2.0 * frequency_x)
+
+
 def run_step5(
     cfg: step1.VisualizationConfig,
     *,
@@ -4453,6 +4474,12 @@ def run_step5(
     out_dir.mkdir(parents=True, exist_ok=True)
 
     i_y = cfg.length_scale * float(field_size)
+    curvature_normalization_length = _curvature_normalization_length(
+        logk_source=logk_source,
+        domain_length=i_y,
+        field_size=field_size,
+        synthetic_frequency_x=synthetic_frequency_x,
+    )
     t_ref = step3.compute_t_ref(cfg.k_g, dh_eff, float(field_size), cfg.length_scale)
     q_ref = cfg.k_g * dh_eff
     if not np.isfinite(q_ref) or q_ref <= 0.0:
@@ -4566,7 +4593,7 @@ def run_step5(
         lrp_diag,
         fm_asr_diag=fm_asr_diag,
         streamline_diag=streamline_diag,
-        i_y=i_y,
+        i_y=curvature_normalization_length,
     )
     fig_balance.savefig(balance_path, format="pdf", bbox_inches="tight")
     plt.close(fig_balance)

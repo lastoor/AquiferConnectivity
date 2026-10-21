@@ -843,6 +843,38 @@
 - Limitations/follow-up:
   - None.
 
+## 2026-10-19
+- Agent/tool: Codex (GPT-5)
+- Summary: Removed the physical cell-size factor from synthetic curvature normalization; the half x-wavelength is now measured in grid-index units as $N_x/(2|f_x|)$.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - Targeted curvature-normalization unit test.
+  - Regenerated the synthetic Step 5 figures with `submit_step5_mac_m4.sh` in the existing `taichi` environment.
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - Dataset and GRF runs continue to use the physical domain length $I_Y$ because they have no prescribed synthetic x-wavelength.
+
+## 2026-10-19
+- Agent/tool: Codex (GPT-5)
+- Summary: Changed synthetic Step 5 curvature normalization from the full domain length to the half x-wavelength, $\lambda_x/2=I_X/(2|f_x|)$; dataset and GRF normalization remains $I_Y$.
+- Files changed:
+  - `scripts/step5_single_field_paths.py`
+  - `tests/test_step5_single_field_paths.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - Targeted curvature-normalization unit test.
+  - Regenerated the synthetic Step 5 figures with `submit_step5_mac_m4.sh` in the existing `taichi` environment.
+  - `python -m py_compile DataAnalysis/scripts/step5_single_field_paths.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - Synthetic runs with zero x-frequency now raise a clear error because their x-wavelength is undefined.
+
 ## 2026-10-12
 - Agent/tool: Codex (GPT-5)
 - Summary: Moved the vertical legend to the upper-left inside the first stacked-field panel and replaced the detached figure-level x label with a bottom-axis label.

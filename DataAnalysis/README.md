@@ -148,6 +148,7 @@ Outputs:
 Notes:
 
 - This script re-solves paths from a selected logK field and keeps the minimal-arrival-time and velocity fields in memory for plotting.
+- For synthetic fields, curvature-balance values are normalized with the half x-wavelength in grid-index units, $\lambda_x/2=N_x/(2|f_x|)$; dataset and GRF runs retain the physical domain-length normalization $I_Y$.
 - Step 5 now uses FMM on slowness fields directly:
   unperturbed `LRP (FMM)` uses `1 / (K * |dh|)`, while `FP (FMM)` uses `1 / (K * |grad h|)`.
 - Step 5 source/target geometry is now shared across particle tracking, `LRP (FMM)`, `FP (FMM)`, and linearized `FP^i`.

@@ -85,6 +85,21 @@ def test_select_run_input_and_load_logk(pipeline_fixture) -> None:
     assert field.shape == (8, 8)
 
 
+def test_curvature_normalization_uses_half_synthetic_x_wavelength() -> None:
+    assert step5._curvature_normalization_length(
+        logk_source="synthetic",
+        domain_length=10.0,
+        field_size=200,
+        synthetic_frequency_x=2.0,
+    ) == 50.0
+    assert step5._curvature_normalization_length(
+        logk_source="dataset",
+        domain_length=10.0,
+        field_size=200,
+        synthetic_frequency_x=2.0,
+    ) == 10.0
+
+
 def test_run_step5_saves_expected_figures_with_mock_solver(pipeline_fixture, monkeypatch, tmp_path: Path) -> None:
     cfg = step1.load_config(pipeline_fixture["cfg_path"])
 
