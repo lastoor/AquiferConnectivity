@@ -999,3 +999,78 @@
   - `git diff --check`
 - Limitations/follow-up:
   - None.
+
+## 2026-10-23
+- Agent/tool: Codex (GPT-6)
+- Summary: Added paired 5,000-resample bootstrap uncertainty analysis for travel-time and LRP resistance metrics, including SD/CV confidence bands, adjacent-variance SD-difference intervals, rankings, and a CSV summary.
+- Files changed:
+  - `scripts/step4_plot.py`
+  - `scripts/step1_index.py`
+  - `configs/visualization.default.yaml`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `pytest -q tests/test_step4_plot.py`
+  - `python -m py_compile scripts/step1_index.py scripts/step4_plot.py tests/test_step4_plot.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - Bootstrap plots require the Stage 2 raw Monte Carlo cache and the configured reference field size.
+  - The targeted pytest run could not collect because `cmcrameri` is not installed in the current environment.
+  - Follow-up: Fixed the empty rank-array initialization exposed by the first real Step 4 run; syntax compilation and `git diff --check` pass after the fix.
+
+## 2026-10-23
+- Agent/tool: Codex (GPT-6)
+- Summary: Aligned bootstrap SD/CV geometry series and ordering with the first-arrival characteristic-time plot by removing FSM and FM-ASR iso/conic.
+- Files changed:
+  - `scripts/step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step4_plot.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - Full plotting tests remain unavailable in this environment because `cmcrameri` is not installed.
+
+## 2026-10-23
+- Agent/tool: Codex (GPT-6)
+- Summary: Added an opt-in Step 4 minimum-cost histogram for one variance, using normalized Stage 2 MC samples and the first-arrival plot's series and order.
+- Files changed:
+  - `scripts/step4_plot.py`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step4_plot.py tests/test_step4_plot.py`
+  - `git diff --check`
+  - Attempted `PYTHONPATH=./scripts pytest -q tests/test_step4_plot.py`; collection is blocked because `cmcrameri` is not installed in this environment.
+- Limitations/follow-up:
+  - Histogram generation requires the Stage 2 raw MC cache.
+
+## 2026-10-23
+- Agent/tool: Codex (GPT-6)
+- Summary: Extended `--minimal-cost-hist-variance` to accept multiple space-separated or comma-separated values and emit one histogram per selected variance.
+- Files changed:
+  - `scripts/step4_plot.py`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step4_plot.py tests/test_step4_plot.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - Full pytest collection is blocked by the missing `cmcrameri` dependency in this environment.
+
+## 2026-10-23
+- Agent/tool: Codex (GPT-6)
+- Summary: Added paired Pearson correlation coefficients between Pollock and each other minimum-cost histogram method, displayed in a framed annotation using the corresponding series colors.
+- Files changed:
+  - `scripts/step4_plot.py`
+  - `tests/test_step4_plot.py`
+  - `README.md`
+  - `agent/log.md`
+- Validation:
+  - `python -m py_compile scripts/step4_plot.py tests/test_step4_plot.py`
+  - `git diff --check`
+- Limitations/follow-up:
+  - Full pytest collection remains blocked by missing `cmcrameri` in this environment.

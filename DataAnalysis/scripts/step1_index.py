@@ -123,10 +123,12 @@ class VisualizationConfig:
     output_dir: Path
     figure_dpi: int = 400
     workers: int = -1
-    save_formats: list[str] = field(default_factory=lambda: ["png"])
+    save_formats: list[str] = field(default_factory=lambda: ["pdf"])
     sections: list[str] = field(
         default_factory=lambda: [
             "times",
+            "times_std",
+            "times_cv",
             "times_box",
             "taylor",
             "scatter",
@@ -258,10 +260,12 @@ def load_config(path: str | Path) -> VisualizationConfig:
         output_dir=_to_path(raw.get("output_dir", "./outputs/visualization")),
         figure_dpi=int(raw.get("figure_dpi", 400)),
         workers=int(raw.get("workers", -1)),
-        save_formats=[str(v) for v in raw.get("save_formats", ["png"])],
+        save_formats=[str(v) for v in raw.get("save_formats", ["pdf"])],
         sections=[str(v) for v in raw.get("sections", [])]
         or [
             "times",
+            "times_std",
+            "times_cv",
             "times_box",
             "taylor",
             "scatter",

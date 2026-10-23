@@ -11,8 +11,8 @@ std_values: [0.5, 1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 5.5, 6, 6.5, 7, 7.5, 8, 8.5
 
 figure_dpi: 400
 workers: -1
-save_formats: [png]
-sections: [times, times_box, comp_time_mean, comp_time_box, scatter, hausdorff, hausdorff_box, frechet, endpoint, ratio_mean, ratio_var, wasserstein_len]
+save_formats: [pdf]
+sections: [times, times_std, times_cv, times_box, comp_time_mean, comp_time_box, scatter, hausdorff, hausdorff_box, frechet, endpoint, ratio_mean, ratio_var, wasserstein_len]
 
 distance_mode:
   end_point: load_from_main_output

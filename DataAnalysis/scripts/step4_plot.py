@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import glob
 import hashlib
 import json
 import pickle
+import warnings as pywarnings
 from dataclasses import asdict, dataclass
 from datetime import timezone, datetime
 from pathlib import Path
@@ -16,9 +18,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patheffects as pe
 import cmcrameri.cm as cmc
 import numpy as np
+from matplotlib.offsetbox import AnchoredOffsetbox, TextArea, VPacker
 from scipy import constants
 from scipy.optimize import brentq
 from scipy.special import erfc, expi
+from scipy.stats import rankdata
 
 try:
     from tqdm import tqdm
@@ -56,6 +60,19 @@ LINESTYLES = {
 }
 
 LINEWIDTH = 1.5
+
+BOOTSTRAP_RESAMPLES = 5000
+BOOTSTRAP_SEED = 0
+
+TRAVEL_COST_SERIES = (
+    ("fpt", "FP (Pollock)", "fp", "-", r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{S}}$ (Pollock)", "time"),
+    ("fpt_pypar2", "FP (PAR²)", "fpPypar2", "-", r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{D}}$ (PAR$^2$)", "time"),
+    ("fpt_fm_asr", "FP (FM-ASR)", "fpFmAsr", "-", r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{F}}$ (FM-ASR)", "time"),
+    ("fpt_fmm", "FP (FMM)", "fpFMM", "-", r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{I}}$ (FMM)", "time"),
+    ("fpt_dijkstra", "FP (Dijkstra)", "fpDijkstra", ":", r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{I}}$ (Dijkstra)", "time"),
+    ("mhr_fmm", "LRP (FMM)", "lrpFMM", "-", r"$\gamma^{\!\star}_{\mathfrak{s} \mid \mathsf{I}}$ (FMM)", "resistance"),
+    ("mhr", "LRP (Dijkstra)", "lrp", ":", r"$\gamma^{\!\star}_{\mathfrak{s} \mid \mathsf{I}}$ (Dijkstra)", "resistance"),
+)
 
 
 def _apply_line_halo(
@@ -265,7 +282,7 @@ def plot_characteristic_time(
 
     # if stats_fpt_fsm is not None and np.any(np.isfinite(stats_fpt_fsm[:, 0])):
         # ax.errorbar(var, stats_fpt_fsm[:, 0] / t_ref, stats_fpt_fsm[:, 1] / t_ref, color=COLORS["fpFSM"], linestyle="-", marker="o", markerfacecolor="None", label="FP (FSM)")
-    line, = ax.plot(var, stats_fpt[:, 0] / t_ref, color=COLORS["fp"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{S}}$ (Pollock)")
+    line, = ax.plot(var, stats_fpt[:, 0] / t_ref, color=COLORS["fp"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{S}}$ (Pollock)")
     _apply_line_halo(line)
     if analytical_tmin is not None:
         line, = ax.plot(var[:5], analytical_tmin[:5], color=COLORS["fp"], linestyle=":", linewidth=LINEWIDTH, label=analytical_label, marker="x", markersize=4)
@@ -277,7 +294,7 @@ def plot_characteristic_time(
             color=COLORS["fpPypar2"],
             linestyle="-",
             linewidth=LINEWIDTH,
-            label=r"$\gamma^{\!\star}_{\mathcal{D}}$ (PyPar2)",
+            label=r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{D}}$ (PAR$^2$)",
         )
         _apply_errorbar_line_halo(container)
     if stats_fpt_fm_asr is not None and np.any(np.isfinite(stats_fpt_fm_asr[:, 0])):
@@ -287,12 +304,12 @@ def plot_characteristic_time(
             color=COLORS["fpFmAsr"],
             linestyle="-",
             linewidth=LINEWIDTH,
-            label=r"$\gamma^{\!\star}_{\mathcal{F}}$ (FM-ASR)",
+            label=r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{F}}$ (FM-ASR)",
         )
         _apply_errorbar_line_halo(container)
-    container = ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{E}}$ (FMM)")
+    container = ax.errorbar(var, stats_fpt_fmm[:, 0] / t_ref, color=COLORS["fpFMM"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{I}}$ (FMM)")
     _apply_errorbar_line_halo(container)
-    container = ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], linestyle=":", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{E}}$ (Dijkstra)")
+    container = ax.errorbar(var, stats_fpt_dijkstra[:, 0] / t_ref, color=COLORS["fpDijkstra"], linestyle=":", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{I}}$ (Dijkstra)")
     _apply_errorbar_line_halo(container)
     # if stats_fpt_fm_asr_iso is not None and np.any(np.isfinite(stats_fpt_fm_asr_iso[:, 0])):
         # ax.errorbar(
@@ -317,9 +334,9 @@ def plot_characteristic_time(
     #         label=r"FP (FM-ASR\, conic)",
     #     )
     
-    container = ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{R}}$ (FMM)")
+    container = ax.errorbar(var, stats_mhr_fmm[:, 0] / (t_ref * dh), color=COLORS["lrpFMM"], linestyle="-", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathfrak{s} \mid \mathsf{I}}$ (FMM)")
     _apply_errorbar_line_halo(container)
-    container = ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], linestyle=":", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathcal{R}}$ (Dijkstra)")
+    container = ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), color=COLORS["lrp"], linestyle=":", linewidth=LINEWIDTH, label=r"$\gamma^{\!\star}_{\mathfrak{s} \mid \mathsf{I}}$ (Dijkstra)")
     _apply_errorbar_line_halo(container)
     # ax.errorbar(var, stats_fpt[:, 0] / t_ref, stats_fpt[:, 1] / t_ref, color=COLORS["fp"], linestyle="-", marker="o", markerfacecolor="None", label="FP")
     # ax.errorbar(var, stats_mhr[:, 0] / (t_ref * dh), stats_mhr[:, 1] / (t_ref * dh), color=COLORS["lrp"], linestyle="-", marker="o", markerfacecolor="None", label="LRP")
@@ -333,6 +350,355 @@ def plot_characteristic_time(
     ax.grid(True, which="both")
     fig.tight_layout()
     return fig, {"kind": "characteristic_time"}
+
+
+def _get_member(obj: Any, key: str, default: Any = None) -> Any:
+    return obj.get(key, default) if isinstance(obj, dict) else getattr(obj, key, default)
+
+
+def extract_travel_cost_samples(
+    stage2_payload: Any,
+    variances: np.ndarray,
+    field_size_ref: float,
+    *,
+    warnings: list[str],
+) -> dict[float, dict[str, np.ndarray]]:
+    """Select paired per-MC travel-cost arrays at the configured field size."""
+    var_results = _get_member(stage2_payload, "var_results")
+    raw_by_var = _get_member(var_results, "data", {})
+    samples_by_var: dict[float, dict[str, np.ndarray]] = {}
+    for variance in np.asarray(variances, dtype=float).ravel():
+        entry = raw_by_var.get(f"var_{float(variance)}") if isinstance(raw_by_var, dict) else None
+        if entry is None:
+            warnings.append(f"Travel-cost bootstrap missing Stage 2 data for sigma2={variance:g}.")
+            continue
+        sizes = np.asarray(_get_member(entry, "field_size", []), dtype=float).ravel()
+        matched = np.flatnonzero(np.isclose(sizes, field_size_ref, rtol=0.0, atol=1e-9))
+        if matched.size == 0:
+            warnings.append(
+                f"Travel-cost bootstrap missing field_size_ref={field_size_ref:g} at sigma2={variance:g}."
+            )
+            continue
+        size_idx = int(matched[0])
+        times = _get_member(entry, "times", {})
+        selected: dict[str, np.ndarray] = {}
+        for metric_key, _, _, _, _, _ in TRAVEL_COST_SERIES:
+            metric_rows = _get_member(times, metric_key, [])
+            if size_idx >= len(metric_rows):
+                continue
+            selected[metric_key] = np.asarray(metric_rows[size_idx], dtype=float).ravel()
+        samples_by_var[float(variance)] = selected
+    return samples_by_var
+
+
+def _bootstrap_ci(values: np.ndarray) -> tuple[float, float]:
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if finite.size == 0:
+        return float("nan"), float("nan")
+    lo, hi = np.percentile(finite, [2.5, 97.5])
+    return float(lo), float(hi)
+
+
+def bootstrap_travel_cost_uncertainty(
+    variances: np.ndarray,
+    samples_by_var: dict[float, dict[str, np.ndarray]],
+    *,
+    t_ref: float,
+    dh: float,
+    bootstrap_resamples: int = BOOTSTRAP_RESAMPLES,
+    seed: int = BOOTSTRAP_SEED,
+    expected_n_mc: int = 1000,
+    warnings: list[str] | None = None,
+) -> dict[str, Any]:
+    """Compute paired percentile bootstrap intervals for SD, CV, and adjacent SD changes."""
+    warning_list = [] if warnings is None else warnings
+    var_values = np.asarray(variances, dtype=float).ravel()
+    rng = np.random.default_rng(seed)
+    bootstrap_indices = rng.integers(0, expected_n_mc, size=(bootstrap_resamples, expected_n_mc))
+    metric_results: dict[str, dict[str, Any]] = {}
+    bootstrap_sds: dict[str, list[np.ndarray]] = {}
+
+    for metric_key, display_name, color_key, linestyle, label, scale_kind in TRAVEL_COST_SERIES:
+        scale = t_ref if scale_kind == "time" else t_ref * dh
+        points: dict[str, list[float]] = {
+            name: []
+            for name in (
+                "mean", "sd", "sd_ci_lower", "sd_ci_upper", "cv", "cv_ci_lower", "cv_ci_upper", "n_mc",
+            )
+        }
+        points["sd_rank"] = np.full(var_values.size, np.nan, dtype=float)
+        points["cv_rank"] = np.full(var_values.size, np.nan, dtype=float)
+        bootstrap_sds[metric_key] = []
+        for variance in var_values:
+            samples = samples_by_var.get(float(variance), {}).get(metric_key)
+            if samples is None or samples.size != expected_n_mc:
+                if samples is not None:
+                    warning_list.append(
+                        f"Travel-cost bootstrap {metric_key} at sigma2={variance:g} has {samples.size} MC rows; "
+                        f"expected {expected_n_mc}; skipped."
+                    )
+                clean = np.full(expected_n_mc, np.nan, dtype=float)
+            else:
+                clean = np.asarray(samples, dtype=float).copy()
+                clean[~np.isfinite(clean) | (clean <= 0.0)] = np.nan
+
+            finite = clean[np.isfinite(clean)]
+            if finite.size == 0:
+                point_mean = point_sd = point_cv = float("nan")
+                boot_sd = np.full(bootstrap_resamples, np.nan, dtype=float)
+                boot_cv = np.full(bootstrap_resamples, np.nan, dtype=float)
+                warning_list.append(f"Travel-cost bootstrap {metric_key} has no positive samples at sigma2={variance:g}.")
+            else:
+                point_mean = float(np.mean(finite))
+                point_sd = float(np.std(finite, ddof=0))
+                point_cv = point_sd / point_mean if point_mean > 0 else float("nan")
+                sampled = clean[bootstrap_indices]
+                with pywarnings.catch_warnings():
+                    pywarnings.simplefilter("ignore", category=RuntimeWarning)
+                    boot_means = np.nanmean(sampled, axis=1)
+                    boot_sd = np.nanstd(sampled, axis=1, ddof=0)
+                boot_cv = np.divide(
+                    boot_sd,
+                    boot_means,
+                    out=np.full_like(boot_sd, np.nan),
+                    where=np.isfinite(boot_means) & (boot_means > 0),
+                )
+            sd_lo, sd_hi = _bootstrap_ci(boot_sd / scale)
+            cv_lo, cv_hi = _bootstrap_ci(boot_cv)
+            points["mean"].append(point_mean / scale)
+            points["sd"].append(point_sd / scale)
+            points["sd_ci_lower"].append(sd_lo)
+            points["sd_ci_upper"].append(sd_hi)
+            points["cv"].append(point_cv)
+            points["cv_ci_lower"].append(cv_lo)
+            points["cv_ci_upper"].append(cv_hi)
+            points["n_mc"].append(int(finite.size))
+            bootstrap_sds[metric_key].append(boot_sd / scale)
+        metric_results[metric_key] = {
+            "display_name": display_name,
+            "color": COLORS[color_key],
+            "linestyle": linestyle,
+            "label": label,
+            "scale_kind": scale_kind,
+            **{
+                key: np.asarray(values, dtype=float) if isinstance(values, list) else values
+                for key, values in points.items()
+            },
+        }
+
+    for idx in range(var_values.size):
+        sd_values = np.asarray([entry["sd"][idx] for entry in metric_results.values()], dtype=float)
+        cv_values = np.asarray([entry["cv"][idx] for entry in metric_results.values()], dtype=float)
+        sd_ranks = np.full(sd_values.size, np.nan)
+        cv_ranks = np.full(cv_values.size, np.nan)
+        valid = np.isfinite(sd_values)
+        if np.any(valid):
+            sd_ranks[valid] = rankdata(-sd_values[valid], method="average")
+        valid = np.isfinite(cv_values)
+        if np.any(valid):
+            cv_ranks[valid] = rankdata(-cv_values[valid], method="average")
+        for metric_idx, entry in enumerate(metric_results.values()):
+            entry["sd_rank"][idx] = sd_ranks[metric_idx]
+            entry["cv_rank"][idx] = cv_ranks[metric_idx]
+
+    adjacent: dict[str, list[dict[str, Any]]] = {metric_key: [] for metric_key, *_ in TRAVEL_COST_SERIES}
+    for idx in range(max(var_values.size - 1, 0)):
+        left, right = float(var_values[idx]), float(var_values[idx + 1])
+        for metric_key, *_ in TRAVEL_COST_SERIES:
+            delta_boot = bootstrap_sds[metric_key][idx + 1] - bootstrap_sds[metric_key][idx]
+            finite_delta = delta_boot[np.isfinite(delta_boot)]
+            delta_lo, delta_hi = _bootstrap_ci(finite_delta)
+            sd = metric_results[metric_key]["sd"]
+            adjacent[metric_key].append({
+                "variance": left,
+                "next_variance": right,
+                "delta_sd": float(sd[idx + 1] - sd[idx]) if np.isfinite(sd[idx]) and np.isfinite(sd[idx + 1]) else float("nan"),
+                "delta_sd_ci_lower": delta_lo,
+                "delta_sd_ci_upper": delta_hi,
+                "decrease_distinguishable": bool(np.isfinite(delta_hi) and delta_hi < 0.0),
+            })
+
+    return {
+        "variances": var_values,
+        "metrics": metric_results,
+        "adjacent": adjacent,
+        "bootstrap_resamples": int(bootstrap_resamples),
+        "seed": int(seed),
+        "expected_n_mc": int(expected_n_mc),
+    }
+
+
+def write_travel_cost_uncertainty_csv(summary: dict[str, Any], output_path: Path) -> Path:
+    fields = [
+        "record_type", "geometry", "variance", "next_variance", "n_mc", "bootstrap_resamples", "seed",
+        "mean_normalized", "sd_normalized", "sd_ci_lower", "sd_ci_upper", "cv", "cv_ci_lower", "cv_ci_upper",
+        "sd_rank", "cv_rank", "delta_sd", "delta_sd_ci_lower", "delta_sd_ci_upper", "decrease_distinguishable",
+    ]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with output_path.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fields)
+        writer.writeheader()
+        for metric_key, *_ in TRAVEL_COST_SERIES:
+            metric = summary["metrics"][metric_key]
+            for idx, variance in enumerate(summary["variances"]):
+                writer.writerow({
+                    "record_type": "metric",
+                    "geometry": metric["display_name"],
+                    "variance": float(variance),
+                    "n_mc": int(metric["n_mc"][idx]),
+                    "bootstrap_resamples": summary["bootstrap_resamples"],
+                    "seed": summary["seed"],
+                    "mean_normalized": metric["mean"][idx],
+                    "sd_normalized": metric["sd"][idx],
+                    "sd_ci_lower": metric["sd_ci_lower"][idx],
+                    "sd_ci_upper": metric["sd_ci_upper"][idx],
+                    "cv": metric["cv"][idx],
+                    "cv_ci_lower": metric["cv_ci_lower"][idx],
+                    "cv_ci_upper": metric["cv_ci_upper"][idx],
+                    "sd_rank": metric["sd_rank"][idx],
+                    "cv_rank": metric["cv_rank"][idx],
+                })
+            for delta in summary["adjacent"][metric_key]:
+                writer.writerow({
+                    "record_type": "adjacent_sd",
+                    "geometry": metric["display_name"],
+                    "variance": delta["variance"],
+                    "next_variance": delta["next_variance"],
+                    "bootstrap_resamples": summary["bootstrap_resamples"],
+                    "seed": summary["seed"],
+                    "delta_sd": delta["delta_sd"],
+                    "delta_sd_ci_lower": delta["delta_sd_ci_lower"],
+                    "delta_sd_ci_upper": delta["delta_sd_ci_upper"],
+                    "decrease_distinguishable": delta["decrease_distinguishable"],
+                })
+    return output_path
+
+
+def _plot_travel_cost_bootstrap(var: np.ndarray, summary: dict[str, Any], *, stat: str, ci_prefix: str, ylabel: str, kind: str):
+    fig, ax = plt.subplots(figsize=[7, 4])
+    for metric in summary["metrics"].values():
+        y = metric[stat]
+        lower = metric[f"{ci_prefix}_ci_lower"]
+        upper = metric[f"{ci_prefix}_ci_upper"]
+        color = metric["color"]
+        ax.fill_between(var, lower, upper, color=color, alpha=0.14, linewidth=0)
+        line, = ax.plot(var, y, color=color, linestyle=metric["linestyle"], linewidth=LINEWIDTH, label=metric["label"])
+        _apply_line_halo(line)
+    ax.set_xlabel(r"$\sigma_{Y}^2$")
+    ax.set_ylabel(ylabel)
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize="9")
+    ax.grid(True, which="both")
+    fig.tight_layout()
+    return fig, {"kind": kind, "bootstrap_resamples": summary["bootstrap_resamples"], "seed": summary["seed"]}
+
+
+def plot_characteristic_time_std(var: np.ndarray, summary: dict[str, Any]):
+    return _plot_travel_cost_bootstrap(
+        var,
+        summary,
+        stat="sd",
+        ci_prefix="sd",
+        ylabel=r"$\mathrm{Std}\left[ t\!^\star \right] U / I_Y$",
+        kind="characteristic_time_std_bootstrap",
+    )
+
+
+def plot_characteristic_time_cv(var: np.ndarray, summary: dict[str, Any]):
+    return _plot_travel_cost_bootstrap(
+        var,
+        summary,
+        stat="cv",
+        ci_prefix="cv",
+        ylabel=r"$\mathrm{CV}(t\!^\star)$",
+        kind="characteristic_time_cv_bootstrap",
+    )
+
+
+def plot_minimal_cost_histogram(
+    samples: dict[str, np.ndarray],
+    *,
+    variance_value: float,
+    t_ref: float,
+    dh: float,
+    bins: int = 40,
+):
+    """Plot normalized per-MC minimum-cost distributions for the first-arrival methods."""
+    if bins < 1:
+        raise ValueError(f"bins must be >= 1, got {bins}.")
+
+    series: list[tuple[str, np.ndarray, Any, str, str]] = []
+    for metric_key, display_name, color_key, linestyle, label, scale_kind in TRAVEL_COST_SERIES:
+        values = np.asarray(samples.get(metric_key, []), dtype=float).ravel()
+        scale = t_ref if scale_kind == "time" else t_ref * dh
+        finite = values[np.isfinite(values) & (values > 0.0)] / scale
+        if finite.size:
+            series.append((display_name, finite, COLORS[color_key], linestyle, label))
+    if not series:
+        raise ValueError(f"No finite positive minimum-cost samples for sigma2={variance_value:g}.")
+
+    pollock = np.asarray(samples.get("fpt", []), dtype=float).ravel()
+    correlations: dict[str, dict[str, float | int | None]] = {}
+    for metric_key, display_name, color_key, _, _, _ in TRAVEL_COST_SERIES[1:]:
+        values = np.asarray(samples.get(metric_key, []), dtype=float).ravel()
+        n_pair = min(pollock.size, values.size)
+        x = pollock[:n_pair]
+        y = values[:n_pair]
+        paired = np.isfinite(x) & np.isfinite(y) & (x > 0.0) & (y > 0.0)
+        x_pair = x[paired]
+        y_pair = y[paired]
+        if x_pair.size >= 2 and np.std(x_pair) > 0.0 and np.std(y_pair) > 0.0:
+            correlation = float(np.corrcoef(x_pair, y_pair)[0, 1])
+        else:
+            correlation = None
+        correlations[display_name] = {"r": correlation, "n": int(x_pair.size), "color": COLORS[color_key]}
+
+    all_values = np.concatenate([entry[1] for entry in series])
+    bin_edges = np.histogram_bin_edges(all_values, bins=bins)
+    fig, ax = plt.subplots(figsize=[10, 5])
+    fig.subplots_adjust(right=0.68)
+    for _, values, color, linestyle, label in series:
+        density, _ = np.histogram(values, bins=bin_edges, density=True)
+        stairs = ax.stairs(density, bin_edges, color=color, linestyle=linestyle, linewidth=LINEWIDTH, label=label)
+        stairs.set_path_effects([
+            pe.Stroke(linewidth=1.5 * LINEWIDTH, foreground="white"),
+            pe.Normal(),
+        ])
+    ax.set_xlabel(r"Minimum cost, $tU/I_Y$")
+    ax.set_ylabel("Density")
+    ax.set_title(fr"Minimum-cost distribution ($\sigma_Y^2={variance_value:g}$)")
+    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize="8")
+    corr_text = [TextArea("Pearson r vs Pollock", textprops={"color": "black", "weight": "bold", "size": 9})]
+    for display_name, result in correlations.items():
+        r_value = "n/a" if result["r"] is None else f"{result['r']:.3f}"
+        corr_text.append(
+            TextArea(
+                f"{display_name}: {r_value} (n={result['n']})",
+                textprops={"color": result["color"], "size": 8},
+            )
+        )
+    corr_box = AnchoredOffsetbox(
+        loc="upper left",
+        child=VPacker(children=corr_text, align="left", pad=0, sep=3),
+        pad=0.35,
+        frameon=True,
+        bbox_to_anchor=(1.02, 0.53),
+        bbox_transform=ax.transAxes,
+        borderpad=0.0,
+    )
+    ax.add_artist(corr_box)
+    ax.grid(True, which="both")
+    return fig, {
+        "kind": "minimal_cost_histogram",
+        "variance": float(variance_value),
+        "bins": int(bins),
+        "bin_edges": bin_edges.tolist(),
+        "series": [entry[0] for entry in series],
+        "pearson_correlations_vs_pollock": {
+            name: {"r": result["r"], "n": result["n"]}
+            for name, result in correlations.items()
+        },
+    }
 
 
 def plot_scatter_tmin_vs_rmin(
@@ -653,7 +1019,7 @@ def plot_hausdorff_vs_variance(
         container = ax.errorbar(
             var,
             stats_hausdorff_pypar2[:, 0] / i_y,
-            label="FP (PyPar2)",
+            label="FP (PAR$^2$)",
             linestyle="-",
             linewidth=LINEWIDTH,
             color=COLORS["fpPypar2"],
@@ -733,7 +1099,7 @@ def plot_frechet_vs_variance(
             var,
             stats_frechet_pypar2[:, 0] / i_y,
             yerr=stats_frechet_pypar2[:, 1] / i_y,
-            label=r"$d_F$[FP,\,PyPar2]",
+            label=r"$d_F$[FP,\,PAR$^2$]",
             linestyle="-",
             color=COLORS["fpPypar2"],
             marker="o",
@@ -763,7 +1129,7 @@ def plot_endpoint_box_by_variance(
         ("fp_fm_asr", r"$d_{EP}$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"$d_{EP}$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
         ("fp_fm_asr_conic", r"$d_{EP}$[FP,\,FM-ASR\,conic]", COLORS["fpFmAsrConic"]),
-        ("fp_pypar2", r"$d_{EP}$[FP,\,PyPar2]", COLORS["fpPypar2"]),
+        ("fp_pypar2", r"$d_{EP}$[FP,\,PAR$^2$]", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
     width = 0.11
@@ -833,7 +1199,7 @@ def plot_hausdorff_box_by_variance(
         ("fp_fm_asr", r"$d_H$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"$d_H$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
         ("fp_fm_asr_conic", r"$d_H$[FP,\,FM-ASR\,conic]", COLORS["fpFmAsrConic"]),
-        ("fp_pypar2", r"$d_H$[FP,\,PyPar2]", COLORS["fpPypar2"]),
+        ("fp_pypar2", r"$d_H$[FP,\,PAR$^2$]", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
     width = 0.1
@@ -890,7 +1256,7 @@ _HAUSDORFF_CDF_PAIRS = (
     ("fp_fm_asr", r"$d_H$[FP,\,FM-ASR]", COLORS["fpFmAsr"]),
     ("fp_fm_asr_iso", r"$d_H$[FP,\,FM-ASR\,iso]", COLORS["fpFmAsrIso"]),
     ("fp_fm_asr_conic", r"$d_H$[FP,\,FM-ASR\,conic]", COLORS["fpFmAsrConic"]),
-    ("fp_pypar2", r"$d_H$[FP,\,PyPar2]", COLORS["fpPypar2"]),
+    ("fp_pypar2", r"$d_H$[FP,\,PAR$^2$]", COLORS["fpPypar2"]),
 )
 
 
@@ -931,7 +1297,7 @@ _ENTROPY_HAUSDORFF_PANELS = (
     ("fp_fm_asr", "FP (FM-ASR)"),
     ("fp_fm_asr_iso", r"FP (FM-ASR\, iso)"),
     ("fp_fm_asr_conic", r"FP (FM-ASR\, conic)"),
-    ("fp_pypar2", "FP (PyPar2)"),
+    ("fp_pypar2", "FP (PAR$^2$)"),
     ("fp_lrpFMM", "LRP (FMM)"),
     ("fp_lrp", "LRP (Dijkstra)"),
 )
@@ -1027,7 +1393,7 @@ def plot_times_box_by_variance(
         ("fpt_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"], t_ref),
         ("fpt_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"], t_ref),
         ("fpt_fm_asr_conic", r"FP (FM-ASR\, conic)", COLORS["fpFmAsrConic"], t_ref),
-        ("fpt_pypar2", "FP (PyPar2)", COLORS["fpPypar2"], t_ref),
+        ("fpt_pypar2", "FP (PAR$^2$)", COLORS["fpPypar2"], t_ref),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
     n_series = len(series_defs)
@@ -1090,7 +1456,7 @@ def plot_comp_time_mean_vs_variance(
         ("stats_ct_fp_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("stats_ct_fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
         ("stats_ct_fp_fm_asr_conic", r"FP (FM-ASR\, conic)", COLORS["fpFmAsrConic"]),
-        ("stats_ct_fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
+        ("stats_ct_fp_pypar2", "FP (PAR$^2$)", COLORS["fpPypar2"]),
     ]
     for key, label, color in series_defs:
         arr = s.get(key)
@@ -1131,7 +1497,7 @@ def plot_comp_time_box_by_variance(
         ("ct_fp_fm_asr", "FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("ct_fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
         ("ct_fp_fm_asr_conic", r"FP (FM-ASR\, conic)", COLORS["fpFmAsrConic"]),
-        ("ct_fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
+        ("ct_fp_pypar2", "FP (PAR$^2$)", COLORS["fpPypar2"]),
     ]
     var_values = [float(v) for v in np.asarray(var, dtype=float).ravel()]
     n_series = len(series_defs)
@@ -1253,7 +1619,7 @@ def plot_wasserstein_len_vs_variance(
     if w_fp_fm_asr_conic is not None and np.any(np.isfinite(w_fp_fm_asr_conic)):
         ax.plot(var, w_fp_fm_asr_conic / i_y, linestyle="-", color=COLORS["fpFmAsrConic"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,FM-ASR\,conic]")
     if w_fp_pypar2 is not None and np.any(np.isfinite(w_fp_pypar2)):
-        ax.plot(var, w_fp_pypar2 / i_y, linestyle="-", color=COLORS["fpPypar2"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,PyPar2]")
+        ax.plot(var, w_fp_pypar2 / i_y, linestyle="-", color=COLORS["fpPypar2"], marker="o", markerfacecolor="None", label=r"$W_1$[FP,\,PAR$^2$]")
     # ax.set_xscale("log")
     ax.set_xlabel("$\\sigma_{Y}^2$")
     ax.set_ylabel(r"$W_1(\mathrm{len})/I_Y$")
@@ -1276,7 +1642,7 @@ def plot_length_cdf_for_variance(*, samples: dict[str, np.ndarray], variance_val
         ("fp_fm_asr", r"FP (FM-ASR)", COLORS["fpFmAsr"]),
         ("fp_fm_asr_iso", r"FP (FM-ASR\, iso)", COLORS["fpFmAsrIso"]),
         ("fp_fm_asr_conic", r"FP (FM-ASR\, conic)", COLORS["fpFmAsrConic"]),
-        ("fp_pypar2", "FP (PyPar2)", COLORS["fpPypar2"]),
+        ("fp_pypar2", "FP (PAR$^2$)", COLORS["fpPypar2"]),
     ]:
         arr = np.asarray(samples.get(key, []), dtype=float).ravel()
         finite = arr[np.isfinite(arr)]
@@ -1360,6 +1726,8 @@ def run_stage4(
     scatter_modes: list[str] | None = None,
     hausdorff_cdf: bool = False,
     entropy_hausdorff: bool = False,
+    minimal_cost_hist: bool = False,
+    minimal_cost_hist_variance: list[float] | float | None = None,
 ) -> list[FigureArtifact]:
     cache_dir = cache_dir or default_cache_dir(cfg)
     payload = load_pickle(cache_dir / "stage3_plot_inputs.pkl")
@@ -1378,6 +1746,40 @@ def run_stage4(
     scatter_modes = ["mean"] if scatter_modes is None else scatter_modes
     ratio_mean_fp = ratio_mean_fmm = ratio_mean_dijkstra = ratio_mean_fsm = None
     ratio_var_fp = ratio_var_fmm = ratio_var_dijkstra = ratio_var_fsm = None
+
+    travel_samples = None
+    travel_cost_bootstrap = None
+    needs_travel_samples = (
+        "times_std" in cfg.sections
+        or "times_cv" in cfg.sections
+        or minimal_cost_hist
+    )
+    if needs_travel_samples:
+        stage2_path = cache_dir / "stage2_metrics.pkl"
+        if not stage2_path.exists():
+            raise FileNotFoundError(
+                f"Travel-cost plots require the Stage 2 cache with raw MC samples: {stage2_path}"
+            )
+        stage2_payload = load_pickle(stage2_path)
+        travel_samples = extract_travel_cost_samples(
+            stage2_payload,
+            var,
+            field_size,
+            warnings=all_warnings,
+        )
+
+    if "times_std" in cfg.sections or "times_cv" in cfg.sections:
+        travel_cost_bootstrap = bootstrap_travel_cost_uncertainty(
+            var,
+            travel_samples or {},
+            t_ref=t_ref,
+            dh=cfg.dh,
+            warnings=all_warnings,
+        )
+        write_travel_cost_uncertainty_csv(
+            travel_cost_bootstrap,
+            cfg.output_dir / "travel_cost_uncertainty.csv",
+        )
 
     if "times" in cfg.sections:
         u1 = cfg.k_g * cfg.dh
@@ -1400,7 +1802,7 @@ def run_stage4(
             t_ref,
             cfg.dh,
             analytical_tmin=analytical_tmin,
-            analytical_label=r"$\gamma^{\!\star}_{\mathcal{S}}$ (Analytical)", # f" $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
+            analytical_label=r"$\gamma^{\!\star}_{\mathfrak{d} \mid \mathsf{S}}$ (Analytical)", # f" $t_{{\\mathrm{{min}}}}$ (p={cfg.analytical_percentile:g})",
             stats_fpt_fsm=s.get("stats_fpt_fsm"),
             stats_fpt_fm_asr=s.get("stats_fpt_fm_asr"),
             stats_fpt_fm_asr_iso=s.get("stats_fpt_fm_asr_iso"),
@@ -1409,6 +1811,44 @@ def run_stage4(
         )
         artifacts.extend(save_figure(fig, section="times", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
         plt.close(fig)
+
+    if "times_std" in cfg.sections:
+        if travel_cost_bootstrap is not None:
+            fig, meta = plot_characteristic_time_std(var, travel_cost_bootstrap)
+            artifacts.extend(save_figure(fig, section="times_std", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+            plt.close(fig)
+
+    if "times_cv" in cfg.sections and travel_cost_bootstrap is not None:
+        fig, meta = plot_characteristic_time_cv(var, travel_cost_bootstrap)
+        artifacts.extend(save_figure(fig, section="times_cv", output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+        plt.close(fig)
+
+    if minimal_cost_hist:
+        if minimal_cost_hist_variance is None:
+            requested_hist_variances = None
+        elif np.isscalar(minimal_cost_hist_variance):
+            requested_hist_variances = [float(minimal_cost_hist_variance)]
+        else:
+            requested_hist_variances = [float(value) for value in minimal_cost_hist_variance]
+        selected_variances = _resolve_requested_plot_variances(
+            var,
+            requested_hist_variances,
+        )
+        if not selected_variances:
+            raise ValueError("Cannot plot a minimum-cost histogram because no variances are available.")
+        for selected_variance in selected_variances:
+            selected_samples = (travel_samples or {}).get(float(selected_variance))
+            if selected_samples is None:
+                raise ValueError(f"No Stage 2 travel-cost samples are available for sigma2={selected_variance:g}.")
+            fig, meta = plot_minimal_cost_histogram(
+                selected_samples,
+                variance_value=selected_variance,
+                t_ref=t_ref,
+                dh=cfg.dh,
+            )
+            section = f"minimal_cost_hist_var{_value_slug(selected_variance)}"
+            artifacts.extend(save_figure(fig, section=section, output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
+            plt.close(fig)
 
     if "times_box" in cfg.sections:
         scatter_samples_by_var = prepared.get("scatter_time_samples")
@@ -1733,6 +2173,19 @@ def parse_args() -> argparse.Namespace:
         default=False,
         help="Plot per-MC Renyi entropy and Hausdorff summary stats (mean/median/max) vs MC index",
     )
+    parser.add_argument(
+        "--minimal-cost-hist",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Plot per-MC minimum-cost histograms for the first-arrival methods",
+    )
+    parser.add_argument(
+        "--minimal-cost-hist-variance",
+        nargs="+",
+        metavar="SIGMA2",
+        default=None,
+        help="One or more variance values for minimum-cost histograms (space- or comma-separated; default: first available)",
+    )
     return parser.parse_args()
 
 
@@ -1749,6 +2202,12 @@ def main() -> int:
         scatter_modes=_parse_scatter_modes(args.scatter_mode),
         hausdorff_cdf=args.hausdorff_cdf,
         entropy_hausdorff=args.entropy_hausdorff,
+        minimal_cost_hist=args.minimal_cost_hist,
+        minimal_cost_hist_variance=(
+            _parse_plot_variances(",".join(args.minimal_cost_hist_variance))
+            if args.minimal_cost_hist_variance is not None
+            else None
+        ),
     )
     print(f"Generated {len(artifacts)} figure artifact(s) in {cfg.output_dir}")
     return 0

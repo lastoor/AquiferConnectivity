@@ -379,6 +379,8 @@ Notes:
 Default `sections` now include:
 
 - `times`
+- `times_std`
+- `times_cv`
 - `times_box`
 - `scatter`
 - `hausdorff`
@@ -391,6 +393,9 @@ Default `sections` now include:
   - also writes separate path-length CDF figure(s) `run<id>_cdf_len_var<value>.png` for selected variance values
   - use `--plot-variances` (comma-separated) to choose variance values; default is the first available variance
 - `times`: keeps the summary/error-bar characteristic-time figure, including the analytical `t_min` overlay
+- `times_std`: plots paired-bootstrap standard deviations with pointwise 95% confidence bands for the first-arrival plot’s methods and LRP metrics (Pollock, PAR², FM-ASR, FMM, Dijkstra, LRP FMM, LRP Dijkstra)
+- `times_cv`: plots their coefficient of variation with pointwise 95% confidence bands; Step 4 also writes `travel_cost_uncertainty.csv` with SD/CV rankings and adjacent-variance SD-difference intervals. Each 5,000-resample replicate reuses the same 1,000 MC indices across methods and variance levels; an adjacent decrease is flagged when its full 95% interval is below zero.
+- Optional `--minimal-cost-hist` plots shared-bin, normalized MC minimum-cost densities for the same methods as `times`, with a color-matched text box of paired Pollock-versus-method Pearson correlations. It is off by default; if no variance is specified it uses the first available one. `--minimal-cost-hist-variance` accepts one or more space-separated or comma-separated variance values.
 - `times_box`: writes a separate grouped box-plot figure of raw FP/LRP/LRP(FMM)/FP(FMM)/FP(Dijkstra)/FSM time samples across variances when FSM samples are available
 - `hausdorff`: keeps the summary/error-bar Hausdorff figure and includes FSM comparisons where available
 - `hausdorff_box`: writes a separate grouped box-plot figure of raw Hausdorff-distance samples across variances
@@ -399,6 +404,15 @@ Default `sections` now include:
   - all-points mode writes `run<id>_scatter_var<value>.png` for selected `--plot-variances`
 
 When enabled, the Frechet section is saved as `run<id>_frechet.png` (or corresponding configured format).
+
+To create the optional minimum-cost histogram at a selected variance:
+
+```bash
+PYTHONPATH=./scripts python scripts/step4_plot.py \
+  --config configs/visualization.default.yaml \
+  --minimal-cost-hist \
+  --minimal-cost-hist-variance 0.5 1.0
+```
 
 ### Hausdorff CDF Ensemble Plot
 
