@@ -34,12 +34,14 @@ The wrapper script `./scripts/run_in_fmm_env.sh` injects both `./src` and `../..
 
 ## Output Schema
 
-`scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py` write schema v16 outputs:
+`scripts/run_fmm.py` and `scripts/run_fmm_gpu_worker.py` write schema v17 outputs:
 
 - Per MC run: `mainOutput_size{field_size}_mc{mc_index}.npz`
 - Per size aggregate: `mainOutput_size{field_size}.npz`
 
 Core fields include status, lengths (`len_*`), travel times (`travel_time_*`), resistance, Hausdorff-like distances, endpoint deltas, FMM diagnostics, particle-tracking solver metadata, exact particle-count metadata, and seed metadata. The saved fastest-path outputs are solver-neutral (`len_fp`, `travel_time_fp`, `fp_size...npy`) regardless of whether the backend is Pollock or RK45.
+
+Each CPU or GPU invocation also writes a unique `run_manifest_<run_id>.json` in the simulation folder. It records the command, resolved configuration, seeds, output schema, Git revision/dirty status, Python and core package versions, and run status. The manifest is updated atomically; a process killed before cleanup leaves its status as `running`.
 
 ## Fastest-Path Runner Options
 
@@ -85,6 +87,8 @@ Options:
 - `--num_particles`: exact particle-count override for fastest-path tracking
 - `--velocity-location`: `face` or `cell`
 - `--align-with-modflow-velocity` / `--no-align-with-modflow-velocity`
+- `--mc-success-mode retry-until-complete` (default): retry a field unless Pollock FP, Dijkstra/FMM FP, Dijkstra/FMM LRP, and each enabled PAR2/FM-ASR method produce valid paths and finite positive costs. `--mc-success-mode keep-partial` preserves a field when only PAR2 or FM-ASR fails.
+- `--mc-max-attempts`: maximum field generations per MC slot, default `200`. Exhausted slots are logged and saved with their last method-specific failure details; the sweep continues and may contain fewer than the requested number of complete samples.
 - `--fm_asr` / `--no-fm_asr`: enable or disable FM-ASR comparison paths
 - `--fm_asr_perp_ratio`: sideways anisotropic speed ratio for FM-ASR, default `0.5`
 - `--fm_asr_back_factor`: backward speed reduction factor for FM-ASR, default `2.0`

@@ -626,7 +626,9 @@ def run_pypar2_tracking_gpu_worker(
     return fp, travel_time, None, replay_meta
 
 
-def run_unit_simulation_gpu(config: dict[str, Any], mc_index: int, num_trial: int = 200) -> dict[str, Any]:
+def run_unit_simulation_gpu(
+    config: dict[str, Any], mc_index: int, num_trial: int | None = None
+) -> dict[str, Any]:
     original_pt = base.run_particle_tracking
     original_pypar2 = base.run_pypar2_tracking
     base.run_particle_tracking = run_particle_tracking_gpu_worker
@@ -693,6 +695,22 @@ def parse_args() -> argparse.Namespace:
     group = parser.add_mutually_exclusive_group(required=True)
     parser.add_argument("--path_workdir", required=True, type=str, help="Path to output working directory.")
     parser.add_argument("--num_mc", required=True, nargs="+", type=int, help="Monte Carlo count list.")
+    parser.add_argument(
+        "--mc-success-mode",
+        choices=["retry-until-complete", "keep-partial"],
+        default="retry-until-complete",
+        help=(
+            "retry-until-complete regenerates fields until all requested FP/LRP methods "
+            "(Pollock, Dijkstra, FMM, and enabled PAR2/FM-ASR) succeed; keep-partial permits "
+            "missing optional PAR2/FM-ASR results."
+        ),
+    )
+    parser.add_argument(
+        "--mc-max-attempts",
+        type=int,
+        default=200,
+        help="Maximum trials per requested realization before logging failure and moving on (default: 200).",
+    )
     parser.add_argument("--field_size", required=True, nargs="+", type=int, help="Field size list.")
     parser.add_argument("--covariance", type=str, default="exp", choices=["exp", "fbm"])
     parser.add_argument("--length_scale", type=float, default=None, help="Normalized length scale in (0, 1) for exp covariance.")
@@ -880,6 +898,8 @@ def build_config_base(args: argparse.Namespace, effective_run_seed: int | None, 
     path_workdir = Path(args.path_workdir).expanduser().resolve()
     config_base: dict[str, Any] = {
         "num_mc": args.num_mc,
+        "mc_success_mode": args.mc_success_mode,
+        "mc_max_attempts": args.mc_max_attempts,
         "dx": 1,
         "dy": 1,
         "dz": 1,
@@ -995,6 +1015,8 @@ def main() -> None:
         raise ValueError(f"Only schema version {base.MC_SCHEMA_VERSION} is supported.")
     if len(args.num_mc) != len(args.field_size):
         raise ValueError("--num_mc and --field_size must have the same length.")
+    if args.mc_max_attempts < 1:
+        raise ValueError("--mc-max-attempts must be at least 1.")
     if args.seed is None and args.seed_mode != "strict_mc":
         raise ValueError("--seed_mode global_stream/best_effort requires --seed.")
     if args.variance_seed_policy == "explicit" and args.variance_seed is None and args.seed is not None:
@@ -1049,10 +1071,18 @@ def main() -> None:
         args=(config_base, gpu_token, queue_gpu, result_dict),
         name=f"GPU-Worker-{gpu_token}",
     )
-    process_gpu_worker.start()
 
+    manifest_path, manifest_payload = base.run_manifest.new_run_manifest(
+        output_dir=config_base["path_simulation"],
+        runner="gpu-worker",
+        command=os.sys.argv,
+        config=config_base,
+        schema_version=base.MC_SCHEMA_VERSION,
+    )
+    manifest_started_monotonic = time.monotonic()
     results = []
     try:
+        process_gpu_worker.start()
         for idx_size in range(len(config_base["field_size"])):
             results.append(
                 run_field_size_simulation_gpu(
@@ -1062,12 +1092,25 @@ def main() -> None:
                     result_dict=result_dict,
                 )
             )
+    except BaseException as exc:
+        try:
+            base.run_manifest.finish_run_manifest(
+                manifest_path,
+                manifest_payload,
+                status="failed",
+                started_monotonic=manifest_started_monotonic,
+                error=exc,
+            )
+        except Exception:
+            logger.exception("[MAIN] Could not update the run manifest after failure.")
+        raise
     finally:
-        queue_gpu.put(None)
-        process_gpu_worker.join(timeout=30)
-        if process_gpu_worker.is_alive():
-            process_gpu_worker.terminate()
-            process_gpu_worker.join(timeout=10)
+        if process_gpu_worker.pid is not None:
+            queue_gpu.put(None)
+            process_gpu_worker.join(timeout=30)
+            if process_gpu_worker.is_alive():
+                process_gpu_worker.terminate()
+                process_gpu_worker.join(timeout=10)
         manager.shutdown()
 
         cpu_profiler.disable()
@@ -1082,6 +1125,12 @@ def main() -> None:
     logger.info(
         f"[MAIN] Completed GPU-worker simulation. {elapsed_hours} hours elapsed "
         f"from {start_time:%Y-%m-%d %H:%M:%S} to {end_time:%Y-%m-%d %H:%M:%S}."
+    )
+    base.run_manifest.finish_run_manifest(
+        manifest_path,
+        manifest_payload,
+        status="completed",
+        started_monotonic=manifest_started_monotonic,
     )
 
     del results

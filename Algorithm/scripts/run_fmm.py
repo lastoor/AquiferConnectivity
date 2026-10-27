@@ -35,6 +35,7 @@ from simulation import hydraulic as sim_hyd
 from simulation import particle_tracking as sim_pt
 from simulation import path_finding as sim_path
 from simulation import utils as sim_utils
+import run_manifest
 
 # Add libgfortran.so.5 and libstdc++.so.6 in /apps/generic/gcc/13.3.0/lib64 as an environment variable
 os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.get("LD_LIBRARY_PATH", "")
@@ -42,7 +43,7 @@ os.environ["LD_LIBRARY_PATH"] = "/apps/generic/gcc/13.3.0/lib64:" + os.environ.g
 global_grf_gen = None
 
 
-MC_SCHEMA_VERSION = 16
+MC_SCHEMA_VERSION = 17
 
 # Flat output schema v7: deterministic and explicit for analysis pipelines.
 MC_FIELDS = [
@@ -69,6 +70,13 @@ MC_FIELDS = [
     "travel_time_fm_asr_iso",
     "travel_time_fm_asr_conic",
     "travel_time_pypar2",
+    "failure_lrp",
+    "failure_lrp_fmm",
+    "failure_fp_pollock",
+    "failure_fp_dijkstra",
+    "failure_fp_fmm",
+    "failure_fm_asr",
+    "failure_pypar2",
     "resistance_lrp",
     "resistance_lrp_fmm",
     "endpoint_dy_fp_vs_lrp",
@@ -168,6 +176,13 @@ MC_FIELDS = [
 
 OBJECT_FIELDS = {
     "status_message",
+    "failure_lrp",
+    "failure_lrp_fmm",
+    "failure_fp_pollock",
+    "failure_fp_dijkstra",
+    "failure_fp_fmm",
+    "failure_fm_asr",
+    "failure_pypar2",
     "endpoint_method",
     "pt_solver",
     "pt_backend",
@@ -226,6 +241,27 @@ def build_base_record(mc_index: int, trial_used: int | None = None) -> dict[str,
         if key not in record:
             record[key] = np.nan
     return record
+
+
+def _path_validation_diagnostic(path: np.ndarray, domain_box: tuple[float, float, float, float], len_min: float) -> str:
+    """Summarize a rejected path so a method-specific failure is diagnosable from logs."""
+    coords = np.asarray(path, dtype=float)
+    if coords.ndim != 2 or coords.shape[1] < 2:
+        return f"invalid coordinate shape={coords.shape}"
+    finite_rows = np.all(np.isfinite(coords[:, :2]), axis=1)
+    finite = coords[finite_rows, :2]
+    if finite.size == 0:
+        return f"no finite coordinates (shape={coords.shape})"
+    x0, x1, y0, y1 = domain_box
+    length = float(sim_utils.euclidean_length(finite)) if len(finite) >= 2 else 0.0
+    return (
+        f"shape={coords.shape}, finite_points={len(finite)}/{len(coords)}, "
+        f"x_range=[{finite[:, 0].min():.6g},{finite[:, 0].max():.6g}], "
+        f"y_range=[{finite[:, 1].min():.6g},{finite[:, 1].max():.6g}], "
+        f"start={finite[0].tolist()}, end={finite[-1].tolist()}, "
+        f"length={length:.6g} (minimum={len_min:.6g}), "
+        f"domain=[{x0:.6g},{x1:.6g}]x[{y0:.6g},{y1:.6g}]"
+    )
 
 
 def _hausdorff_detail(D: np.ndarray) -> dict[str, Any]:
@@ -654,7 +690,14 @@ def run_pypar2_tracking(
     res = summary.get("fastest")
     replay_meta = summary.get("replay", {}) or {}
     if res is None:
-        return None, None, "PyPar2: no particle reached right_x", replay_meta
+        failure = (
+            "PyPar2: no particle reached right_x "
+            f"(n_particles={n_particles}, n_arrived={summary.get('n_arrived', 'NA')}, "
+            f"replay_status={replay_meta.get('status', 'NA')}, "
+            f"attempts={len(replay_meta.get('attempts', []))})"
+        )
+        logger.warning(f"[PT-PyPar2] {failure}")
+        return None, None, failure, replay_meta
     fp = np.vstack((np.asarray(res["x"]), np.asarray(res["y"]))).T
     travel_time = float(res["travel_time"])
     logger.info(
@@ -850,10 +893,19 @@ def make_config_for_size(config_base: dict[str, Any], idx_size: int) -> dict[str
     return config
 
 
-def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 200) -> dict[str, Any]:
+def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int | None = None) -> dict[str, Any]:
     """Run one Monte Carlo simulation with retry logic."""
     logger = sim_utils.get_logger(path_logfile=str(config["path_mainlogfile"]))
-    logger.info(f"[MC {mc_index}] Starting simulation (up to {num_trial} trials).")
+    success_mode = str(config.get("mc_success_mode", "retry-until-complete"))
+    max_attempts = num_trial if num_trial is not None else int(config.get("mc_max_attempts", 200))
+    if max_attempts <= 0:
+        max_attempts = 200
+    trial_indices = range(max_attempts)
+    attempt_label = str(max_attempts)
+    logger.info(
+        f"[MC {mc_index}] Starting simulation (up to {attempt_label} trials; "
+        f"success_mode={success_mode})."
+    )
 
     config_mc = config.copy()
     x0 = config_mc["source_vertex"][0][0]
@@ -870,7 +922,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
     if run_seed is not None and seed_mode == "strict_mc":
         seed_mc = derive_seed(int(run_seed), int(config_mc["field_size_"]), int(mc_index))
 
-    for trial in range(num_trial):
+    for trial in trial_indices:
         record = build_base_record(mc_index=mc_index, trial_used=trial)
         seed_trial: int | None = None
         if run_seed is not None and seed_mode == "strict_mc" and seed_mc is not None:
@@ -901,7 +953,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             f"[MC {mc_index}] Seed context: seed_mc={record['seed_mc']}, "
             f"seed_trial={record['seed_trial']}, mode={seed_mode}"
         )
-        logger.info(f"[MC {mc_index}] Trial {trial + 1}/{num_trial} starting.")
+        logger.info(f"[MC {mc_index}] Trial {trial + 1}/{attempt_label} starting.")
 
         try:
             # 1) GRF generation
@@ -924,7 +976,11 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             _t_lrp_dijkstra = time.perf_counter() - _t0
             if lrp.size == 0 or not sim_path.is_path_valid(lrp, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 2
-                record["status_message"] = "Invalid LRP geometry"
+                record["status_message"] = (
+                    "Invalid LRP geometry: "
+                    f"{_path_validation_diagnostic(lrp, domain_box, np.abs(x1 - x0))}"
+                )
+                record["failure_lrp"] = record["status_message"]
                 logger.warning(f"[MC {mc_index}] Invalid LRP, retrying next trial.")
                 continue
 
@@ -945,11 +1001,16 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             if lrp_fmm is None:
                 record["status_code"] = 10
                 record["status_message"] = lrp_fmm_error or "LRP(FMM) path extraction failed"
+                record["failure_lrp_fmm"] = record["status_message"]
                 logger.warning(f"[MC {mc_index}] Invalid LRP (FMM), retrying next trial.")
                 continue
             if not sim_path.is_path_valid(lrp_fmm, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 10
-                record["status_message"] = "Invalid LRP(FMM) geometry"
+                record["status_message"] = (
+                    "Invalid LRP(FMM) geometry: "
+                    f"{_path_validation_diagnostic(lrp_fmm, domain_box, np.abs(x1 - x0))}"
+                )
+                record["failure_lrp_fmm"] = record["status_message"]
                 logger.warning(f"[MC {mc_index}] Invalid LRP (FMM), retrying next trial.")
                 continue
 
@@ -1018,7 +1079,11 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             _t_fp_dijkstra_solver = time.perf_counter() - _t0
             if fp_dijkstra.size == 0 or not sim_path.is_path_valid(fp_dijkstra, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 4
-                record["status_message"] = "Invalid FP(Dijkstra) geometry"
+                record["status_message"] = (
+                    "Invalid FP(Dijkstra) geometry: "
+                    f"{_path_validation_diagnostic(fp_dijkstra, domain_box, np.abs(x1 - x0))}"
+                )
+                record["failure_fp_dijkstra"] = record["status_message"]
                 logger.warning(f"[MC {mc_index}] Invalid FP (Dijkstra), retrying next trial.")
                 continue
 
@@ -1039,11 +1104,16 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             if fp_fmm is None:
                 record["status_code"] = 5
                 record["status_message"] = fp_fmm_error or "FMM path extraction failed"
+                record["failure_fp_fmm"] = record["status_message"]
                 logger.warning(f"[MC {mc_index}] Invalid FP (FMM), retrying next trial.")
                 continue
             if not sim_path.is_path_valid(fp_fmm, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 5
-                record["status_message"] = "Invalid FP(FMM) geometry"
+                record["status_message"] = (
+                    "Invalid FP(FMM) geometry: "
+                    f"{_path_validation_diagnostic(fp_fmm, domain_box, np.abs(x1 - x0))}"
+                )
+                record["failure_fp_fmm"] = record["status_message"]
                 logger.warning(f"[MC {mc_index}] Invalid FP (FMM), retrying next trial.")
                 continue
 
@@ -1144,7 +1214,9 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     )
                     _t_fp_fm_asr_solver = time.perf_counter() - _t0
                     if not sim_path.is_path_valid(fp_fm_asr, domain_box, len_min=np.abs(x1 - x0)):
-                        fp_fm_asr_error = "Invalid FP(FM-ASR) geometry"
+                        diagnostic = _path_validation_diagnostic(fp_fm_asr, domain_box, np.abs(x1 - x0))
+                        fp_fm_asr_error = f"Invalid FP(FM-ASR) geometry: {diagnostic}"
+                        logger.warning(f"[MC {mc_index}] FM-ASR path rejected: {fp_fm_asr_error}")
                         fp_fm_asr = None
                         arrival_fm_asr = None
                 except Exception as exc:
@@ -1235,12 +1307,23 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             except ValueError as exc:
                 record["status_code"] = 6
                 record["status_message"] = str(exc)
+                record["failure_fp_pollock"] = record["status_message"]
                 logger.warning(f"[MC {mc_index}] Invalid velocity field, retrying next trial. {exc}")
+                continue
+            except Exception as exc:
+                record["status_code"] = 6
+                record["status_message"] = f"FP({config_mc['particleTracking_arg']['solver']}) failed: {exc}"
+                record["failure_fp_pollock"] = record["status_message"]
+                logger.exception(f"[MC {mc_index}] FP path solver failed; retrying next trial: {exc}")
                 continue
 
             if fp.size == 0 or not sim_path.is_path_valid(fp, domain_box, len_min=np.abs(x1 - x0)):
                 record["status_code"] = 7
-                record["status_message"] = f"Invalid FP({config_mc['particleTracking_arg']['solver']}) geometry"
+                record["status_message"] = (
+                    f"Invalid FP({config_mc['particleTracking_arg']['solver']}) geometry: "
+                    f"{_path_validation_diagnostic(fp, domain_box, np.abs(x1 - x0))}"
+                )
+                record["failure_fp_pollock"] = record["status_message"]
                 logger.warning(
                     f"[MC {mc_index}] Invalid FP ({config_mc['particleTracking_arg']['solver']}), retrying next trial."
                 )
@@ -1270,13 +1353,67 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     if fp_pypar2 is not None and not sim_path.is_path_valid(
                         fp_pypar2, domain_box, len_min=np.abs(x1 - x0)
                     ):
-                        fp_pypar2_error = "Invalid FP(PyPar2) geometry"
+                        diagnostic = _path_validation_diagnostic(fp_pypar2, domain_box, np.abs(x1 - x0))
+                        fp_pypar2_error = f"Invalid FP(PyPar2) geometry: {diagnostic}"
+                        logger.warning(f"[MC {mc_index}] PyPar2 path rejected: {fp_pypar2_error}")
                         fp_pypar2 = None
                         arrival_pypar2 = None
+                    elif fp_pypar2_error is not None:
+                        logger.warning(f"[MC {mc_index}] PyPar2 path failed (non-fatal): {fp_pypar2_error}")
                 except Exception as exc:
                     fp_pypar2_error = str(exc)
                     pypar2_replay_meta = {}
                     logger.warning(f"[MC {mc_index}] PyPar2 path failed (non-fatal): {exc}")
+
+            # In complete-sample mode every requested FP/LRP method must have
+            # valid geometry and a finite positive method-specific cost.
+            if success_mode == "retry-until-complete":
+                required_methods = [
+                    ("LRP (Dijkstra)", "failure_lrp", lrp, total_R, "resistance"),
+                    ("LRP (FMM)", "failure_lrp_fmm", lrp_fmm, total_R_fmm, "resistance"),
+                    ("FP (Pollock)", "failure_fp_pollock", fp, pt_res.get("travel_time"), "travel time"),
+                    ("FP (Dijkstra)", "failure_fp_dijkstra", fp_dijkstra, total_t_dijkstra, "travel time"),
+                    ("FP (FMM)", "failure_fp_fmm", fp_fmm, total_t_fmm, "travel time"),
+                ]
+                if fm_asr_enabled:
+                    required_methods.append(
+                        ("FP (FM-ASR)", "failure_fm_asr", fp_fm_asr, arrival_fm_asr, "travel time")
+                    )
+                if pypar2_enabled:
+                    required_methods.append(
+                        ("FP (PAR2)", "failure_pypar2", fp_pypar2, arrival_pypar2, "travel time")
+                    )
+
+                invalid_methods: list[tuple[str, str, str]] = []
+                for method_name, failure_key, path, cost, cost_name in required_methods:
+                    failure = ""
+                    if path is None or np.asarray(path).size == 0:
+                        failure = "path is missing"
+                    elif not sim_path.is_path_valid(path, domain_box, len_min=np.abs(x1 - x0)):
+                        failure = _path_validation_diagnostic(path, domain_box, np.abs(x1 - x0))
+                    elif cost is None or not np.isfinite(cost) or float(cost) <= 0.0:
+                        failure = f"invalid {cost_name}={cost!r}; expected finite positive value"
+
+                    if failure:
+                        detail = (
+                            fp_fm_asr_error if failure_key == "failure_fm_asr" else
+                            fp_pypar2_error if failure_key == "failure_pypar2" else
+                            fp_fmm_error if failure_key == "failure_fp_fmm" else
+                            ""
+                        )
+                        if detail and failure in {"path is missing"}:
+                            failure = f"{detail}; {failure}"
+                        record[failure_key] = f"{method_name}: {failure}"
+                        invalid_methods.append((method_name, failure_key, record[failure_key]))
+
+                if invalid_methods:
+                    record["status_code"] = 11
+                    record["status_message"] = "; ".join(item[2] for item in invalid_methods)
+                    logger.warning(
+                        f"[MC {mc_index}] Discarding field and retrying with a new seed: "
+                        f"{record['status_message']}"
+                    )
+                    continue
 
             # 5) Metrics and persist
             D_fp_lrp, _, _ = distance_distribution(fp, lrp, ds=1.0)
@@ -1632,6 +1769,13 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
                     "travel_time_fm_asr_iso": consolidated["paths"]["fp_fm_asr_iso"]["travel_time"],
                     "travel_time_fm_asr_conic": consolidated["paths"]["fp_fm_asr_conic"]["travel_time"],
                     "travel_time_pypar2": consolidated["paths"]["fp_pypar2"]["travel_time"],
+                    "failure_lrp": "",
+                    "failure_lrp_fmm": "",
+                    "failure_fp_pollock": "",
+                    "failure_fp_dijkstra": "",
+                    "failure_fp_fmm": "",
+                    "failure_fm_asr": fp_fm_asr_error or "",
+                    "failure_pypar2": fp_pypar2_error or "",
                     "resistance_lrp": consolidated["paths"]["lrp"]["resistance"],
                     "resistance_lrp_fmm": consolidated["paths"]["lrp_fmm"]["resistance"],
                     "endpoint_method": "interp_at_xref",
@@ -1735,7 +1879,14 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             logger.exception(f"[MC {mc_index}] Unexpected error on trial {trial + 1}: {exc}")
             continue
 
-    failed = build_base_record(mc_index=mc_index, trial_used=None)
+    failed = record.copy()
+    last_failure = str(record.get("status_message", "unknown failure"))
+    failure_message = (
+        f"No complete valid realization after {attempt_label} trials; "
+        f"last failure: {last_failure}"
+    )
+    failed["status_code"] = 9
+    failed["status_message"] = failure_message
     failed.update(
         {
             "seed_base": none_to_nan(config_mc.get("seed_base", np.nan)),
@@ -1799,26 +1950,35 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
             "pt_velocity_location": config_mc["particleTracking_arg"]["velocity_location"],
             "pt_align_with_modflow_velocity": bool(config_mc["particleTracking_arg"]["align_with_modflow_velocity"]),
             "seed_mc": seed_mc if seed_mc is not None else np.nan,
-            "seed_trial": np.nan,
+            "seed_trial": record.get("seed_trial", np.nan),
         }
     )
-    failed["status_code"] = 9
-    failed["status_message"] = f"All {num_trial} trials failed"
-
     failed_consolidated = {
         "meta": {
             "schema_version": MC_SCHEMA_VERSION,
             "mc_index": int(mc_index),
-            "trial_used": -1,
+            "trial_used": int(record.get("trial_used", -1)),
             "status_code": 9,
-            "status_message": f"All {num_trial} trials failed",
+            "status_message": failure_message,
+            "failure_details": {
+                key: failed.get(key, "")
+                for key in (
+                    "failure_lrp",
+                    "failure_lrp_fmm",
+                    "failure_fp_pollock",
+                    "failure_fp_dijkstra",
+                    "failure_fp_fmm",
+                    "failure_fm_asr",
+                    "failure_pypar2",
+                )
+            },
         },
         "seeds": {
             "base": none_to_nan(config_mc.get("seed_base", np.nan)),
             "effective_run": none_to_nan(config_mc.get("seed_effective_run", np.nan)),
             "mode": str(config_mc.get("seed_mode", "strict_mc")),
             "mc": seed_mc if seed_mc is not None else np.nan,
-            "trial": np.nan,
+            "trial": record.get("seed_trial", np.nan),
             "variance": {
                 "policy": config_mc.get("variance_seed_policy", "same"),
                 "rank": none_to_nan(config_mc.get("variance_rank", np.nan)),
@@ -1904,7 +2064,7 @@ def run_unit_simulation(config: dict[str, Any], mc_index: int, num_trial: int = 
     }
     save_mc_consolidated(config_mc=config_mc, mc_index=mc_index, consolidated=failed_consolidated)
 
-    logger.error(f"[MC {mc_index}] All {num_trial} trials failed to produce valid outputs.")
+    logger.error(f"[MC {mc_index}] {failure_message}")
     return failed
 
 
@@ -1952,6 +2112,22 @@ def parse_args() -> argparse.Namespace:
     group = parser.add_mutually_exclusive_group(required=True)
     parser.add_argument("--path_workdir", required=True, type=str, help="Path to output working directory.")
     parser.add_argument("--num_mc", required=True, nargs="+", type=int, help="Monte Carlo count list.")
+    parser.add_argument(
+        "--mc-success-mode",
+        choices=["retry-until-complete", "keep-partial"],
+        default="retry-until-complete",
+        help=(
+            "retry-until-complete regenerates fields until all requested FP/LRP methods "
+            "(Pollock, Dijkstra, FMM, and enabled PAR2/FM-ASR) succeed; keep-partial permits "
+            "missing optional PAR2/FM-ASR results (default: retry-until-complete)."
+        ),
+    )
+    parser.add_argument(
+        "--mc-max-attempts",
+        type=int,
+        default=200,
+        help="Maximum trials per requested realization before logging failure and moving on (default: 200).",
+    )
     parser.add_argument("--field_size", required=True, nargs="+", type=int, help="Field size list.")
     parser.add_argument("--covariance", type=str, default="exp", choices=["exp", "fbm"], help="Covariance model for log-k field generation.")
     parser.add_argument("--length_scale", type=float, default=None, help="Normalized length scale in (0, 1) for exp covariance.")
@@ -2204,6 +2380,8 @@ def main() -> None:
         raise ValueError("--num_mc and --field_size must have the same length.")
     if args.seed is None and args.seed_mode != "strict_mc":
         raise ValueError("--seed_mode global_stream/best_effort requires --seed.")
+    if args.mc_max_attempts < 1:
+        raise ValueError("--mc-max-attempts must be at least 1.")
     if args.variance_seed_policy == "explicit" and args.variance_seed is None and args.seed is not None:
         raise ValueError("--variance_seed is required when --variance_seed_policy explicit with --seed.")
 
@@ -2223,6 +2401,8 @@ def main() -> None:
 
     config_base: dict[str, Any] = {
         "num_mc": args.num_mc,
+        "mc_success_mode": args.mc_success_mode,
+        "mc_max_attempts": args.mc_max_attempts,
         "dx": 1,
         "dy": 1,
         "dz": 1,
@@ -2352,24 +2532,54 @@ def main() -> None:
     cpu_profiler = cProfile.Profile()
     cpu_profiler.enable()
 
-    results = []
-    for idx_size in range(len(config_base["field_size"])):
-        results.append(run_field_size_simulation(idx_size=idx_size, config_base=config_base))
-
-    end_time = datetime.now()
-    elapsed_hours = round((end_time - start_time).total_seconds() / 3600, 2)
-
-    cpu_profiler.disable()
-    with open(str(config_base["path_cpulogfile"]), "w", encoding="utf-8") as handle:
-        pstats.Stats(cpu_profiler, stream=handle).sort_stats("time").print_stats()
-
-    event_stop_gpuprofiler.set()
-    thread_gpuprofiler.join()
-
-    logger.info(
-        f"[MAIN] Completed simulation. {elapsed_hours} hours elapsed "
-        f"from {start_time:%Y-%m-%d %H:%M:%S} to {end_time:%Y-%m-%d %H:%M:%S}."
+    manifest_path, manifest_payload = run_manifest.new_run_manifest(
+        output_dir=config_base["path_simulation"],
+        runner="cpu",
+        command=os.sys.argv,
+        config=config_base,
+        schema_version=MC_SCHEMA_VERSION,
     )
+    manifest_started_monotonic = time.monotonic()
+    results = []
+    try:
+        for idx_size in range(len(config_base["field_size"])):
+            results.append(run_field_size_simulation(idx_size=idx_size, config_base=config_base))
+
+        end_time = datetime.now()
+        elapsed_hours = round((end_time - start_time).total_seconds() / 3600, 2)
+
+        cpu_profiler.disable()
+        with open(str(config_base["path_cpulogfile"]), "w", encoding="utf-8") as handle:
+            pstats.Stats(cpu_profiler, stream=handle).sort_stats("time").print_stats()
+
+        event_stop_gpuprofiler.set()
+        thread_gpuprofiler.join()
+
+        logger.info(
+            f"[MAIN] Completed simulation. {elapsed_hours} hours elapsed "
+            f"from {start_time:%Y-%m-%d %H:%M:%S} to {end_time:%Y-%m-%d %H:%M:%S}."
+        )
+        run_manifest.finish_run_manifest(
+            manifest_path,
+            manifest_payload,
+            status="completed",
+            started_monotonic=manifest_started_monotonic,
+        )
+    except BaseException as exc:
+        event_stop_gpuprofiler.set()
+        thread_gpuprofiler.join(timeout=10)
+        cpu_profiler.disable()
+        try:
+            run_manifest.finish_run_manifest(
+                manifest_path,
+                manifest_payload,
+                status="failed",
+                started_monotonic=manifest_started_monotonic,
+                error=exc,
+            )
+        except Exception:
+            logger.exception("[MAIN] Could not update the run manifest after failure.")
+        raise
 
     # reduce chance of leaked large arrays in long-lived interpreters
     del results
