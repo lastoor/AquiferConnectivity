@@ -56,8 +56,8 @@ PYTHONPATH=./scripts python scripts/run_all.py --config configs/visualization.de
 ## Stage-by-Stage Run
 
 ```bash
-CACHE_DIR=/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run16p1_pypar2-al0p1-at0p01_asr-ratio0p05-factor10/cache
-FIGURE_DIR=outputs/run16p1_pypar2-al0p1-at0p01_asr-ratio0p05-factor10
+CACHE_DIR=/project2/fbarros_324/binhaoli/task8_rMin_tMin/FastMarchingMethod/run16p2_pypar2-al0p1-at0p01_asr-ratio0p05-factor10/cache
+FIGURE_DIR=outputs/run16p2_pypar2-al0p1-at0p01_asr-ratio0p05-factor10
 
 PYTHONPATH=./scripts python scripts/step1_index.py  --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR"
 PYTHONPATH=./scripts python scripts/step2_metrics.py --config configs/visualization.default.yaml --cache-dir "$CACHE_DIR" 
@@ -395,7 +395,7 @@ Default `sections` now include:
 - `times`: keeps the summary/error-bar characteristic-time figure, including the analytical `t_min` overlay
 - `times_std`: plots paired-bootstrap standard deviations with pointwise 95% confidence bands for the first-arrival plot’s methods and LRP metrics (Pollock, PAR², FM-ASR, FMM, Dijkstra, LRP FMM, LRP Dijkstra)
 - `times_cv`: plots their coefficient of variation with pointwise 95% confidence bands; Step 4 also writes `travel_cost_uncertainty.csv` with SD/CV rankings and adjacent-variance SD-difference intervals. Each 5,000-resample replicate reuses the same 1,000 MC indices across methods and variance levels; an adjacent decrease is flagged when its full 95% interval is below zero.
-- Optional `--minimal-cost-hist` plots shared-bin, normalized MC minimum-cost densities for the same methods as `times`, with a color-matched text box of paired Pollock-versus-method Pearson correlations. It is off by default; if no variance is specified it uses the first available one. `--minimal-cost-hist-variance` accepts one or more space-separated or comma-separated variance values.
+- Optional `--minimal-cost-hist` plots normalized MC minimum-cost histograms for the same methods as `times`, with a color-matched text box of paired Pollock-versus-method Pearson correlations. The default `--minimal-cost-hist-layout panels` makes seven horizontal panels with shared x/y scales and overlays a fitted inverse Gaussian density (black line with white outline) on each filled, translucent histogram. Set `--minimal-cost-hist-fit lognormal` to fit a lognormal instead. Use `--minimal-cost-hist-layout overlay` for the previous overlaid layout. It is off by default; if no variance is specified it uses the first available one. `--minimal-cost-hist-variance` accepts one or more space-separated or comma-separated variance values.
 - `times_box`: writes a separate grouped box-plot figure of raw FP/LRP/LRP(FMM)/FP(FMM)/FP(Dijkstra)/FSM time samples across variances when FSM samples are available
 - `hausdorff`: keeps the summary/error-bar Hausdorff figure and includes FSM comparisons where available
 - `hausdorff_box`: writes a separate grouped box-plot figure of raw Hausdorff-distance samples across variances

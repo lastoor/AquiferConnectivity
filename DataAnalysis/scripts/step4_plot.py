@@ -22,7 +22,7 @@ from matplotlib.offsetbox import AnchoredOffsetbox, TextArea, VPacker
 from scipy import constants
 from scipy.optimize import brentq
 from scipy.special import erfc, expi
-from scipy.stats import rankdata
+from scipy.stats import invgauss, rankdata
 
 try:
     from tqdm import tqdm
@@ -605,14 +605,24 @@ def plot_characteristic_time_std(var: np.ndarray, summary: dict[str, Any]):
 
 
 def plot_characteristic_time_cv(var: np.ndarray, summary: dict[str, Any]):
-    return _plot_travel_cost_bootstrap(
-        var,
-        summary,
-        stat="cv",
-        ci_prefix="cv",
-        ylabel=r"$\mathrm{CV}(t\!^\star)$",
-        kind="characteristic_time_cv_bootstrap",
+    squared = {"metrics": {}}
+    for key, metric in summary["metrics"].items():
+        cv = np.asarray(metric["cv"], dtype=float)
+        lo = np.asarray(metric["cv_ci_lower"], dtype=float)
+        hi = np.asarray(metric["cv_ci_upper"], dtype=float)
+        squared["metrics"][key] = {
+            **metric,
+            "cv2": cv ** 2,
+            "cv2_ci_lower": np.minimum(lo ** 2, hi ** 2),
+            "cv2_ci_upper": np.maximum(lo ** 2, hi ** 2),
+        }
+    squared["bootstrap_resamples"] = summary["bootstrap_resamples"]
+    squared["seed"] = summary["seed"]
+    fig, meta = _plot_travel_cost_bootstrap(
+        var, squared, stat="cv2", ci_prefix="cv2",
+        ylabel=r"$\mathrm{CV}^2(t\!^\star)$", kind="characteristic_time_cv_squared_bootstrap",
     )
+    return fig, meta
 
 
 def plot_minimal_cost_histogram(
@@ -622,6 +632,8 @@ def plot_minimal_cost_histogram(
     t_ref: float,
     dh: float,
     bins: int = 40,
+    layout: str = "panels",
+    fit_distribution: str = "lognormal",
 ):
     """Plot normalized per-MC minimum-cost distributions for the first-arrival methods."""
     if bins < 1:
@@ -653,45 +665,72 @@ def plot_minimal_cost_histogram(
             correlation = None
         correlations[display_name] = {"r": correlation, "n": int(x_pair.size), "color": COLORS[color_key]}
 
+    if layout not in {"panels", "overlay"}:
+        raise ValueError("layout must be 'panels' or 'overlay'")
+    if fit_distribution not in {"inverse_gaussian", "lognormal"}:
+        raise ValueError("fit_distribution must be 'inverse_gaussian' or 'lognormal'")
     all_values = np.concatenate([entry[1] for entry in series])
     bin_edges = np.histogram_bin_edges(all_values, bins=bins)
-    fig, ax = plt.subplots(figsize=[10, 5])
-    fig.subplots_adjust(right=0.68)
-    for _, values, color, linestyle, label in series:
+    if layout == "panels":
+        fig, axes = plt.subplots(len(series), 1, figsize=[5, 7], sharex=True, sharey=True, squeeze=False)
+        axes = axes[:, 0]
+    else:
+        fig, ax = plt.subplots(figsize=[10, 5])
+        fig.subplots_adjust(right=0.68)
+        axes = [ax] * len(series)
+    for panel_idx, (display_name, values, color, linestyle, label) in enumerate(series):
+        ax = axes[panel_idx]
         density, _ = np.histogram(values, bins=bin_edges, density=True)
-        stairs = ax.stairs(density, bin_edges, color=color, linestyle=linestyle, linewidth=LINEWIDTH, label=label)
-        stairs.set_path_effects([
-            pe.Stroke(linewidth=1.5 * LINEWIDTH, foreground="white"),
-            pe.Normal(),
-        ])
-    ax.set_xlabel(r"Minimum cost, $tU/I_Y$")
-    ax.set_ylabel("Density")
-    ax.set_title(fr"Minimum-cost distribution ($\sigma_Y^2={variance_value:g}$)")
-    ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize="8")
-    corr_text = [TextArea("Pearson r vs Pollock", textprops={"color": "black", "weight": "bold", "size": 9})]
-    for display_name, result in correlations.items():
-        r_value = "n/a" if result["r"] is None else f"{result['r']:.3f}"
-        corr_text.append(
-            TextArea(
-                f"{display_name}: {r_value} (n={result['n']})",
-                textprops={"color": result["color"], "size": 8},
-            )
-        )
-    corr_box = AnchoredOffsetbox(
-        loc="upper left",
-        child=VPacker(children=corr_text, align="left", pad=0, sep=3),
-        pad=0.35,
-        frameon=True,
-        bbox_to_anchor=(1.02, 0.53),
-        bbox_transform=ax.transAxes,
-        borderpad=0.0,
-    )
-    ax.add_artist(corr_box)
-    ax.grid(True, which="both")
+        if layout == "panels":
+            patch = ax.stairs(density, bin_edges, fill=True, color=color, alpha=0.7, linewidth=0, label=label)
+            if "dijkstra" in display_name.lower():
+                pass
+                # patch.set_hatch(".")
+            if fit_distribution == "lognormal" and values.size >= 2 and np.std(np.log(values)) > 0:
+                log_values = np.log(values)
+                mu, sigma = float(np.mean(log_values)), float(np.std(log_values, ddof=1))
+                x = np.linspace(max(np.finfo(float).tiny, bin_edges[0]), bin_edges[-1], 400)
+                fit = np.exp(-0.5 * ((np.log(x) - mu) / sigma) ** 2) / (x * sigma * np.sqrt(2 * np.pi))
+                ax.plot(x, fit, color="black", linewidth=1.8, linestyle="--", path_effects=[pe.Stroke(linewidth=3, foreground="white"), pe.Normal()])
+            elif fit_distribution == "inverse_gaussian" and values.size >= 2:
+                try:
+                    shape, loc, scale = invgauss.fit(values, floc=0)
+                    x = np.linspace(max(np.finfo(float).tiny, bin_edges[0]), bin_edges[-1], 400)
+                    fit = invgauss.pdf(x, shape, loc=loc, scale=scale)
+                    ax.plot(x, fit, color="black", linewidth=1.8, linestyle="--", path_effects=[pe.Stroke(linewidth=3, foreground="white"), pe.Normal()])
+                except (ValueError, FloatingPointError):
+                    pass
+            corr = correlations.get(display_name, {}).get("r")
+            panel_label = label if panel_idx == 0 else f"{label}\n$r={corr:.4f}$" if corr is not None else f"{label}\n$r=$ n/a"
+            ax.text(0.98, 0.86, panel_label, transform=ax.transAxes, ha="right", va="top", fontsize=9,
+                    bbox={"facecolor": "white", "edgecolor": "black", "alpha": 0.85, "boxstyle": "round,pad=0.25"})
+        else:
+            stairs = ax.stairs(density, bin_edges, color=color, linestyle=linestyle, linewidth=LINEWIDTH, label=label)
+            stairs.set_path_effects([pe.Stroke(linewidth=1.5 * LINEWIDTH, foreground="white"), pe.Normal()])
+    if layout == "panels":
+        fig.supylabel(fr"Density ($\sigma_Y^2={variance_value:g}$)")
+        fig.supxlabel(r"$t^{\!\!\star}U/I_Y$")
+    else:
+        axes[0].set_ylabel(fr"Density ($\sigma_Y^2={variance_value:g}$)")
+    for ax in axes:
+        ax.grid(True, which="both")
+    if layout == "panels":
+        for ax in axes:
+            ax.set_xlim(0.0, 17.5)
+            ax.set_ylim(0.0, 0.41)
+        # fig.suptitle(fr"Minimum-cost distributions ($\sigma_Y^2={variance_value:g}$)")
+        fig.tight_layout(h_pad=0.15)
+    else:
+        # ax.set_title(fr"Minimum-cost distribution ($\sigma_Y^2={variance_value:g}$)")
+        ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize="8")
+    if layout == "overlay":
+        ax.grid(True, which="both")
     return fig, {
         "kind": "minimal_cost_histogram",
         "variance": float(variance_value),
         "bins": int(bins),
+        "layout": layout,
+        "fit_distribution": fit_distribution,
         "bin_edges": bin_edges.tolist(),
         "series": [entry[0] for entry in series],
         "pearson_correlations_vs_pollock": {
@@ -1728,6 +1767,8 @@ def run_stage4(
     entropy_hausdorff: bool = False,
     minimal_cost_hist: bool = False,
     minimal_cost_hist_variance: list[float] | float | None = None,
+    minimal_cost_hist_layout: str = "panels",
+    minimal_cost_hist_fit: str = "inverse_gaussian",
 ) -> list[FigureArtifact]:
     cache_dir = cache_dir or default_cache_dir(cfg)
     payload = load_pickle(cache_dir / "stage3_plot_inputs.pkl")
@@ -1845,6 +1886,8 @@ def run_stage4(
                 variance_value=selected_variance,
                 t_ref=t_ref,
                 dh=cfg.dh,
+                layout=minimal_cost_hist_layout,
+                fit_distribution=minimal_cost_hist_fit,
             )
             section = f"minimal_cost_hist_var{_value_slug(selected_variance)}"
             artifacts.extend(save_figure(fig, section=section, output_dir=cfg.output_dir, run_id=cfg.run_id, dpi=cfg.figure_dpi, save_formats=cfg.save_formats, metadata=meta, unique_filenames=unique_filenames))
@@ -2186,6 +2229,8 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="One or more variance values for minimum-cost histograms (space- or comma-separated; default: first available)",
     )
+    parser.add_argument("--minimal-cost-hist-layout", choices=("panels", "overlay"), default="panels", help="Histogram layout: 7 shared-scale horizontal panels (default) or the current overlaid layout")
+    parser.add_argument("--minimal-cost-hist-fit", choices=("inverse_gaussian", "lognormal"), default="lognormal", help="Distribution fitted over panel histograms (default: inverse Gaussian)")
     return parser.parse_args()
 
 
@@ -2208,6 +2253,8 @@ def main() -> int:
             if args.minimal_cost_hist_variance is not None
             else None
         ),
+        minimal_cost_hist_layout=args.minimal_cost_hist_layout,
+        minimal_cost_hist_fit=args.minimal_cost_hist_fit,
     )
     print(f"Generated {len(artifacts)} figure artifact(s) in {cfg.output_dir}")
     return 0

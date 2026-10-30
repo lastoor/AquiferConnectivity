@@ -5,7 +5,7 @@ VAR=("0.1" "0.5" "1" "1.5" "2" "2.5" "3" "3.5" "4" "4.5" "5")
 # VAR=("0.1" "0.5" "1.5" "2" "2.5" "3" "3.5" "4" "4.5")
 # VAR=("1" "5")
 length_scale="0.05"
-run="16p2_pypar2-al0p1-at0p01_asr-ratio0p05-factor10_mc10000"
+run="16p2_pypar2-al0p1-at0p01_asr-ratio0p05-factor10"
 dh="0.1"
 
 num_mc="1000"
@@ -74,7 +74,7 @@ pypar2_replay_radius_cells="${pypar2_replay_radius_cells:-0.5}"
 pypar2_replay_tolerance="${pypar2_replay_tolerance:-1.05}"
 pypar2_replay_max_redos="${pypar2_replay_max_redos:-3}"
 
-time="06:00:00"
+time="28:00:00"
 mem_per_cpu="2GB"
 cpus_per_task="8"
 gpus_per_task="1"
